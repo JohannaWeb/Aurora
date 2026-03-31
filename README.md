@@ -1,5 +1,7 @@
 # Aurora
 
+<img width="803" height="973" alt="image" src="https://github.com/user-attachments/assets/e2adcefb-2e59-4c25-9b95-3de31ebce4d1" />
+
 Aurora is an early-stage Rust browser engine experiment. The current slice is intentionally small:
 
 - tokenize a narrow HTML subset
