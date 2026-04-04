@@ -19,6 +19,7 @@ pub struct LayoutBox {
     kind: LayoutKind,
     rect: Rect,
     styles: StyleMap,
+    z_index: i32,
     margin: EdgeSizes,
     border: EdgeSizes,
     padding: EdgeSizes,
@@ -30,6 +31,7 @@ enum LayoutKind {
     Viewport,
     Block { tag_name: String },
     Inline { tag_name: String },
+    Flex { tag_name: String },
     Image {
         alt: Option<String>,
         src: Option<String>,
@@ -56,8 +58,12 @@ impl LayoutTree {
         style_tree: &StyleTree,
         viewport_width: f32,
     ) -> Self {
-        let root = LayoutBox::layout_root(style_tree.root(), viewport_width)
+        let mut root = LayoutBox::layout_root(style_tree.root(), viewport_width)
             .expect("style tree root must produce a viewport");
+        
+        let viewport_rect = Rect { x: 0.0, y: 0.0, width: viewport_width, height: root.rect.height };
+        root.layout_positioned_elements(viewport_rect, viewport_rect);
+
         Self { root }
     }
 
@@ -103,7 +109,13 @@ impl LayoutBox {
         available_width: f32,
     ) -> Option<Self> {
         let styles = node.styles().clone();
-        match styles.display_mode() {
+        let display_mode = if styles.get("display").is_none() && is_inline_by_default(tag_name) {
+            DisplayMode::Inline
+        } else {
+            styles.display_mode()
+        };
+
+        match display_mode {
             DisplayMode::None => None,
             mode if tag_name == "img" => Some(Self::layout_image(
                 node,
@@ -130,6 +142,17 @@ impl LayoutBox {
                 available_width,
             )),
             DisplayMode::Inline => Some(Self::layout_inline(
+                tag_name,
+                styles,
+                node.styles().margin(),
+                node.styles().border_width(),
+                node.styles().padding(),
+                node.children(),
+                x,
+                y,
+                available_width,
+            )),
+            DisplayMode::Flex => Some(Self::layout_flex(
                 tag_name,
                 styles,
                 node.styles().margin(),
@@ -180,6 +203,7 @@ impl LayoutBox {
                 width: (content_width + padding.horizontal() + border.horizontal()).min(available_rect_width),
                 height: content_height + padding.vertical() + border.vertical(),
             },
+            z_index: node.styles().z_index(),
             styles,
             margin,
             border,
@@ -216,27 +240,38 @@ impl LayoutBox {
 
         for child in children {
             let child_margin = child.styles().margin();
-            let child_is_block = child
-                .tag_name()
-                .map(|_| child.styles().display_mode() == DisplayMode::Block)
-                .unwrap_or(false);
-            let collapse_overlap = if previous_was_block && child_is_block {
-                previous_block_bottom_margin.min(child_margin.top)
-            } else {
-                0.0
-            };
+            let child_is_positioned = child.styles().position() == "absolute" || child.styles().position() == "fixed";
 
             if let Some(layout_child) =
-                Self::from_styled_node(child, content_x, cursor_y - collapse_overlap, content_width)
+                Self::from_styled_node(child, content_x, cursor_y, content_width)
             {
-                cursor_y += layout_child.total_height();
-                previous_block_bottom_margin = if child_is_block {
-                    layout_child.margin.bottom
+                if !child_is_positioned {
+                    let child_is_block = child
+                        .tag_name()
+                        .map(|_| child.styles().display_mode() == DisplayMode::Block)
+                        .unwrap_or(false);
+                    let collapse_overlap = if previous_was_block && child_is_block {
+                        previous_block_bottom_margin.min(child_margin.top)
+                    } else {
+                        0.0
+                    };
+
+                    // Re-layout child with correct y if there's overlap (minor optimization: we already laid it out)
+                    // For now, just adjust the rect and cursor
+                    let mut final_child = layout_child;
+                    final_child.rect.y -= collapse_overlap;
+
+                    cursor_y += final_child.total_height() - collapse_overlap;
+                    previous_block_bottom_margin = if child_is_block {
+                        final_child.margin.bottom
+                    } else {
+                        0.0
+                    };
+                    previous_was_block = child_is_block;
+                    layout_children.push(final_child);
                 } else {
-                    0.0
-                };
-                previous_was_block = child_is_block;
-                layout_children.push(layout_child);
+                    layout_children.push(layout_child);
+                }
             }
         }
 
@@ -256,6 +291,157 @@ impl LayoutBox {
                 width: rect_width,
                 height: border.top + padding.top + resolved_content_height + padding.bottom + border.bottom,
             },
+            z_index: styles.z_index(),
+            styles,
+            margin,
+            border,
+            padding,
+            children: layout_children,
+        }
+    }
+
+    fn layout_flex(
+        tag_name: &str,
+        styles: StyleMap,
+        margin: EdgeSizes,
+        border: EdgeSizes,
+        padding: EdgeSizes,
+        children: &[StyledNode],
+        x: f32,
+        y: f32,
+        available_width: f32,
+    ) -> Self {
+        let rect_x = x + margin.left;
+        let rect_y = y + margin.top;
+        let available_rect_width = (available_width - margin.horizontal()).max(0.0);
+        let default_content_width = (available_rect_width - padding.horizontal() - border.horizontal()).max(0.0);
+        let content_width = clamp_content_width(&styles, default_content_width, default_content_width);
+        let rect_width = (content_width + padding.horizontal() + border.horizontal()).min(available_rect_width);
+        
+        let content_x = rect_x + border.left + padding.left;
+        let content_y = rect_y + border.top + padding.top;
+        
+        let is_column = styles.flex_direction() == "column";
+        let gap = styles.gap_px();
+        
+        let mut total_grow = 0.0;
+        let mut total_natural_size = 0.0;
+        let mut child_natural_sizes = Vec::new();
+        
+        // 1. Initial measure
+        for child in children {
+            let child_is_positioned = child.styles().position() == "absolute" || child.styles().position() == "fixed";
+            if child_is_positioned {
+                child_natural_sizes.push(0.0);
+                continue;
+            }
+
+            if is_column {
+                // Column: measure natural height
+                if let Some(layout_child) = Self::from_styled_node(child, content_x, content_y, content_width) {
+                    let h = layout_child.total_height();
+                    total_natural_size += h;
+                    child_natural_sizes.push(h);
+                    total_grow += child.styles().flex_grow();
+                } else {
+                    child_natural_sizes.push(0.0);
+                }
+            } else {
+                // Row: measure natural width
+                if let Some(layout_child) = Self::from_styled_node(child, content_x, content_y, content_width) {
+                    let w = layout_child.total_width();
+                    total_natural_size += w;
+                    child_natural_sizes.push(w);
+                    total_grow += child.styles().flex_grow();
+                } else {
+                    child_natural_sizes.push(0.0);
+                }
+            }
+        }
+
+        // Add gaps to total natural size
+        if child_natural_sizes.len() > 1 {
+            total_natural_size += gap * (child_natural_sizes.len() - 1) as f32;
+        }
+
+        // 2. Space distribution and final layout
+        let extra_space = if is_column {
+            // Usually flex columns have auto height, but if height is fixed:
+            (styles.height_px().unwrap_or(total_natural_size) - total_natural_size).max(0.0)
+        } else {
+            (content_width - total_natural_size).max(0.0)
+        };
+
+        let mut layout_children = Vec::new();
+        let mut cursor_main = if is_column { content_y } else { content_x };
+        
+        // Apply justify-content: flex-start (simple)
+        // If center or space-between, we adjust start cursor or add spacing
+        let justify = styles.justify_content();
+        if justify == "center" && extra_space > 0.0 && total_grow == 0.0 {
+            cursor_main += extra_space / 2.0;
+        }
+
+        for (index, child) in children.iter().enumerate() {
+            let child_is_positioned = child.styles().position() == "absolute" || child.styles().position() == "fixed";
+            let natural_size = child_natural_sizes[index];
+            let grow = child.styles().flex_grow();
+            let added_size = if total_grow > 0.0 {
+                (grow / total_grow) * extra_space
+            } else {
+                0.0
+            };
+            let final_size = natural_size + added_size;
+
+            if is_column {
+                if let Some(mut layout_child) = Self::from_styled_node(child, content_x, cursor_main, content_width) {
+                    if !child_is_positioned {
+                        layout_child.rect.height = (final_size - layout_child.margin.vertical() - layout_child.border.vertical() - layout_child.padding.vertical()).max(0.0);
+                        cursor_main += final_child_size(&layout_child, is_column) + gap;
+                        
+                        apply_align_items(&mut layout_child, styles.align_items(), content_x, content_width, false);
+                    }
+                    layout_children.push(layout_child);
+                }
+            } else {
+                let child_available_width = if total_grow > 0.0 { final_size - child.styles().margin().horizontal() } else { content_width };
+                if let Some(mut layout_child) = Self::from_styled_node(child, cursor_main, content_y, child_available_width) {
+                    if !child_is_positioned {
+                        layout_child.rect.width = (final_size - layout_child.margin.horizontal() - layout_child.border.horizontal() - layout_child.padding.horizontal()).max(0.0);
+                        cursor_main += final_child_size(&layout_child, is_column) + gap;
+                    }
+                    layout_children.push(layout_child);
+                }
+            }
+        }
+        
+        // Finalize height for row
+        let total_content_height = if is_column {
+            (cursor_main - content_y).max(0.0)
+        } else {
+            let h = layout_children.iter().filter(|c| c.styles().position() == "static").map(|c| c.total_height()).fold(0.0, f32::max);
+            // Now we can align row items
+            for child in &mut layout_children {
+                if child.styles().position() == "static" {
+                    apply_align_items(child, styles.align_items(), content_y, h, true);
+                }
+            }
+            h
+        };
+        
+        let resolved_content_height = clamp_content_height(&styles, total_content_height.max(INLINE_BOX_HEIGHT));
+
+        Self {
+            kind: LayoutKind::Flex {
+                tag_name: tag_name.to_string(),
+            },
+            rect: Rect {
+                x: rect_x,
+                y: rect_y,
+                width: rect_width,
+                height: border.top + padding.top + resolved_content_height + padding.bottom + border.bottom,
+            },
+            z_index: styles.z_index(),
             styles,
             margin,
             border,
@@ -307,27 +493,33 @@ impl LayoutBox {
                 continue;
             }
 
+            let child_is_positioned = child.styles().position() == "absolute" || child.styles().position() == "fixed";
+
             let remaining_width = (content_width - (line_x - content_x)).max(TEXT_CHAR_WIDTH);
             if let Some(mut layout_child) =
                 Self::from_styled_node(child, line_x, line_y, remaining_width)
             {
-                if line_x > content_x && layout_child.total_width() > remaining_width {
-                    max_line_width = max_line_width.max(line_x - content_x);
-                    line_y += line_height.max(TEXT_LINE_HEIGHT);
-                    line_x = content_x;
-                    line_height = 0.0;
+                if !child_is_positioned {
+                    if line_x > content_x && layout_child.total_width() > remaining_width {
+                        max_line_width = max_line_width.max(line_x - content_x);
+                        line_y += line_height.max(TEXT_LINE_HEIGHT);
+                        line_x = content_x;
+                        line_height = 0.0;
 
-                    if let Some(reflowed_child) =
-                        Self::from_styled_node(child, line_x, line_y, content_width)
-                    {
-                        layout_child = reflowed_child;
+                        if let Some(reflowed_child) =
+                            Self::from_styled_node(child, line_x, line_y, content_width)
+                        {
+                            layout_child = reflowed_child;
+                        }
                     }
-                }
 
-                line_x += layout_child.total_width();
-                line_height = line_height.max(layout_child.total_height());
-                max_line_width = max_line_width.max(line_x - content_x);
-                layout_children.push(layout_child);
+                    line_x += layout_child.total_width();
+                    line_height = line_height.max(layout_child.total_height());
+                    max_line_width = max_line_width.max(line_x - content_x);
+                    layout_children.push(layout_child);
+                } else {
+                    layout_children.push(layout_child);
+                }
             }
         }
 
@@ -353,6 +545,7 @@ impl LayoutBox {
                 width: (content_used_width + padding.horizontal() + border.horizontal()).min(max_rect_width),
                 height: resolved_content_height + padding.vertical() + border.vertical(),
             },
+            z_index: styles.z_index(),
             styles,
             margin,
             border,
@@ -375,6 +568,7 @@ impl LayoutBox {
                 width: text.chars().count() as f32 * char_width,
                 height: line_height,
             },
+            z_index: styles.z_index(),
             styles,
             margin: EdgeSizes::zero(),
             border: EdgeSizes::zero(),
@@ -469,6 +663,14 @@ impl LayoutBox {
                     self.rect
                 )?;
             }
+            LayoutKind::Flex { tag_name } => {
+                writeln!(
+                    f,
+                    "{indent}flex<{tag_name}> {} {}",
+                    format_styles(&self.styles),
+                    self.rect
+                )?;
+            }
             LayoutKind::Image { alt, src, display_mode } => {
                 let kind = if *display_mode == DisplayMode::Inline {
                     "inline"
@@ -540,9 +742,13 @@ impl LayoutBox {
         &self.children
     }
 
+    pub fn z_index(&self) -> i32 {
+        self.z_index
+    }
+
     pub fn tag_name(&self) -> Option<&str> {
         match &self.kind {
-            LayoutKind::Block { tag_name } | LayoutKind::Inline { tag_name } => Some(tag_name),
+            LayoutKind::Block { tag_name } | LayoutKind::Inline { tag_name } | LayoutKind::Flex { tag_name } => Some(tag_name),
             LayoutKind::Image { .. } => Some("img"),
             _ => None,
         }
@@ -576,6 +782,40 @@ impl LayoutBox {
     pub fn is_image(&self) -> bool {
         matches!(self.kind, LayoutKind::Image { .. })
     }
+
+    pub fn layout_positioned_elements(
+        &mut self,
+        containing_block_rect: Rect,
+        viewport_rect: Rect,
+    ) {
+        let is_positioned_ancestor = self.styles.position() != "static" || self.is_viewport();
+        let next_containing_block = if is_positioned_ancestor {
+            self.padding_rect()
+        } else {
+            containing_block_rect
+        };
+
+        for child in &mut self.children {
+            let position = child.styles.position();
+            if position == "absolute" || position == "fixed" {
+                let cb = if position == "fixed" { viewport_rect } else { next_containing_block };
+                
+                if let Some(top) = child.styles.top_px() {
+                    child.rect.y = cb.y + top;
+                } else if let Some(bottom) = child.styles.bottom_px() {
+                    child.rect.y = (cb.y + cb.height - child.rect.height - bottom).max(cb.y);
+                }
+
+                if let Some(left) = child.styles.left_px() {
+                    child.rect.x = cb.x + left;
+                } else if let Some(right) = child.styles.right_px() {
+                    child.rect.x = (cb.x + cb.width - child.rect.width - right).max(cb.x);
+                }
+            }
+            
+            child.layout_positioned_elements(next_containing_block, viewport_rect);
+        }
+    }
 }
 
 fn char_width_from_styles(styles: &StyleMap) -> f32 {
@@ -587,6 +827,57 @@ fn char_width_from_styles(styles: &StyleMap) -> f32 {
         base_width * 1.1
     } else {
         base_width
+    }
+}
+
+fn final_child_size(layout_box: &LayoutBox, is_column: bool) -> f32 {
+    if is_column {
+        layout_box.total_height()
+    } else {
+        layout_box.total_width()
+    }
+}
+
+fn apply_align_items(
+    layout_box: &mut LayoutBox,
+    align: &str,
+    container_start: f32,
+    container_size: f32,
+    is_vertical: bool,
+) {
+    let child_size = if is_vertical {
+        layout_box.total_height()
+    } else {
+        layout_box.total_width()
+    };
+    let extra_space = container_size - child_size;
+
+    if is_vertical {
+        match align {
+            "center" => {
+                layout_box.rect.y = container_start + extra_space / 2.0;
+            }
+            "flex-end" | "end" => {
+                layout_box.rect.y = container_start + extra_space;
+            }
+            "stretch" => {
+                layout_box.rect.height = (container_size - layout_box.margin.vertical() - layout_box.border.vertical() - layout_box.padding.vertical()).max(0.0);
+            }
+            _ => { /* flex-start */ }
+        }
+    } else {
+        match align {
+            "center" => {
+                layout_box.rect.x = container_start + extra_space / 2.0;
+            }
+            "flex-end" | "end" => {
+                layout_box.rect.x = container_start + extra_space;
+            }
+            "stretch" => {
+                layout_box.rect.width = (container_size - layout_box.margin.horizontal() - layout_box.border.horizontal() - layout_box.padding.horizontal()).max(0.0);
+            }
+            _ => { /* flex-start */ }
+        }
     }
 }
 
@@ -622,22 +913,61 @@ fn format_styles(styles: &StyleMap) -> String {
 
 fn clamp_content_width(styles: &StyleMap, candidate_width: f32, available_width: f32) -> f32 {
     let mut width = styles.width_px().unwrap_or(candidate_width);
+
+    // If border-box, the specified width includes padding and border
+    if styles.box_sizing() == "border-box" {
+        let padding = styles.padding();
+        let border = styles.border_width();
+        width = (width - padding.horizontal() - border.horizontal()).max(0.0);
+    }
+
     if let Some(min_width) = styles.min_width_px() {
-        width = width.max(min_width);
+        let mut min = min_width;
+        if styles.box_sizing() == "border-box" {
+            let padding = styles.padding();
+            let border = styles.border_width();
+            min = (min - padding.horizontal() - border.horizontal()).max(0.0);
+        }
+        width = width.max(min);
     }
     if let Some(max_width) = styles.max_width_px() {
-        width = width.min(max_width);
+        let mut max = max_width;
+        if styles.box_sizing() == "border-box" {
+            let padding = styles.padding();
+            let border = styles.border_width();
+            max = (max - padding.horizontal() - border.horizontal()).max(0.0);
+        }
+        width = width.min(max);
     }
     width.min(available_width).max(0.0)
 }
 
 fn clamp_content_height(styles: &StyleMap, candidate_height: f32) -> f32 {
     let mut height = styles.height_px().unwrap_or(candidate_height);
+
+    if styles.box_sizing() == "border-box" {
+        let padding = styles.padding();
+        let border = styles.border_width();
+        height = (height - padding.vertical() - border.vertical()).max(0.0);
+    }
+
     if let Some(min_height) = styles.min_height_px() {
-        height = height.max(min_height);
+        let mut min = min_height;
+        if styles.box_sizing() == "border-box" {
+            let padding = styles.padding();
+            let border = styles.border_width();
+            min = (min - padding.vertical() - border.vertical()).max(0.0);
+        }
+        height = height.max(min);
     }
     if let Some(max_height) = styles.max_height_px() {
-        height = height.min(max_height);
+        let mut max = max_height;
+        if styles.box_sizing() == "border-box" {
+            let padding = styles.padding();
+            let border = styles.border_width();
+            max = (max - padding.vertical() - border.vertical()).max(0.0);
+        }
+        height = height.min(max);
     }
     height.max(0.0)
 }
@@ -937,5 +1267,80 @@ mod tests {
         assert!(rendered.contains(
             "inline<img alt=Some(\"grumpy cat\") src=Some(\"cat.txt\")> {border: 2px solid ember, display: inline, padding: 4px} [x: 0, y: 0, w: 132, h: 92]"
         ));
+    }
+
+    #[test]
+    fn applies_border_box_sizing_correctly() {
+        let dom = Node::document(vec![Node::element(
+            "body",
+            vec![Node::element("section", vec![Node::text("Sized")])],
+        )]);
+        let stylesheet = Stylesheet::parse(
+            "section { box-sizing: border-box; width: 100px; height: 50px; padding: 10px; border: 5px solid ember; }",
+        );
+        let style_tree = StyleTree::from_dom(&dom, &stylesheet);
+        let layout = LayoutTree::from_style_tree_with_viewport_width(&style_tree, 200.0);
+        let rendered = layout.to_string();
+
+        assert!(rendered.contains("block<section>"));
+        assert!(rendered.contains("box-sizing: border-box"));
+        assert!(rendered.contains("width: 100px"));
+        assert!(rendered.contains("[x: 0, y: 0, w: 100, h: 50]"));
+        assert!(rendered.contains("text(\"Sized\") [x: 15, y: 15, w: 35, h: 18]"));
+    }
+
+    #[test]
+    fn positions_absolute_elements_relative_to_nearest_positioned_ancestor() {
+        let dom = Node::document(vec![Node::element(
+            "body",
+            vec![Node::element(
+                "div",
+                vec![Node::element("span", vec![Node::text("Abs")])],
+            )],
+        )]);
+        let stylesheet = Stylesheet::parse(
+            "div { position: relative; margin: 20px; width: 100px; height: 100px; } span { position: absolute; top: 10px; left: 10px; width: 30px; height: 30px; }",
+        );
+        let style_tree = StyleTree::from_dom(&dom, &stylesheet);
+        let layout = LayoutTree::from_style_tree_with_viewport_width(&style_tree, 200.0);
+        let rendered = layout.to_string();
+        println!("DEBUG POSITIONED:\n{}", rendered);
+
+        assert!(rendered.contains("block<div"));
+        assert!(rendered.contains("position: relative"));
+        assert!(rendered.contains("[x: 20, y: 20, w: 100, h: 100]"));
+        assert!(rendered.contains("inline<span>"));
+        assert!(rendered.contains("position: absolute"));
+        assert!(rendered.contains("[x: 30, y: 30, w: 30, h: 30]"));
+    }
+
+    #[test]
+    fn lays_out_flex_row_with_gap_and_growth() {
+        let dom = Node::document(vec![Node::element(
+            "body",
+            vec![Node::element(
+                "div",
+                vec![
+                    Node::element("span", vec![Node::text("A")]),
+                    Node::element("span", vec![Node::text("B")]),
+                ],
+            )],
+        )]);
+        let stylesheet = Stylesheet::parse(
+            "div { display: flex; flex-direction: row; gap: 10px; width: 100px; } span { flex-grow: 1; }",
+        );
+        let style_tree = StyleTree::from_dom(&dom, &stylesheet);
+        let layout = LayoutTree::from_style_tree_with_viewport_width(&style_tree, 200.0);
+        let rendered = layout.to_string();
+        println!("DEBUG FLEX:\n{}", rendered);
+
+        assert!(rendered.contains("flex<div"));
+        assert!(rendered.contains("display: flex"));
+        assert!(rendered.contains("flex-direction: row"));
+        assert!(rendered.contains("gap: 10px"));
+        assert!(rendered.contains("[x: 0, y: 0, w: 100"));
+        
+        assert!(rendered.contains("inline<span> {flex-grow: 1} [x: 0, y: 0, w: 45"));
+        assert!(rendered.contains("inline<span> {flex-grow: 1} [x: 55, y: 0, w: 45"));
     }
 }
