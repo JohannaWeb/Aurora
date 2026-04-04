@@ -21,9 +21,35 @@ impl Painter {
         let height = (rect.height / CELL_HEIGHT_PX).ceil().max(1.0) as usize;
         let mut framebuffer = FrameBuffer::new(width, height);
 
-        paint_box(root, &mut framebuffer);
+        let mut items = Vec::new();
+        let mut order = 0;
+        collect_display_items(root, &mut items, &mut order, 0);
+
+        // Sort by z-index then by tree order
+        items.sort_by_key(|&(z, o, _, _)| (z, o));
+
+        for (_, _, _, layout_box) in items {
+            paint_single_box(layout_box, &mut framebuffer);
+        }
 
         framebuffer
+    }
+}
+
+fn collect_display_items<'a>(
+    layout_box: &'a LayoutBox,
+    items: &mut Vec<(i32, usize, usize, &'a LayoutBox)>,
+    order: &mut usize,
+    depth: usize,
+) {
+    if layout_box.styles().opacity() < 0.5 || layout_box.styles().visibility() == "hidden" {
+        return;
+    }
+
+    *order += 1;
+    items.push((layout_box.z_index(), *order, depth, layout_box));
+    for child in layout_box.children() {
+        collect_display_items(child, items, order, depth + 1);
     }
 }
 
@@ -188,13 +214,22 @@ impl DebugPainter {
         let mut framebuffer = FrameBuffer::new(width, height);
         let mut boxes = Vec::new();
 
-        debug_box(root, &mut framebuffer, &mut boxes, 0);
+        let mut items = Vec::new();
+        let mut order = 0;
+        collect_display_items(root, &mut items, &mut order, 0);
+
+        // Sort by z-index then by tree order for the framebuffer
+        items.sort_by_key(|&(z, o, _, _)| (z, o));
+
+        for (_, _, depth, layout_box) in items {
+            debug_single_box(layout_box, &mut framebuffer, &mut boxes, depth);
+        }
 
         DebugFrame { framebuffer, boxes }
     }
 }
 
-fn debug_box(
+fn debug_single_box(
     layout_box: &LayoutBox,
     framebuffer: &mut FrameBuffer,
     boxes: &mut Vec<BoxInfo>,
@@ -244,14 +279,9 @@ fn debug_box(
 
     // Add box info
     boxes.push(BoxInfo { label, depth, rect });
-
-    // Recurse to children
-    for child in layout_box.children() {
-        debug_box(child, framebuffer, boxes, depth + 1);
-    }
 }
 
-fn paint_box(layout_box: &LayoutBox, framebuffer: &mut FrameBuffer) {
+fn paint_single_box(layout_box: &LayoutBox, framebuffer: &mut FrameBuffer) {
     // Skip painting if opacity is very low
     if layout_box.styles().opacity() < 0.5 {
         return;
@@ -282,10 +312,6 @@ fn paint_box(layout_box: &LayoutBox, framebuffer: &mut FrameBuffer) {
         }
     } else if let Some(tag_name) = layout_box.tag_name() {
         paint_surface(layout_box, tag_name, framebuffer);
-    }
-
-    for child in layout_box.children() {
-        paint_box(child, framebuffer);
     }
 }
 

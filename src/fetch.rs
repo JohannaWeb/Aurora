@@ -137,10 +137,15 @@ impl From<rustls::Error> for FetchError {
 }
 
 pub fn fetch_html(url: &str) -> Result<String, FetchError> {
-    fetch_html_with_redirects(url, MAX_REDIRECTS)
+    let bytes = fetch_bytes(url)?;
+    Ok(String::from_utf8_lossy(&bytes).into_owned())
 }
 
-fn fetch_html_with_redirects(url: &str, remaining_redirects: usize) -> Result<String, FetchError> {
+pub fn fetch_bytes(url: &str) -> Result<Vec<u8>, FetchError> {
+    fetch_bytes_with_redirects(url, MAX_REDIRECTS)
+}
+
+fn fetch_bytes_with_redirects(url: &str, remaining_redirects: usize) -> Result<Vec<u8>, FetchError> {
     let parsed = ParsedUrl::parse(url)?;
     let response = send_request(&parsed)?;
 
@@ -154,7 +159,7 @@ fn fetch_html_with_redirects(url: &str, remaining_redirects: usize) -> Result<St
             ));
         };
         let next_url = resolve_redirect_url(&parsed, location);
-        return fetch_html_with_redirects(&next_url, remaining_redirects - 1);
+        return fetch_bytes_with_redirects(&next_url, remaining_redirects - 1);
     }
 
     if !(200..300).contains(&response.status_code) {
@@ -164,7 +169,7 @@ fn fetch_html_with_redirects(url: &str, remaining_redirects: usize) -> Result<St
         ));
     }
 
-    Ok(String::from_utf8_lossy(&response.body).into_owned())
+    Ok(response.body)
 }
 
 fn send_request(url: &ParsedUrl) -> Result<HttpResponse, FetchError> {

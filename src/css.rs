@@ -47,6 +47,7 @@ pub struct EdgeSizes {
 pub enum DisplayMode {
     Block,
     Inline,
+    Flex,
     None,
 }
 
@@ -139,9 +140,73 @@ impl StyleMap {
     pub fn display_mode(&self) -> DisplayMode {
         match self.0.get("display").map(String::as_str) {
             Some("inline") => DisplayMode::Inline,
+            Some("block") => DisplayMode::Block,
+            Some("flex") => DisplayMode::Flex,
             Some("none") => DisplayMode::None,
-            _ => DisplayMode::Block,
+            _ => {
+                // Determine default based on tag name if we have it?
+                // Actually StyleMap doesn't know the tag name.
+                // But from_element in layout.rs HAS the tag name.
+                // For now, let's just make Block the fallback but let from_element decide.
+                DisplayMode::Block
+            }
         }
+    }
+
+    pub fn position(&self) -> &str {
+        self.get("position").unwrap_or("static")
+    }
+
+    pub fn box_sizing(&self) -> &str {
+        self.get("box-sizing").unwrap_or("content-box")
+    }
+
+    pub fn z_index(&self) -> i32 {
+        self.get("z-index")
+            .and_then(|v| v.parse::<i32>().ok())
+            .unwrap_or(0)
+    }
+
+    pub fn top_px(&self) -> Option<f32> {
+        self.get("top").and_then(parse_length_px)
+    }
+
+    pub fn right_px(&self) -> Option<f32> {
+        self.get("right").and_then(parse_length_px)
+    }
+
+    pub fn bottom_px(&self) -> Option<f32> {
+        self.get("bottom").and_then(parse_length_px)
+    }
+
+    pub fn left_px(&self) -> Option<f32> {
+        self.get("left").and_then(parse_length_px)
+    }
+
+    pub fn flex_direction(&self) -> &str {
+        self.get("flex-direction").unwrap_or("row")
+    }
+
+    pub fn justify_content(&self) -> &str {
+        self.get("justify-content").unwrap_or("flex-start")
+    }
+
+    pub fn align_items(&self) -> &str {
+        self.get("align-items").unwrap_or("stretch")
+    }
+
+    pub fn flex_wrap(&self) -> &str {
+        self.get("flex-wrap").unwrap_or("nowrap")
+    }
+
+    pub fn flex_grow(&self) -> f32 {
+        self.get("flex-grow")
+            .and_then(|v| v.parse::<f32>().ok())
+            .unwrap_or(0.0)
+    }
+
+    pub fn gap_px(&self) -> f32 {
+        self.get("gap").and_then(parse_length_px).unwrap_or(0.0)
     }
 
     pub fn get(&self, name: &str) -> Option<&str> {

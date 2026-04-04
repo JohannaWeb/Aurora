@@ -1,5 +1,6 @@
 use crate::layout::{LayoutBox, LayoutTree};
 use minifb::{Window, WindowOptions};
+use image::GenericImageView;
 
 pub fn open(layout: &LayoutTree) {
     let root = layout.root();
@@ -180,6 +181,34 @@ fn draw_image(b: &LayoutBox, buffer: &mut [u32], w: u32, h: u32) {
             r.height as u32,
             bc,
         );
+    }
+
+    if let Some(src) = b.image_src() {
+        if let Ok(bytes) = crate::fetch::fetch_bytes(src) {
+            if let Ok(img) = image::load_from_memory(&bytes) {
+                let pr = b.padding_rect();
+                let px = pr.x.max(0.0) as u32;
+                let py = pr.y.max(0.0) as u32;
+                let pw = pr.width as u32;
+                let ph = pr.height as u32;
+
+                if pw > 0 && ph > 0 {
+                    let scaled_img = img.resize_exact(pw, ph, image::imageops::FilterType::Triangle);
+                    for (ix, iy, pixel) in scaled_img.pixels() {
+                        let dx = px + ix;
+                        let dy = py + iy;
+                        if dx < w && dy < h {
+                            let [r, g, b, a] = pixel.0;
+                            if a > 128 {
+                                let color = 0xFF000000 | (u32::from(r) << 16) | (u32::from(g) << 8) | u32::from(b);
+                                buffer[(dy * w + dx) as usize] = color;
+                            }
+                        }
+                    }
+                    return;
+                }
+            }
+        }
     }
 
     let pr = b.padding_rect();
