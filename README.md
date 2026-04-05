@@ -1,5 +1,14 @@
 # Aurora
 
+## AI Usage Disclosure
+
+This project uses AI tools (e.g., Claude) to assist with:
+- explanations
+- brainstorming
+- code suggestions
+
+All code is reviewed, understood, and validated by the author.
+
 <img width="1238" height="939" alt="image" src="https://github.com/user-attachments/assets/e775206f-725e-4b60-b758-eeddc6b43532" />
 
 Aurora is an early-stage Rust browser engine experiment. The current slice is intentionally small:
