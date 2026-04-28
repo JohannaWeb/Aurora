@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Aurora CSS Gallery</title>
+    <link rel="stylesheet" href="gallery.css">
+    <style>
+        body { background-color: #f8f5eb; color: #282828; padding: 40px; }
+        h1 { text-align: center; color: #d26428; border-bottom: 4px solid #d26428; margin-bottom: 20px; }
+        .container { border: 2px solid #646e7d; padding: 20px; background-color: #ffffff; }
+        .box-red { border: 4px solid #d23232; padding: 10px; margin: 10px; background-color: #fce8e8; }
+        .box-blue { border: 4px solid #3c64dc; padding: 10px; margin: 10px; background-color: #e8ecfc; }
+        .box-green { border: 4px solid #3cb450; padding: 10px; margin: 10px; background-color: #e8fceb; }
+        .centered { text-align: center; }
+    </style>
+</head>
+<body>
+    <h1>Aurora CSS Gallery</h1>
+    
+    <div class="container">
+        <p class="centered">Showing off the sovereign tech stack rendering pipeline.</p>
+        
+        <div class="box-red">
+            <p>This is a <b>Bold</b> and <i>Italic</i> test inside a red box.</p>
+        </div>
+        
+        <div class="box-blue">
+            <p>This is a Blue Box! Below is a section with a <strong>Drop Shadow</strong>.</p>
+            <section class="box-green">
+                <p>Nested <em>Green</em> Box! This tests recursive layout depth and visual flourishes.</p>
+            </section>
+        </div>
+        
+        <h2>List Verification</h2>
+        <ul>
+            <li>First item with a bullet</li>
+            <li>Second item with a bullet</li>
+            <li>Third item is <strong>bold</strong> (if supported)</li>
+        </ul>
+        
+        <p class="external">This text should be styled by the external CSS file.</p>
+    </div>
+    
+    <p style="text-align: center; margin-top: 40px;">&copy; 2026 Aurora Engine &bull; Sovereign Typography</p>
+</body>
+</html>

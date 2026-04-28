@@ -1,0 +1,13 @@
+.external {
+    background-color: #00d2c8;
+    color: #ffffff;
+    padding: 10px;
+    border: 2px solid #282828;
+    text-align: center;
+}
+
+h2 {
+    color: #286446;
+    border-bottom: 2px solid #286446;
+    margin-top: 20px;
+}
