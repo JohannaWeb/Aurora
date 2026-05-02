@@ -1,4 +1,4 @@
-i a# syntax=docker/dockerfile:1
+# syntax=docker/dockerfile:1
 
 FROM rust:1-bookworm AS builder
 

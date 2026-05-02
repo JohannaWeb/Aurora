@@ -68,6 +68,12 @@ To render the bundled static Google homepage fixture:
 cargo run -- --fixture google-homepage
 ```
 
+To render the bundled demo fixture:
+
+```bash
+cargo run -- --fixture demo
+```
+
 To save a screenshot from the fixture:
 
 ```bash
@@ -113,7 +119,7 @@ From this directory, the same build is available as:
 make docker-build
 ```
 
-See [DOCKER.md](DOCKER.md) for run examples.
+See [docs/DOCKER.md](docs/DOCKER.md) for run examples.
 
 ## Next Steps
 

@@ -1,3 +1,11 @@
-.codex
 target/
 .idea/workspace.xml
+
+# Local agent/tooling state
+.agents/
+.claude/
+.codex/
+.cursor/
+.gemini/
+.goose/
+.opencode/
