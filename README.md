@@ -5,6 +5,9 @@
 
   ## Mockup
   ![Mockup](https://github.com/user-attachments/assets/7c9210f4-d161-4404-946d-36869cecd1f2)
+  
+  ## Rendering test for misc glyhps
+  ![Glyphs](https://github.com/user-attachments/assets/66462680-4dad-4e26-b449-e1a06e2bb200)
 
 
 Aurora is a from-scratch Rust browser-engine experiment for the Bastion project.
