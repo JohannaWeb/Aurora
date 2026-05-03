@@ -1,6 +1,8 @@
 # Aurora
 
 <img width="1238" height="939" alt="image" src="https://github.com/user-attachments/assets/647ddace-cbdc-4ed9-9e5b-bf45a2dad9fa" />
+## Mockup
+<img width="1338" height="786" alt="image" src="https://github.com/user-attachments/assets/7c9210f4-d161-4404-946d-36869cecd1f2" />
 
 
 Aurora is a from-scratch Rust browser-engine experiment for the Bastion project.
