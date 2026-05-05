@@ -54,6 +54,9 @@ Aurora currently uses a GPU-backed rendering path:
 4.  **Text Shaping**: `rustybuzz` converts UTF-8 strings into positioned glyphs, which are then sampled from a pre-baked **Glyph Atlas** texture.
 5.  **Rasterization**: The `vello::Renderer` compiles the scene and executes compute shaders on the GPU via `wgpu` to produce the final pixels.
 6.  **Presentation**: The resulting texture is blitted to the window's surface for display.
+7.  **Partial support of js**: Using an embedded Boa-based JavaScript DOM/BOM runtime bridge.
+
+
 
 ## Run
 
