@@ -10,9 +10,7 @@
   ![Glyphs](https://github.com/user-attachments/assets/66462680-4dad-4e26-b449-e1a06e2bb200)
 
 
-Aurora is a from-scratch Rust browser-engine experiment for the Bastion project.
-
-It is not a complete browser. The current codebase implements a narrow rendering slice because I wanted to explore layout, painting, and client-surface ideas without leaning on Chromium or a WebView.
+A from-scratch Rust browser engine with GPU rendering, HTTPS fetch, and an embedded Boa-based JavaScript DOM/BOM runtime bridge.
 
 ## Current Scope
 
