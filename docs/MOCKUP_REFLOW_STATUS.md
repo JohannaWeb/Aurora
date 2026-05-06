@@ -1,6 +1,6 @@
 # Aurora Mockup Reflow Status
 
-Target mockup: [`mockup.png`](mockup.png)  
+Target mockup: [`mockup.png`](../tests/screenshots/mockup.png)  
 Implementation plan: [`MOCKUP_REFLOW_IMPLEMENTATION_PLAN.md`](MOCKUP_REFLOW_IMPLEMENTATION_PLAN.md)
 
 ## Current Status
@@ -26,7 +26,7 @@ make mockup-screenshot
 Render a custom fixture screenshot:
 
 ```bash
-make screenshot FIXTURE=aurora-search SCREENSHOT=/tmp/aurora-search.png VIEWPORT_WIDTH=1338 VIEWPORT_HEIGHT=786
+make screenshot FIXTURE=aurora-search SCREENSHOT=/tmp/aurora-search-render.png VIEWPORT_WIDTH=1338 VIEWPORT_HEIGHT=786
 ```
 
 Render the narrower failure-size viewport:

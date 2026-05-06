@@ -1,6 +1,6 @@
 # Aurora Mockup Reflow Implementation Plan
 
-Target mockup: [`docs/mockup.png`](mockup.png)  
+Target mockup: [`docs/mockup.png`](../tests/screenshots/mockup.png)  
 Mockup dimensions: `1338 x 786`
 
 Current handoff/status: [`MOCKUP_REFLOW_STATUS.md`](MOCKUP_REFLOW_STATUS.md)
