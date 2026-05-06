@@ -1,5 +1,5 @@
 target/
-.idea/workspace.xml
+.idea/
 
 # Local agent/tooling state
 .agents/

@@ -3,9 +3,7 @@
 // and less like a pile of long fully-qualified paths.
 use crate::css::{StyleMap, Stylesheet};
 // Import DOM node types
-use crate::dom::{ElementNode, Node};
-// Import BTreeMap (though unused, kept for potential future use)
-use std::collections::BTreeMap;
+use crate::dom::Node;
 // Import Display formatting traits
 use std::fmt::{self, Display, Formatter};
 
@@ -39,6 +37,9 @@ struct InheritedStyles {
 
     // Font style (italic, etc.) inherited
     font_style: Option<String>,
+
+    // Whitespace handling inherited by inline text
+    white_space: Option<String>,
 }
 
 // Tree structure containing DOM nodes with applied CSS styles
@@ -246,6 +247,11 @@ impl StyledNode {
                         styles.set("text-decoration", text_decoration);
                     }
                 }
+                if styles.get("white-space").is_none() {
+                    if let Some(white_space) = &inherited.white_space {
+                        styles.set("white-space", white_space);
+                    }
+                }
 
                 // Build list of ancestors including current element
                 // RUST FUNDAMENTAL: `.to_vec()` clones a slice into an owned vector so this function can extend it for child recursion.
@@ -271,6 +277,8 @@ impl StyledNode {
                     text_decoration: styles.get("text-decoration").map(ToOwned::to_owned),
                     // Extract font-style for next level
                     font_style: styles.get("font-style").map(ToOwned::to_owned),
+                    // Extract white-space for next level
+                    white_space: styles.get("white-space").map(ToOwned::to_owned),
                 };
 
                 // Clone children vector to avoid double borrow of element
@@ -350,6 +358,10 @@ impl StyledNode {
                 // Apply inherited font style
                 if let Some(font_style) = &inherited.font_style {
                     styles.set("font-style", font_style);
+                }
+                // Apply inherited whitespace handling
+                if let Some(white_space) = &inherited.white_space {
+                    styles.set("white-space", white_space);
                 }
 
                 // Return styled text node with no children

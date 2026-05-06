@@ -186,7 +186,11 @@ fn js_string_of(value: &JsValue) -> String {
         })
 }
 
-fn node_from_js(value: &JsValue, registry: &NodeRegistry, context: &mut Context) -> Option<NodePtr> {
+fn node_from_js(
+    value: &JsValue,
+    registry: &NodeRegistry,
+    context: &mut Context,
+) -> Option<NodePtr> {
     let obj = value.as_object()?;
     let id_val = obj.get(js_string!("__node_id"), context).ok()?;
     let id = id_val.as_number()? as u32;
@@ -210,16 +214,10 @@ fn install_globals(context: &mut Context, document: &NodePtr, _registry: &NodeRe
         global_obj.clone(),
         Attribute::all(),
     );
-    let _ = context.register_global_property(
-        js_string!("self"),
-        global_obj.clone(),
-        Attribute::all(),
-    );
-    let _ = context.register_global_property(
-        js_string!("top"),
-        global_obj.clone(),
-        Attribute::all(),
-    );
+    let _ =
+        context.register_global_property(js_string!("self"), global_obj.clone(), Attribute::all());
+    let _ =
+        context.register_global_property(js_string!("top"), global_obj.clone(), Attribute::all());
     let _ = context.register_global_property(
         js_string!("parent"),
         global_obj.clone(),
@@ -293,12 +291,13 @@ fn install_globals(context: &mut Context, document: &NodePtr, _registry: &NodeRe
         next_timer: Rc::new(RefCell::new(1)),
     };
 
-    let timer_id_fn = |_this: &JsValue, _args: &[JsValue], cap: &WindowCapture, _ctx: &mut Context| {
-        let mut next = cap.next_timer.borrow_mut();
-        let id = *next;
-        *next += 1;
-        Ok(JsValue::from(id))
-    };
+    let timer_id_fn =
+        |_this: &JsValue, _args: &[JsValue], cap: &WindowCapture, _ctx: &mut Context| {
+            let mut next = cap.next_timer.borrow_mut();
+            let id = *next;
+            *next += 1;
+            Ok(JsValue::from(id))
+        };
     let _ = global_obj.set(
         js_string!("setTimeout"),
         native_to_jsfn(
@@ -420,9 +419,7 @@ fn install_globals(context: &mut Context, document: &NodePtr, _registry: &NodeRe
     let gcs = NativeFunction::from_fn_ptr(|_this, _args, ctx| {
         let obj = ObjectInitializer::new(ctx)
             .function(
-                NativeFunction::from_fn_ptr(|_this, _args, _ctx| {
-                    Ok(JsValue::from(js_string!("")))
-                }),
+                NativeFunction::from_fn_ptr(|_this, _args, _ctx| Ok(JsValue::from(js_string!("")))),
                 js_string!("getPropertyValue"),
                 1,
             )
@@ -466,20 +463,60 @@ fn install_globals(context: &mut Context, document: &NodePtr, _registry: &NodeRe
         let s = js_string_of(args.get(0).unwrap_or(&JsValue::undefined()));
         Ok(JsValue::from(JsString::from(base64_encode(s.as_bytes()))))
     });
-    let _ = global_obj.set(js_string!("atob"), native_to_jsfn(context, atob), false, context);
-    let _ = global_obj.set(js_string!("btoa"), native_to_jsfn(context, btoa), false, context);
+    let _ = global_obj.set(
+        js_string!("atob"),
+        native_to_jsfn(context, atob),
+        false,
+        context,
+    );
+    let _ = global_obj.set(
+        js_string!("btoa"),
+        native_to_jsfn(context, btoa),
+        false,
+        context,
+    );
 
     // Storage: localStorage, sessionStorage.
-    install_storage(context, &global_obj, "localStorage", win_cap.storage.clone());
-    install_storage(context, &global_obj, "sessionStorage", win_cap.session.clone());
+    install_storage(
+        context,
+        &global_obj,
+        "localStorage",
+        win_cap.storage.clone(),
+    );
+    install_storage(
+        context,
+        &global_obj,
+        "sessionStorage",
+        win_cap.session.clone(),
+    );
 
     // Location with plenty of fields.
     let location = ObjectInitializer::new(context)
-        .property(js_string!("href"), js_string!("http://localhost/"), Attribute::all())
-        .property(js_string!("origin"), js_string!("http://localhost"), Attribute::all())
-        .property(js_string!("protocol"), js_string!("http:"), Attribute::all())
-        .property(js_string!("host"), js_string!("localhost"), Attribute::all())
-        .property(js_string!("hostname"), js_string!("localhost"), Attribute::all())
+        .property(
+            js_string!("href"),
+            js_string!("http://localhost/"),
+            Attribute::all(),
+        )
+        .property(
+            js_string!("origin"),
+            js_string!("http://localhost"),
+            Attribute::all(),
+        )
+        .property(
+            js_string!("protocol"),
+            js_string!("http:"),
+            Attribute::all(),
+        )
+        .property(
+            js_string!("host"),
+            js_string!("localhost"),
+            Attribute::all(),
+        )
+        .property(
+            js_string!("hostname"),
+            js_string!("localhost"),
+            Attribute::all(),
+        )
         .property(js_string!("port"), js_string!(""), Attribute::all())
         .property(js_string!("pathname"), js_string!("/"), Attribute::all())
         .property(js_string!("search"), js_string!(""), Attribute::all())
@@ -499,11 +536,31 @@ fn install_globals(context: &mut Context, document: &NodePtr, _registry: &NodeRe
 
     // Navigator
     let navigator = ObjectInitializer::new(context)
-        .property(js_string!("userAgent"), js_string!("Aurora/0.1"), Attribute::all())
-        .property(js_string!("appName"), js_string!("Netscape"), Attribute::all())
-        .property(js_string!("appVersion"), js_string!("5.0"), Attribute::all())
-        .property(js_string!("platform"), js_string!("Linux x86_64"), Attribute::all())
-        .property(js_string!("language"), js_string!("en-US"), Attribute::all())
+        .property(
+            js_string!("userAgent"),
+            js_string!("Aurora/0.1"),
+            Attribute::all(),
+        )
+        .property(
+            js_string!("appName"),
+            js_string!("Netscape"),
+            Attribute::all(),
+        )
+        .property(
+            js_string!("appVersion"),
+            js_string!("5.0"),
+            Attribute::all(),
+        )
+        .property(
+            js_string!("platform"),
+            js_string!("Linux x86_64"),
+            Attribute::all(),
+        )
+        .property(
+            js_string!("language"),
+            js_string!("en-US"),
+            Attribute::all(),
+        )
         .property(js_string!("vendor"), js_string!(""), Attribute::all())
         .property(js_string!("onLine"), true, Attribute::all())
         .property(js_string!("cookieEnabled"), false, Attribute::all())
@@ -513,7 +570,10 @@ fn install_globals(context: &mut Context, document: &NodePtr, _registry: &NodeRe
         .build();
     // languages array.
     if let Ok(langs) = JsArray::from_iter(
-        [JsValue::from(js_string!("en-US")), JsValue::from(js_string!("en"))],
+        [
+            JsValue::from(js_string!("en-US")),
+            JsValue::from(js_string!("en")),
+        ],
         context,
     )
     .pipe(Ok::<_, JsError>)
@@ -546,23 +606,17 @@ fn install_globals(context: &mut Context, document: &NodePtr, _registry: &NodeRe
         .function(noop_native(), js_string!("clearMarks"), 0)
         .function(noop_native(), js_string!("clearMeasures"), 0)
         .function(
-            NativeFunction::from_fn_ptr(|_this, _args, ctx| {
-                Ok(JsArray::new(ctx).into())
-            }),
+            NativeFunction::from_fn_ptr(|_this, _args, ctx| Ok(JsArray::new(ctx).into())),
             js_string!("getEntries"),
             0,
         )
         .function(
-            NativeFunction::from_fn_ptr(|_this, _args, ctx| {
-                Ok(JsArray::new(ctx).into())
-            }),
+            NativeFunction::from_fn_ptr(|_this, _args, ctx| Ok(JsArray::new(ctx).into())),
             js_string!("getEntriesByType"),
             1,
         )
         .function(
-            NativeFunction::from_fn_ptr(|_this, _args, ctx| {
-                Ok(JsArray::new(ctx).into())
-            }),
+            NativeFunction::from_fn_ptr(|_this, _args, ctx| Ok(JsArray::new(ctx).into())),
             js_string!("getEntriesByName"),
             2,
         )
@@ -574,7 +628,9 @@ fn install_globals(context: &mut Context, document: &NodePtr, _registry: &NodeRe
     let crypto = ObjectInitializer::new(context)
         .function(
             NativeFunction::from_fn_ptr(|_this, _args, _ctx| {
-                Ok(JsValue::from(js_string!("00000000-0000-0000-0000-000000000000")))
+                Ok(JsValue::from(js_string!(
+                    "00000000-0000-0000-0000-000000000000"
+                )))
             }),
             js_string!("randomUUID"),
             0,
@@ -594,7 +650,11 @@ fn install_globals(context: &mut Context, document: &NodePtr, _registry: &NodeRe
     let event_ctor = NativeFunction::from_fn_ptr(|_this, args, ctx| {
         let type_name = js_string_of(args.get(0).unwrap_or(&JsValue::undefined()));
         let obj = ObjectInitializer::new(ctx)
-            .property(js_string!("type"), JsString::from(type_name), Attribute::all())
+            .property(
+                js_string!("type"),
+                JsString::from(type_name),
+                Attribute::all(),
+            )
             .property(js_string!("bubbles"), false, Attribute::all())
             .property(js_string!("cancelable"), false, Attribute::all())
             .property(js_string!("defaultPrevented"), false, Attribute::all())
@@ -613,7 +673,11 @@ fn install_globals(context: &mut Context, document: &NodePtr, _registry: &NodeRe
     let custom_event = NativeFunction::from_fn_ptr(|_this, args, ctx| {
         let type_name = js_string_of(args.get(0).unwrap_or(&JsValue::undefined()));
         let obj = ObjectInitializer::new(ctx)
-            .property(js_string!("type"), JsString::from(type_name), Attribute::all())
+            .property(
+                js_string!("type"),
+                JsString::from(type_name),
+                Attribute::all(),
+            )
             .property(js_string!("detail"), JsValue::null(), Attribute::all())
             .function(noop_native(), js_string!("preventDefault"), 0)
             .function(noop_native(), js_string!("stopPropagation"), 0)
@@ -751,17 +815,16 @@ fn install_storage(
 
     let cap = StorageCap(backing);
 
-    let get_item =
-        NativeFunction::from_copy_closure_with_captures(
-            |_this, args, cap: &StorageCap, _ctx| {
-                let key = js_string_of(args.get(0).unwrap_or(&JsValue::undefined()));
-                match cap.0.borrow().get(&key) {
-                    Some(v) => Ok(JsValue::from(JsString::from(v.clone()))),
-                    None => Ok(JsValue::null()),
-                }
-            },
-            cap.clone(),
-        );
+    let get_item = NativeFunction::from_copy_closure_with_captures(
+        |_this, args, cap: &StorageCap, _ctx| {
+            let key = js_string_of(args.get(0).unwrap_or(&JsValue::undefined()));
+            match cap.0.borrow().get(&key) {
+                Some(v) => Ok(JsValue::from(JsString::from(v.clone()))),
+                None => Ok(JsValue::null()),
+            }
+        },
+        cap.clone(),
+    );
 
     let set_item = NativeFunction::from_copy_closure_with_captures(
         |_this, args, cap: &StorageCap, _ctx| {
@@ -821,16 +884,19 @@ fn install_storage(
 fn install_observers(context: &mut Context) {
     let global = context.global_object().clone();
 
-    for name in ["MutationObserver", "IntersectionObserver", "ResizeObserver", "PerformanceObserver"] {
+    for name in [
+        "MutationObserver",
+        "IntersectionObserver",
+        "ResizeObserver",
+        "PerformanceObserver",
+    ] {
         let ctor = NativeFunction::from_fn_ptr(|_this, _args, ctx| {
             let obj = ObjectInitializer::new(ctx)
                 .function(noop_native(), js_string!("observe"), 2)
                 .function(noop_native(), js_string!("unobserve"), 1)
                 .function(noop_native(), js_string!("disconnect"), 0)
                 .function(
-                    NativeFunction::from_fn_ptr(|_this, _args, ctx| {
-                        Ok(JsArray::new(ctx).into())
-                    }),
+                    NativeFunction::from_fn_ptr(|_this, _args, ctx| Ok(JsArray::new(ctx).into())),
                     js_string!("takeRecords"),
                     0,
                 )
@@ -980,11 +1046,7 @@ fn install_document(context: &mut Context, document: &NodePtr, registry: &NodeRe
             js_string!("CSS1Compat"),
             Attribute::all(),
         )
-        .property(
-            js_string!("charset"),
-            js_string!("UTF-8"),
-            Attribute::all(),
-        )
+        .property(js_string!("charset"), js_string!("UTF-8"), Attribute::all())
         .property(
             js_string!("contentType"),
             js_string!("text/html"),
@@ -993,11 +1055,23 @@ fn install_document(context: &mut Context, document: &NodePtr, registry: &NodeRe
         .property(js_string!("cookie"), js_string!(""), Attribute::all())
         .property(js_string!("title"), js_string!(""), Attribute::all())
         .property(js_string!("referrer"), js_string!(""), Attribute::all())
-        .property(js_string!("URL"), js_string!("http://localhost/"), Attribute::all())
-        .property(js_string!("domain"), js_string!("localhost"), Attribute::all())
+        .property(
+            js_string!("URL"),
+            js_string!("http://localhost/"),
+            Attribute::all(),
+        )
+        .property(
+            js_string!("domain"),
+            js_string!("localhost"),
+            Attribute::all(),
+        )
         .property(js_string!("hidden"), false, Attribute::all())
         .property(js_string!("nodeType"), 9, Attribute::all())
-        .property(js_string!("nodeName"), js_string!("#document"), Attribute::all())
+        .property(
+            js_string!("nodeName"),
+            js_string!("#document"),
+            Attribute::all(),
+        )
         .property(
             js_string!("visibilityState"),
             js_string!("visible"),
@@ -1021,8 +1095,8 @@ fn install_document(context: &mut Context, document: &NodePtr, registry: &NodeRe
         .function(
             NativeFunction::from_copy_closure_with_captures(
                 |_this, args, cap: &DocCapture, ctx| {
-                    let tag = js_string_of(args.get(0).unwrap_or(&JsValue::undefined()))
-                        .to_lowercase();
+                    let tag =
+                        js_string_of(args.get(0).unwrap_or(&JsValue::undefined())).to_lowercase();
                     let mut acc = Vec::new();
                     collect_by_tag(&cap.document, &tag, &mut acc);
                     build_nodelist(acc, &cap.registry, &cap.document, ctx)
@@ -1063,9 +1137,7 @@ fn install_document(context: &mut Context, document: &NodePtr, registry: &NodeRe
                 |_this, args, cap: &DocCapture, ctx| {
                     let sel = js_string_of(args.get(0).unwrap_or(&JsValue::undefined()));
                     match query_first(&cap.document, &sel) {
-                        Some(node) => {
-                            Ok(create_js_node(node, &cap.registry, &cap.document, ctx))
-                        }
+                        Some(node) => Ok(create_js_node(node, &cap.registry, &cap.document, ctx)),
                         None => Ok(JsValue::null()),
                     }
                 },
@@ -1089,8 +1161,8 @@ fn install_document(context: &mut Context, document: &NodePtr, registry: &NodeRe
         .function(
             NativeFunction::from_copy_closure_with_captures(
                 |_this, args, cap: &DocCapture, ctx| {
-                    let tag = js_string_of(args.get(0).unwrap_or(&JsValue::undefined()))
-                        .to_lowercase();
+                    let tag =
+                        js_string_of(args.get(0).unwrap_or(&JsValue::undefined())).to_lowercase();
                     let node = Node::element(tag, vec![]);
                     Ok(create_js_node(node, &cap.registry, &cap.document, ctx))
                 },
@@ -1103,8 +1175,8 @@ fn install_document(context: &mut Context, document: &NodePtr, registry: &NodeRe
             NativeFunction::from_copy_closure_with_captures(
                 |_this, args, cap: &DocCapture, ctx| {
                     // Namespaced element creation — ignore the namespace.
-                    let tag = js_string_of(args.get(1).unwrap_or(&JsValue::undefined()))
-                        .to_lowercase();
+                    let tag =
+                        js_string_of(args.get(1).unwrap_or(&JsValue::undefined())).to_lowercase();
                     let node = Node::element(tag, vec![]);
                     Ok(create_js_node(node, &cap.registry, &cap.document, ctx))
                 },
@@ -1173,9 +1245,7 @@ fn install_document(context: &mut Context, document: &NodePtr, registry: &NodeRe
         .function(noop_native(), js_string!("write"), 1)
         .function(noop_native(), js_string!("writeln"), 1)
         .function(
-            NativeFunction::from_fn_ptr(|_this, _args, _ctx| {
-                Ok(JsValue::from(js_string!("")))
-            }),
+            NativeFunction::from_fn_ptr(|_this, _args, _ctx| Ok(JsValue::from(js_string!("")))),
             js_string!("execCommand"),
             3,
         )
@@ -1196,9 +1266,19 @@ fn install_document(context: &mut Context, document: &NodePtr, registry: &NodeRe
     let _ = document_obj.set(js_string!("body"), body_js, false, context);
     let _ = document_obj.set(js_string!("head"), head_js, false, context);
     let _ = document_obj.set(js_string!("documentElement"), root_js, false, context);
-    let _ = document_obj.set(js_string!("scrollingElement"), JsValue::null(), false, context);
+    let _ = document_obj.set(
+        js_string!("scrollingElement"),
+        JsValue::null(),
+        false,
+        context,
+    );
     let _ = document_obj.set(js_string!("activeElement"), JsValue::null(), false, context);
-    let _ = document_obj.set(js_string!("defaultView"), context.global_object().clone(), false, context);
+    let _ = document_obj.set(
+        js_string!("defaultView"),
+        context.global_object().clone(),
+        false,
+        context,
+    );
 
     let mut forms_vec = Vec::new();
     collect_by_tag(document, "form", &mut forms_vec);
@@ -1228,19 +1308,11 @@ fn install_document(context: &mut Context, document: &NodePtr, registry: &NodeRe
     }
 
     let implementation = build_document_implementation(document, registry, context);
-    let _ = document_obj.set(
-        js_string!("implementation"),
-        implementation,
-        false,
-        context,
-    );
+    let _ = document_obj.set(js_string!("implementation"), implementation, false, context);
     set_object_prototype_from_constructor(&document_obj, "Document", context);
 
-    let _ = context.register_global_property(
-        js_string!("document"),
-        document_obj,
-        Attribute::all(),
-    );
+    let _ =
+        context.register_global_property(js_string!("document"), document_obj, Attribute::all());
 }
 
 fn build_document_implementation(
@@ -1325,10 +1397,22 @@ fn create_js_node(
         Attribute::all(),
     );
     init.property(js_string!("nodeType"), node_type, Attribute::all());
-    init.property(js_string!("namespaceURI"), JsValue::null(), Attribute::all());
+    init.property(
+        js_string!("namespaceURI"),
+        JsValue::null(),
+        Attribute::all(),
+    );
     init.property(js_string!("prefix"), JsValue::null(), Attribute::all());
-    init.property(js_string!("baseURI"), js_string!("http://localhost/"), Attribute::all());
-    init.property(js_string!("ownerDocument"), JsValue::null(), Attribute::all());
+    init.property(
+        js_string!("baseURI"),
+        js_string!("http://localhost/"),
+        Attribute::all(),
+    );
+    init.property(
+        js_string!("ownerDocument"),
+        JsValue::null(),
+        Attribute::all(),
+    );
     init.property(js_string!("isConnected"), true, Attribute::all());
     init.property(js_string!("scrollTop"), 0, Attribute::all());
     init.property(js_string!("scrollLeft"), 0, Attribute::all());
@@ -1367,9 +1451,11 @@ fn create_js_node(
     init.function(
         NativeFunction::from_copy_closure_with_captures(
             |_this, args, cap: &NodeCapture, ctx| {
-                let Some(new_child) =
-                    node_from_js(args.get(0).unwrap_or(&JsValue::undefined()), &cap.registry, ctx)
-                else {
+                let Some(new_child) = node_from_js(
+                    args.get(0).unwrap_or(&JsValue::undefined()),
+                    &cap.registry,
+                    ctx,
+                ) else {
                     return Ok(JsValue::null());
                 };
                 let ref_child = args
@@ -1388,9 +1474,11 @@ fn create_js_node(
     init.function(
         NativeFunction::from_copy_closure_with_captures(
             |_this, args, cap: &NodeCapture, ctx| {
-                if let Some(child) =
-                    node_from_js(args.get(0).unwrap_or(&JsValue::undefined()), &cap.registry, ctx)
-                {
+                if let Some(child) = node_from_js(
+                    args.get(0).unwrap_or(&JsValue::undefined()),
+                    &cap.registry,
+                    ctx,
+                ) {
                     remove_child_ptr(&cap.node, &child);
                 }
                 Ok(args.get(0).cloned().unwrap_or(JsValue::null()))
@@ -1459,9 +1547,11 @@ fn create_js_node(
     init.function(
         NativeFunction::from_copy_closure_with_captures(
             |_this, args, cap: &NodeCapture, ctx| {
-                if let Some(other) =
-                    node_from_js(args.get(0).unwrap_or(&JsValue::undefined()), &cap.registry, ctx)
-                {
+                if let Some(other) = node_from_js(
+                    args.get(0).unwrap_or(&JsValue::undefined()),
+                    &cap.registry,
+                    ctx,
+                ) {
                     Ok(JsValue::from(contains_ptr(&cap.node, &other)))
                 } else {
                     Ok(JsValue::from(false))
@@ -1616,8 +1706,7 @@ fn create_js_node(
     init.function(
         NativeFunction::from_copy_closure_with_captures(
             |_this, args, cap: &NodeCapture, ctx| {
-                let tag = js_string_of(args.get(0).unwrap_or(&JsValue::undefined()))
-                    .to_lowercase();
+                let tag = js_string_of(args.get(0).unwrap_or(&JsValue::undefined())).to_lowercase();
                 let mut acc = Vec::new();
                 collect_by_tag(&cap.node, &tag, &mut acc);
                 build_nodelist(acc, &cap.registry, &cap.document, ctx)
@@ -1726,9 +1815,11 @@ fn create_js_node(
     init.function(
         NativeFunction::from_copy_closure_with_captures(
             |_this, args, cap: &NodeCapture, ctx| {
-                if let Some(el) =
-                    node_from_js(args.get(1).unwrap_or(&JsValue::undefined()), &cap.registry, ctx)
-                {
+                if let Some(el) = node_from_js(
+                    args.get(1).unwrap_or(&JsValue::undefined()),
+                    &cap.registry,
+                    ctx,
+                ) {
                     append_child_ptr(&cap.node, &el);
                 }
                 Ok(args.get(1).cloned().unwrap_or(JsValue::null()))
@@ -1774,7 +1865,11 @@ fn create_js_node(
         let b = cap.node.borrow();
         if let Node::Element(el) = &*b {
             let mut attrs_init = ObjectInitializer::new(context);
-            attrs_init.property(js_string!("length"), el.attributes.len() as u32, Attribute::all());
+            attrs_init.property(
+                js_string!("length"),
+                el.attributes.len() as u32,
+                Attribute::all(),
+            );
             for (k, v) in &el.attributes {
                 attrs_init.property(
                     JsString::from(k.clone()),
@@ -1791,11 +1886,30 @@ fn create_js_node(
     if node_type == 3 {
         let text_val = {
             let b = cap.node.borrow();
-            if let Node::Text(t) = &*b { t.clone() } else { String::new() }
+            if let Node::Text(t) = &*b {
+                t.clone()
+            } else {
+                String::new()
+            }
         };
-        let _ = obj.set(js_string!("data"), JsString::from(text_val.clone()), false, context);
-        let _ = obj.set(js_string!("nodeValue"), JsString::from(text_val.clone()), false, context);
-        let _ = obj.set(js_string!("length"), text_val.chars().count() as u32, false, context);
+        let _ = obj.set(
+            js_string!("data"),
+            JsString::from(text_val.clone()),
+            false,
+            context,
+        );
+        let _ = obj.set(
+            js_string!("nodeValue"),
+            JsString::from(text_val.clone()),
+            false,
+            context,
+        );
+        let _ = obj.set(
+            js_string!("length"),
+            text_val.chars().count() as u32,
+            false,
+            context,
+        );
     }
 
     install_element_reflection_properties(&obj, &cap, context);
@@ -1812,7 +1926,9 @@ fn install_element_reflection_properties(obj: &JsObject, cap: &NodeCapture, cont
         }
     };
 
-    for attr in ["type", "name", "value", "href", "src", "rel", "target", "alt"] {
+    for attr in [
+        "type", "name", "value", "href", "src", "rel", "target", "alt",
+    ] {
         install_attribute_reflector(obj, cap, context, attr, attr, "");
     }
 
@@ -1964,7 +2080,9 @@ fn install_accessors(obj: &JsObject, cap: &NodeCapture, context: &mut Context) {
     // innerHTML: getter returns textual serialization; setter parses as plain text.
     let ih_get = NativeFunction::from_copy_closure_with_captures(
         |_this, _args, cap: &NodeCapture, _ctx| {
-            Ok(JsValue::from(JsString::from(serialize_inner_html(&cap.node))))
+            Ok(JsValue::from(JsString::from(serialize_inner_html(
+                &cap.node,
+            ))))
         },
         cap.clone(),
     );
@@ -1989,7 +2107,9 @@ fn install_accessors(obj: &JsObject, cap: &NodeCapture, context: &mut Context) {
     // outerHTML — readonly-ish.
     let oh_get = NativeFunction::from_copy_closure_with_captures(
         |_this, _args, cap: &NodeCapture, _ctx| {
-            Ok(JsValue::from(JsString::from(serialize_outer_html(&cap.node))))
+            Ok(JsValue::from(JsString::from(serialize_outer_html(
+                &cap.node,
+            ))))
         },
         cap.clone(),
     );
@@ -2154,44 +2274,36 @@ fn install_accessors(obj: &JsObject, cap: &NodeCapture, context: &mut Context) {
 
     // nextSibling / previousSibling / nextElementSibling / previousElementSibling
     let ns = NativeFunction::from_copy_closure_with_captures(
-        |_this, _args, cap: &NodeCapture, ctx| {
-            match sibling(&cap.document, &cap.node, 1, false) {
-                Some(s) => Ok(create_js_node(s, &cap.registry, &cap.document, ctx)),
-                None => Ok(JsValue::null()),
-            }
+        |_this, _args, cap: &NodeCapture, ctx| match sibling(&cap.document, &cap.node, 1, false) {
+            Some(s) => Ok(create_js_node(s, &cap.registry, &cap.document, ctx)),
+            None => Ok(JsValue::null()),
         },
         cap.clone(),
     );
     install_accessor(obj, context, "nextSibling", Some(ns), None);
 
     let ps = NativeFunction::from_copy_closure_with_captures(
-        |_this, _args, cap: &NodeCapture, ctx| {
-            match sibling(&cap.document, &cap.node, -1, false) {
-                Some(s) => Ok(create_js_node(s, &cap.registry, &cap.document, ctx)),
-                None => Ok(JsValue::null()),
-            }
+        |_this, _args, cap: &NodeCapture, ctx| match sibling(&cap.document, &cap.node, -1, false) {
+            Some(s) => Ok(create_js_node(s, &cap.registry, &cap.document, ctx)),
+            None => Ok(JsValue::null()),
         },
         cap.clone(),
     );
     install_accessor(obj, context, "previousSibling", Some(ps), None);
 
     let nes = NativeFunction::from_copy_closure_with_captures(
-        |_this, _args, cap: &NodeCapture, ctx| {
-            match sibling(&cap.document, &cap.node, 1, true) {
-                Some(s) => Ok(create_js_node(s, &cap.registry, &cap.document, ctx)),
-                None => Ok(JsValue::null()),
-            }
+        |_this, _args, cap: &NodeCapture, ctx| match sibling(&cap.document, &cap.node, 1, true) {
+            Some(s) => Ok(create_js_node(s, &cap.registry, &cap.document, ctx)),
+            None => Ok(JsValue::null()),
         },
         cap.clone(),
     );
     install_accessor(obj, context, "nextElementSibling", Some(nes), None);
 
     let pes = NativeFunction::from_copy_closure_with_captures(
-        |_this, _args, cap: &NodeCapture, ctx| {
-            match sibling(&cap.document, &cap.node, -1, true) {
-                Some(s) => Ok(create_js_node(s, &cap.registry, &cap.document, ctx)),
-                None => Ok(JsValue::null()),
-            }
+        |_this, _args, cap: &NodeCapture, ctx| match sibling(&cap.document, &cap.node, -1, true) {
+            Some(s) => Ok(create_js_node(s, &cap.registry, &cap.document, ctx)),
+            None => Ok(JsValue::null()),
         },
         cap.clone(),
     );
@@ -2311,7 +2423,9 @@ fn build_style_object(cap: NodeCapture, context: &mut Context) -> JsObject {
         }
     }
 
-    let scap = StyleCap { style: style.clone() };
+    let scap = StyleCap {
+        style: style.clone(),
+    };
 
     let get_prop = NativeFunction::from_copy_closure_with_captures(
         |_this, args, cap: &StyleCap, _ctx| {
@@ -2927,8 +3041,14 @@ fn parse_simple(s: &str) -> Option<SimpleSel> {
                         }
                         chars.next();
                     } else if depth == 0
-                        && (c == ' ' || c == ',' || c == '>' || c == '+' || c == '~'
-                            || c == '.' || c == '#' || c == '[')
+                        && (c == ' '
+                            || c == ','
+                            || c == '>'
+                            || c == '+'
+                            || c == '~'
+                            || c == '.'
+                            || c == '#'
+                            || c == '[')
                     {
                         break;
                     } else {
@@ -3023,10 +3143,7 @@ fn parse_selector_groups(selector: &str) -> Vec<Vec<SimpleSel>> {
     selector
         .split(',')
         .filter_map(|g| {
-            let parts: Vec<SimpleSel> = g
-                .split_whitespace()
-                .filter_map(parse_simple)
-                .collect();
+            let parts: Vec<SimpleSel> = g.split_whitespace().filter_map(parse_simple).collect();
             if parts.is_empty() {
                 None
             } else {
@@ -3104,7 +3221,12 @@ fn query_first_rec(
     None
 }
 
-fn query_all_rec(node: &NodePtr, groups: &[Vec<SimpleSel>], out: &mut Vec<NodePtr>, skip_self: bool) {
+fn query_all_rec(
+    node: &NodePtr,
+    groups: &[Vec<SimpleSel>],
+    out: &mut Vec<NodePtr>,
+    skip_self: bool,
+) {
     if !skip_self && matches_any_group(node, groups, node) {
         out.push(node.clone());
     }
@@ -3224,8 +3346,7 @@ fn kebab_to_camel(s: &str) -> String {
 
 // Base64 — minimal self-contained implementation for atob/btoa parity.
 fn base64_encode(input: &[u8]) -> String {
-    const CHARS: &[u8; 64] =
-        b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    const CHARS: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::with_capacity((input.len() + 2) / 3 * 4);
     let mut i = 0;
     while i + 3 <= input.len() {

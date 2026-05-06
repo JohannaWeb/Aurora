@@ -150,6 +150,12 @@ To render the bundled static Google homepage fixture:
 cargo run -- --fixture google-homepage
 ```
 
+To render the Aurora mockup/reflow fixture:
+
+```bash
+cargo run -- --fixture aurora-search
+```
+
 To render the bundled demo fixture:
 
 ```bash
@@ -160,6 +166,12 @@ To save a screenshot from the fixture:
 
 ```bash
 AURORA_SCREENSHOT=/tmp/google-homepage.png cargo run -- --fixture google-homepage
+```
+
+To save the Aurora mockup screenshot at the target size:
+
+```bash
+make mockup-screenshot
 ```
 
 Optional debug dumps:
@@ -192,6 +204,9 @@ make docker-build
 ```
 
 See [docs/DOCKER.md](docs/DOCKER.md) for run examples.
+
+See [docs/MOCKUP_REFLOW_STATUS.md](docs/MOCKUP_REFLOW_STATUS.md) for the Aurora
+mockup fixture status, render commands, and remaining scrollbar task.
 
 ## Next Steps
 

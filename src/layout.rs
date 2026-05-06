@@ -3,7 +3,7 @@
 // Grouping them in one `use` keeps signatures shorter and makes it obvious which concepts this file works with.
 use crate::css::{
     AlignItems, BoxSizing, DisplayMode, EdgeSizes, FlexDirection, JustifyContent, Margin,
-    MarginValue, StyleMap, TextAlign,
+    MarginValue, StyleMap, TextAlign, WhiteSpace,
 };
 // Import styled DOM tree
 use crate::style::{StyleTree, StyledNode};
@@ -13,6 +13,7 @@ use std::fmt::{self, Display, Formatter};
 // Default viewport width for layout (unused, kept for reference)
 #[allow(dead_code)]
 const DEFAULT_VIEWPORT_WIDTH: f32 = 1200.0;
+const DEFAULT_VIEWPORT_HEIGHT: f32 = 900.0;
 // Vertical padding for block elements in layout
 const BLOCK_VERTICAL_PADDING: f32 = 6.0;
 // Average character width in pixels
@@ -29,6 +30,12 @@ const INLINE_BOX_HEIGHT: f32 = 16.0;
 pub struct LayoutTree {
     // Root box of the layout tree (viewport)
     root: LayoutBox,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ViewportSize {
+    pub width: f32,
+    pub height: f32,
 }
 
 // Single layout box with position, size, and styling
@@ -123,9 +130,19 @@ impl LayoutTree {
         // Width of viewport in pixels
         viewport_width: f32,
     ) -> Self {
+        Self::from_style_tree_with_viewport(
+            style_tree,
+            ViewportSize {
+                width: viewport_width,
+                height: DEFAULT_VIEWPORT_HEIGHT,
+            },
+        )
+    }
+
+    pub fn from_style_tree_with_viewport(style_tree: &StyleTree, viewport: ViewportSize) -> Self {
         // Build layout box tree starting from styled root
         // RUST FUNDAMENTAL: `.expect(...)` is reasonable when failing here would indicate a logic bug rather than a normal runtime condition.
-        let root = LayoutBox::layout_root(style_tree.root(), viewport_width)
+        let root = LayoutBox::layout_root(style_tree.root(), viewport)
             // Panic if root fails (shouldn't happen)
             .expect("style tree root must produce a viewport");
         // Wrap root in LayoutTree
@@ -142,19 +159,25 @@ impl LayoutTree {
 // LayoutBox implementation with layout calculation methods
 impl LayoutBox {
     // Create root viewport box with specified width
-    fn layout_root(node: &StyledNode, viewport_width: f32) -> Option<Self> {
+    fn layout_root(node: &StyledNode, viewport: ViewportSize) -> Option<Self> {
         // Build layout starting from position (0,0) with full width
         // RUST FUNDAMENTAL: The `?` operator keeps this constructor concise by propagating `None`
         // if the styled root cannot produce a layout box.
-        let mut root = Self::from_styled_node(node, 0.0, 0.0, viewport_width)?;
+        let mut root = Self::from_styled_node(node, 0.0, 0.0, viewport.width, viewport.height)?;
         // Set viewport width to fill available space
-        root.rect.width = viewport_width;
+        root.rect.width = viewport.width;
         // Return root box
         Some(root)
     }
 
     // Layout a styled node recursively based on its type
-    fn from_styled_node(node: &StyledNode, x: f32, y: f32, available_width: f32) -> Option<Self> {
+    fn from_styled_node(
+        node: &StyledNode,
+        x: f32,
+        y: f32,
+        available_width: f32,
+        viewport_height: f32,
+    ) -> Option<Self> {
         // Skip style and script tags (non-visual)
         // RUST FUNDAMENTAL: Comparing against `Some("...".to_string())` works because `Option<String>` implements `PartialEq`,
         // though it does allocate temporary strings each time.
@@ -178,9 +201,12 @@ impl LayoutBox {
                 x,
                 y,
                 available_width,
+                viewport_height,
             )),
             // Element node - dispatch to element handler
-            Some(tag_name) => Self::from_element(&tag_name, node, x, y, available_width),
+            Some(tag_name) => {
+                Self::from_element(&tag_name, node, x, y, available_width, viewport_height)
+            }
             // Text node - layout as text
             // RUST FUNDAMENTAL: `unwrap_or_default()` is a convenient fallback when the default value for the type is acceptable.
             None => Some(Self::layout_text(
@@ -204,6 +230,7 @@ impl LayoutBox {
         y: f32,
         // Available width for layout
         available_width: f32,
+        viewport_height: f32,
     ) -> Option<Self> {
         // Get display mode from styles
         // RUST FUNDAMENTAL: Cloning the `StyleMap` here means each layout box owns the style snapshot it was laid out with.
@@ -229,6 +256,7 @@ impl LayoutBox {
                     x,
                     y,
                     available_width,
+                    viewport_height,
                     mode,
                 ))
             }
@@ -244,6 +272,7 @@ impl LayoutBox {
                     x,
                     y,
                     available_width,
+                    viewport_height,
                 ))
             }
             // Display: block (full width, new line)
@@ -259,6 +288,7 @@ impl LayoutBox {
                 x,
                 y,
                 available_width,
+                viewport_height,
             )),
             // Display: inline-block (inline positioning, block box)
             DisplayMode::InlineBlock => Some(Self::layout_container(
@@ -273,6 +303,7 @@ impl LayoutBox {
                 x,
                 y,
                 available_width,
+                viewport_height,
             )),
             // Display: flex (flexbox layout)
             DisplayMode::Flex => Some(Self::layout_flex_container(
@@ -287,6 +318,7 @@ impl LayoutBox {
                 x,
                 y,
                 available_width,
+                viewport_height,
             )),
             // Display: inline (flows with text)
             DisplayMode::Inline => Some(Self::layout_inline(
@@ -299,6 +331,7 @@ impl LayoutBox {
                 x,
                 y,
                 available_width,
+                viewport_height,
             )),
         }
     }
@@ -313,6 +346,7 @@ impl LayoutBox {
         x: f32,
         y: f32,
         available_width: f32,
+        viewport_height: f32,
     ) -> Self {
         // RUST FUNDAMENTAL: Intermediate locals like these keep complex numeric code understandable and debuggable.
         let mut rect_x = x + margin.left.to_px();
@@ -362,11 +396,13 @@ impl LayoutBox {
             // - If child has explicit width/max-width, measure with that constraint
             // - Otherwise, do two-pass measurement: measure to get intrinsic width, then re-layout at that width
             let has_explicit_width =
-                child.styles().width_px().is_some() || child.styles().max_width_px().is_some();
+                child.styles().get("width").is_some() || child.styles().max_width_px().is_some();
 
             if !has_explicit_width {
                 // First pass: measure at large width to see what children need
-                if let Some(measured) = Self::from_styled_node(child, 0.0, 0.0, 10000.0) {
+                if let Some(measured) =
+                    Self::from_styled_node(child, 0.0, 0.0, 10000.0, viewport_height)
+                {
                     // Compute intrinsic width from measured layout
                     // RUST FUNDAMENTAL: `.fold(initial, f32::max)` is a common reduction pattern for finding a maximum value.
                     let intrinsic = if measured.children.is_empty() {
@@ -388,7 +424,8 @@ impl LayoutBox {
                     // Second pass: re-layout at the correct width
                     // RUST FUNDAMENTAL: Re-running a pure-ish calculation with better constraints is often simpler
                     // than trying to mutate the first result into shape.
-                    if let Some(layout_child) = Self::from_styled_node(child, 0.0, 0.0, final_width)
+                    if let Some(layout_child) =
+                        Self::from_styled_node(child, 0.0, 0.0, final_width, viewport_height)
                     {
                         let child_w = layout_child.total_width();
                         total_child_width += child_w;
@@ -400,7 +437,9 @@ impl LayoutBox {
                 }
             } else {
                 // Has explicit width, measure normally at container width
-                if let Some(layout_child) = Self::from_styled_node(child, 0.0, 0.0, content_width) {
+                if let Some(layout_child) =
+                    Self::from_styled_node(child, 0.0, 0.0, content_width, viewport_height)
+                {
                     let child_w = layout_child.total_width();
                     total_child_width += child_w;
                     total_child_height += layout_child.total_height();
@@ -428,7 +467,8 @@ impl LayoutBox {
             total_child_height
         };
         let mut resolved_content_height =
-            clamp_content_height(&styles, inner_height).max(BLOCK_VERTICAL_PADDING);
+            clamp_content_height(&styles, inner_height, viewport_height)
+                .max(BLOCK_VERTICAL_PADDING);
 
         // Pass 2: Position items
         if direction == FlexDirection::Row && wraps {
@@ -473,7 +513,8 @@ impl LayoutBox {
                 total_rows_height += gap * (rows.len() as f32 - 1.0);
             }
             resolved_content_height =
-                clamp_content_height(&styles, total_rows_height).max(BLOCK_VERTICAL_PADDING);
+                clamp_content_height(&styles, total_rows_height, viewport_height)
+                    .max(BLOCK_VERTICAL_PADDING);
 
             let mut current_y = content_y;
             for (row_index, row) in rows.iter().enumerate() {
@@ -656,6 +697,7 @@ impl LayoutBox {
         x: f32,
         y: f32,
         available_width: f32,
+        viewport_height: f32,
         display_mode: DisplayMode,
     ) -> Self {
         let rect_x = x + margin.left.to_px();
@@ -674,7 +716,7 @@ impl LayoutBox {
             .and_then(parse_html_length_px)
             .unwrap_or(40.0);
         let content_width = clamp_content_width(&styles, width_hint, available_rect_width);
-        let content_height = clamp_content_height(&styles, height_hint);
+        let content_height = clamp_content_height(&styles, height_hint, viewport_height);
 
         Self {
             kind: LayoutKind::Image {
@@ -707,6 +749,7 @@ impl LayoutBox {
         x: f32,
         y: f32,
         available_width: f32,
+        viewport_height: f32,
     ) -> Self {
         let mut rect_x = x + margin.left.to_px();
         let rect_y = y + margin.top;
@@ -727,7 +770,7 @@ impl LayoutBox {
         };
         let content_width =
             clamp_content_width(&styles, default_content_width, available_rect_width);
-        let content_height = clamp_content_height(&styles, default_content_height);
+        let content_height = clamp_content_height(&styles, default_content_height, viewport_height);
 
         if let (MarginValue::Auto, MarginValue::Auto) = (margin.left, margin.right) {
             // RUST FUNDAMENTAL: This repeats the same centering rule used for blocks:
@@ -799,6 +842,7 @@ impl LayoutBox {
         x: f32,
         y: f32,
         available_width: f32,
+        viewport_height: f32,
     ) -> Self {
         let mut rect_x = x + margin.left.to_px();
         let rect_y = y + margin.top;
@@ -849,7 +893,12 @@ impl LayoutBox {
         for child in children {
             let child_is_block = child
                 .tag_name()
-                .map(|_| child.styles().display_mode() == DisplayMode::Block)
+                .map(|_| {
+                    matches!(
+                        child.styles().display_mode(),
+                        DisplayMode::Block | DisplayMode::Flex
+                    )
+                })
                 .unwrap_or(false);
             // RUST FUNDAMENTAL: `map(...).unwrap_or(false)` is a compact way to say
             // "compute something if the optional tag exists, otherwise use false".
@@ -878,6 +927,7 @@ impl LayoutBox {
                     content_x,
                     cursor_y - collapse_overlap,
                     content_width,
+                    viewport_height,
                 ) {
                     let alignment = styles.text_align();
                     if alignment != TextAlign::Left {
@@ -919,7 +969,7 @@ impl LayoutBox {
         } else {
             content_height + BLOCK_VERTICAL_PADDING
         };
-        let resolved_content_height = clamp_content_height(&styles, inner_height);
+        let resolved_content_height = clamp_content_height(&styles, inner_height, viewport_height);
 
         Self {
             kind,
@@ -951,6 +1001,7 @@ impl LayoutBox {
         x: f32,
         y: f32,
         available_width: f32,
+        viewport_height: f32,
     ) -> Self {
         let rect_x = x + margin.left.to_px();
         let rect_y = y + margin.top;
@@ -991,7 +1042,7 @@ impl LayoutBox {
 
             let remaining_width = (content_width - (line_x - content_x)).max(TEXT_CHAR_WIDTH);
             if let Some(mut layout_child) =
-                Self::from_styled_node(child, line_x, line_y, remaining_width)
+                Self::from_styled_node(child, line_x, line_y, remaining_width, viewport_height)
             {
                 if line_x > content_x && layout_child.total_width() > remaining_width {
                     // RUST FUNDAMENTAL: This is a line-wrap reflow step:
@@ -1001,9 +1052,13 @@ impl LayoutBox {
                     line_x = content_x;
                     line_height = 0.0;
 
-                    if let Some(reflowed_child) =
-                        Self::from_styled_node(child, line_x, line_y, content_width)
-                    {
+                    if let Some(reflowed_child) = Self::from_styled_node(
+                        child,
+                        line_x,
+                        line_y,
+                        content_width,
+                        viewport_height,
+                    ) {
                         layout_child = reflowed_child;
                     }
                 }
@@ -1025,7 +1080,8 @@ impl LayoutBox {
         } else {
             (line_y - content_y) + line_height.max(INLINE_BOX_HEIGHT)
         };
-        let resolved_content_height = clamp_content_height(&styles, total_content_height);
+        let resolved_content_height =
+            clamp_content_height(&styles, total_content_height, viewport_height);
 
         let alignment = styles.text_align();
         if alignment != TextAlign::Left {
@@ -1112,18 +1168,26 @@ impl LayoutBox {
             }
 
             let remaining_width = (available_width - (line_x - x)).max(TEXT_CHAR_WIDTH);
-            if let Some(mut layout_child) =
-                Self::from_styled_node(child, line_x, line_y, remaining_width)
-            {
+            if let Some(mut layout_child) = Self::from_styled_node(
+                child,
+                line_x,
+                line_y,
+                remaining_width,
+                DEFAULT_VIEWPORT_HEIGHT,
+            ) {
                 if line_x > x && layout_child.total_width() > remaining_width {
                     max_line_width = max_line_width.max(line_x - x);
                     line_y += line_height.max(TEXT_LINE_HEIGHT);
                     line_x = x;
                     line_height = 0.0;
 
-                    if let Some(reflowed_child) =
-                        Self::from_styled_node(child, line_x, line_y, available_width)
-                    {
+                    if let Some(reflowed_child) = Self::from_styled_node(
+                        child,
+                        line_x,
+                        line_y,
+                        available_width,
+                        DEFAULT_VIEWPORT_HEIGHT,
+                    ) {
                         layout_child = reflowed_child;
                     }
                 }
@@ -1216,6 +1280,21 @@ impl LayoutBox {
     ) -> Vec<Self> {
         let mut fragments = Vec::new();
         let text = Self::decode_entities(text);
+        let base_line_height = line_height_from_styles(&styles);
+
+        if styles.white_space() == WhiteSpace::NoWrap {
+            let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
+            if text.is_empty() {
+                return fragments;
+            }
+
+            let fragment = Self::layout_text(&text, styles, *line_x, *line_y);
+            *line_x += fragment.rect.width;
+            *line_height = (*line_height).max(base_line_height);
+            *max_line_width = max_line_width.max(*line_x - x);
+            fragments.push(fragment);
+            return fragments;
+        }
 
         // RUST FUNDAMENTAL: Splitting into owned `String` words gives the wrapper freedom to move and combine fragments as needed.
         let words = text
@@ -1227,7 +1306,6 @@ impl LayoutBox {
             return fragments;
         }
 
-        let base_line_height = line_height_from_styles(&styles);
         let mut current_line = String::new();
 
         for word in words {
@@ -1237,8 +1315,7 @@ impl LayoutBox {
                 format!("{} {}", current_line, word)
             };
             let candidate_width = measure_text_width(&candidate, &styles);
-            let current_line_width = measure_text_width(&current_line, &styles);
-            let used_width = (*line_x - x) + current_line_width;
+            let used_width = *line_x - x;
             let remaining_width = (available_width - used_width).max(1.0);
 
             if !current_line.is_empty() && candidate_width > remaining_width {
@@ -1575,16 +1652,26 @@ fn clamp_content_width(styles: &StyleMap, candidate_width: f32, available_width:
     width.min(available_width).max(0.0)
 }
 
-fn clamp_content_height(styles: &StyleMap, candidate_height: f32) -> f32 {
+fn clamp_content_height(styles: &StyleMap, candidate_height: f32, viewport_height: f32) -> f32 {
     // RUST FUNDAMENTAL: Width and height clamping are kept separate because they use different context and CSS properties,
     // even though the overall pattern is similar.
-    let mut height = styles.height_px().unwrap_or(candidate_height);
+    let font_size = styles
+        .font_size_resolved(16.0, 16.0)
+        .or_else(|| styles.font_size_px())
+        .unwrap_or(16.0);
+    let mut height = styles
+        .height_resolved(candidate_height, font_size, 16.0, viewport_height)
+        .or_else(|| styles.height_px())
+        .unwrap_or(candidate_height);
     if styles.box_sizing() == BoxSizing::BorderBox {
         let border = styles.border_width();
         let padding = styles.padding();
         height = (height - border.vertical() - padding.vertical()).max(0.0);
     }
-    if let Some(min_height) = styles.min_height_px() {
+    if let Some(min_height) = styles
+        .min_height_resolved(candidate_height, font_size, 16.0, viewport_height)
+        .or_else(|| styles.min_height_px())
+    {
         let mut min = min_height;
         if styles.box_sizing() == BoxSizing::BorderBox {
             let border = styles.border_width();
@@ -1593,7 +1680,10 @@ fn clamp_content_height(styles: &StyleMap, candidate_height: f32) -> f32 {
         }
         height = height.max(min);
     }
-    if let Some(max_height) = styles.max_height_px() {
+    if let Some(max_height) = styles
+        .max_height_resolved(candidate_height, font_size, 16.0, viewport_height)
+        .or_else(|| styles.max_height_px())
+    {
         let mut max = max_height;
         if styles.box_sizing() == BoxSizing::BorderBox {
             let border = styles.border_width();
@@ -1617,7 +1707,7 @@ fn parse_html_length_px(value: &str) -> Option<f32> {
 
 #[cfg(test)]
 mod tests {
-    use super::LayoutTree;
+    use super::{LayoutTree, ViewportSize};
     use crate::css::Stylesheet;
     use crate::dom::Node;
     use crate::style::StyleTree;
@@ -1661,6 +1751,48 @@ mod tests {
     }
 
     #[test]
+    fn treats_flex_children_as_block_flow_items() {
+        let dom = Node::document(vec![Node::element(
+            "body",
+            vec![
+                Node::element("nav", vec![Node::element("a", vec![Node::text("One")])]),
+                Node::element("section", vec![Node::text("Two")]),
+            ],
+        )]);
+        let stylesheet =
+            Stylesheet::parse("nav { display: flex; height: 40px; } section { display: flex; }");
+        let style_tree = StyleTree::from_dom(&dom, &stylesheet);
+
+        let layout = LayoutTree::from_style_tree_with_viewport_width(&style_tree, 300.0);
+        let rendered = layout.to_string();
+
+        assert!(rendered.contains("block<nav> {display: flex, height: 40px} [x: 0, y: 0"));
+        assert!(rendered.contains("block<section> {display: flex} [x: 0, y: 40"));
+    }
+
+    #[test]
+    fn keeps_percentage_width_flex_items_explicit() {
+        let dom = Node::document(vec![Node::element(
+            "body",
+            vec![Node::element(
+                "nav",
+                vec![
+                    Node::element("span", vec![Node::text("A")]),
+                    Node::element("div", vec![Node::text("Wide")]),
+                ],
+            )],
+        )]);
+        let stylesheet =
+            Stylesheet::parse("nav { display: flex; } div { display: flex; width: 50%; }");
+        let style_tree = StyleTree::from_dom(&dom, &stylesheet);
+
+        let layout = LayoutTree::from_style_tree_with_viewport_width(&style_tree, 400.0);
+        let rendered = layout.to_string();
+
+        assert!(rendered.contains("block<div> {display: flex, width: 50%} [x: 16, y: 0, w: 200"));
+    }
+
+    #[test]
     fn wraps_inline_text_across_multiple_lines() {
         let dom = Node::document(vec![Node::element(
             "body",
@@ -1683,6 +1815,45 @@ mod tests {
         assert!(rendered.contains("text(\"alpha\") [x: 0, y: 0, w: 80, h: 19]"));
         assert!(rendered.contains("text(\"beta\") [x: 0, y: 19, w: 64, h: 19]"));
         assert!(rendered.contains("text(\"gamma\") [x: 0, y: 38, w: 80, h: 19]"));
+    }
+
+    #[test]
+    fn keeps_nowrap_inline_text_on_one_line() {
+        let dom = Node::document(vec![Node::element(
+            "body",
+            vec![Node::element("p", vec![Node::text("sign in")])],
+        )]);
+        let stylesheet = Stylesheet::parse("p { display: inline; white-space: nowrap; }");
+        let style_tree = StyleTree::from_dom(&dom, &stylesheet);
+
+        let layout = LayoutTree::from_style_tree_with_viewport_width(&style_tree, 48.0);
+        let rendered = layout.to_string();
+
+        assert!(rendered.contains("text(\"sign in\") [x: 0, y: 0"));
+        assert!(!rendered.contains("text(\"sign\")"));
+        assert!(!rendered.contains("text(\"in\")"));
+    }
+
+    #[test]
+    fn inherits_nowrap_to_child_text() {
+        let dom = Node::document(vec![Node::element(
+            "body",
+            vec![Node::element(
+                "nav",
+                vec![Node::element("span", vec![Node::text("dom 412")])],
+            )],
+        )]);
+        let stylesheet = Stylesheet::parse(
+            "nav { display: inline; white-space: nowrap; } span { display: inline; }",
+        );
+        let style_tree = StyleTree::from_dom(&dom, &stylesheet);
+
+        let layout = LayoutTree::from_style_tree_with_viewport_width(&style_tree, 48.0);
+        let rendered = layout.to_string();
+
+        assert!(rendered.contains("text(\"dom 412\") [x: 0, y: 0"));
+        assert!(!rendered.contains("text(\"dom\")"));
+        assert!(!rendered.contains("text(\"412\")"));
     }
 
     #[test]
@@ -1775,6 +1946,57 @@ mod tests {
             "block<section> {height: 48px, padding: 4px, width: 120px} [x: 0, y: 0, w: 128, h: 56]"
         ));
         assert!(rendered.contains("text(\"Sized\") [x: 4, y: 4, w: 80, h: 19]"));
+    }
+
+    #[test]
+    fn resolves_viewport_height_units() {
+        let dom = Node::document(vec![Node::element(
+            "body",
+            vec![Node::element("main", vec![Node::text("Tall")])],
+        )]);
+        let stylesheet = Stylesheet::parse("main { min-height: 50vh; }");
+        let style_tree = StyleTree::from_dom(&dom, &stylesheet);
+
+        let layout = LayoutTree::from_style_tree_with_viewport(
+            &style_tree,
+            ViewportSize {
+                width: 300.0,
+                height: 800.0,
+            },
+        );
+        let rendered = layout.to_string();
+
+        assert!(rendered.contains("block<main> {min-height: 50vh} [x: 0, y: 0, w: 300, h: 400]"));
+    }
+
+    #[test]
+    fn rebuilds_layout_with_new_viewport_width() {
+        let dom = Node::document(vec![Node::element(
+            "body",
+            vec![Node::element("main", vec![Node::text("Reflow")])],
+        )]);
+        let stylesheet = Stylesheet::parse("main { width: 50%; }");
+        let style_tree = StyleTree::from_dom(&dom, &stylesheet);
+
+        let wide = LayoutTree::from_style_tree_with_viewport(
+            &style_tree,
+            ViewportSize {
+                width: 800.0,
+                height: 600.0,
+            },
+        )
+        .to_string();
+        let narrow = LayoutTree::from_style_tree_with_viewport(
+            &style_tree,
+            ViewportSize {
+                width: 400.0,
+                height: 600.0,
+            },
+        )
+        .to_string();
+
+        assert!(wide.contains("block<main> {width: 50%} [x: 0, y: 0, w: 400"));
+        assert!(narrow.contains("block<main> {width: 50%} [x: 0, y: 0, w: 200"));
     }
 
     #[test]

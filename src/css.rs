@@ -497,6 +497,13 @@ pub enum TextAlign {
     Right,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum WhiteSpace {
+    #[default]
+    Normal,
+    NoWrap,
+}
+
 impl StyleMap {
     pub fn is_empty(&self) -> bool {
         // RUST FUNDAMENTAL: Wrapper types often forward small convenience methods to their inner value.
@@ -556,6 +563,13 @@ impl StyleMap {
             Some("center") => TextAlign::Center,
             Some("right") => TextAlign::Right,
             _ => TextAlign::Left,
+        }
+    }
+
+    pub fn white_space(&self) -> WhiteSpace {
+        match self.0.get("white-space").map(String::as_str) {
+            Some("nowrap") => WhiteSpace::NoWrap,
+            _ => WhiteSpace::Normal,
         }
     }
 
@@ -684,6 +698,50 @@ impl StyleMap {
     ) -> Option<f32> {
         let raw = self.get("height")?;
         if raw == "auto" || raw.contains("calc(") {
+            return None;
+        }
+        parse_length_value(raw).map(|lv| {
+            lv.to_px(
+                available_height,
+                font_size,
+                root_font_size,
+                0.0,
+                viewport_height,
+            )
+        })
+    }
+
+    pub fn min_height_resolved(
+        &self,
+        available_height: f32,
+        font_size: f32,
+        root_font_size: f32,
+        viewport_height: f32,
+    ) -> Option<f32> {
+        let raw = self.get("min-height")?;
+        if raw == "auto" || raw.contains("calc(") {
+            return None;
+        }
+        parse_length_value(raw).map(|lv| {
+            lv.to_px(
+                available_height,
+                font_size,
+                root_font_size,
+                0.0,
+                viewport_height,
+            )
+        })
+    }
+
+    pub fn max_height_resolved(
+        &self,
+        available_height: f32,
+        font_size: f32,
+        root_font_size: f32,
+        viewport_height: f32,
+    ) -> Option<f32> {
+        let raw = self.get("max-height")?;
+        if raw == "none" || raw.contains("calc(") {
             return None;
         }
         parse_length_value(raw).map(|lv| {

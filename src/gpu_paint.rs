@@ -43,6 +43,24 @@ impl GpuPainter {
         Self::paint_with_opacity(layout_box, scene, 1.0, images);
     }
 
+    pub fn paint_scrollbars(layout_box: &LayoutBox, scene: &mut Scene, viewport_height: f32) {
+        paint_scrollbar_if_needed(layout_box, scene, viewport_height);
+        for child in layout_box.children() {
+            Self::paint_scrollbars(child, scene, viewport_height);
+        }
+    }
+
+    pub fn paint_text_label(
+        scene: &mut Scene,
+        text: &str,
+        x: f64,
+        y: f64,
+        font_size: f32,
+        color: Color,
+    ) {
+        paint_text_label(scene, text, x, y, font_size, color);
+    }
+
     // Paint layout box with opacity blending through tree
     // RUST FUNDAMENTAL: parent_opacity f32 parameter shows how Rust passes primitives by value (Copy type)
     fn paint_with_opacity(
@@ -102,6 +120,132 @@ impl GpuPainter {
             Self::paint_with_opacity(child, scene, effective_opacity, images);
         }
     }
+}
+
+fn paint_text_label(scene: &mut Scene, text: &str, x: f64, y: f64, font_size: f32, color: Color) {
+    let text_run = crate::font::layout_text_run(text, font_size);
+    let baseline_y = y + font_size as f64 * 0.75;
+    let base_r = (color.components[0] * 255.0).round().clamp(0.0, 255.0) as u8;
+    let base_g = (color.components[1] * 255.0).round().clamp(0.0, 255.0) as u8;
+    let base_b = (color.components[2] * 255.0).round().clamp(0.0, 255.0) as u8;
+    let base_a = (color.components[3] * 255.0).round().clamp(0.0, 255.0) as u8;
+
+    for glyph in &text_run.glyphs {
+        if let Some(raster) = crate::font::rasterize_glyph(glyph.ch, font_size) {
+            let gx = x + glyph.x as f64 + raster.x_offset as f64;
+            let gy = baseline_y + glyph.y_offset as f64 + raster.y_offset as f64;
+
+            for row in 0..raster.height {
+                for col in 0..raster.width {
+                    let idx = (row * raster.width + col) as usize;
+                    let alpha = raster.bitmap.get(idx).copied().unwrap_or(0);
+                    if alpha == 0 {
+                        continue;
+                    }
+
+                    let coverage = alpha as f32 / 255.0;
+                    let glyph_alpha = (base_a as f32 * coverage).round().clamp(0.0, 255.0) as u8;
+                    let glyph_color = Color::from_rgba8(base_r, base_g, base_b, glyph_alpha);
+                    let pixel_rect = KRect::new(
+                        gx + col as f64,
+                        gy + row as f64,
+                        gx + col as f64 + 1.0,
+                        gy + row as f64 + 1.0,
+                    );
+                    scene.fill(
+                        Fill::NonZero,
+                        Affine::IDENTITY,
+                        glyph_color,
+                        None,
+                        &pixel_rect,
+                    );
+                }
+            }
+        }
+    }
+}
+
+fn paint_scrollbar_if_needed(layout_box: &LayoutBox, scene: &mut Scene, viewport_height: f32) {
+    let styles = layout_box.styles();
+    let has_scrollbar = matches!(
+        styles.get("overflow-y").or_else(|| styles.get("overflow")),
+        Some("scroll")
+    );
+    if !has_scrollbar {
+        return;
+    }
+
+    let rect = layout_box.rect();
+    if rect.width <= 0.0 || rect.height <= 0.0 {
+        return;
+    }
+
+    let track_width = 10.0_f64;
+    let track_margin = 3.0_f64;
+    let track_x = (rect.x + rect.width) as f64 - track_width - track_margin;
+    let track_top = rect.y.max(0.0) as f64;
+    let track_bottom = (rect.y + rect.height).min(viewport_height).max(rect.y) as f64;
+    let track_height = (track_bottom - track_top).max(0.0);
+    if track_height < 24.0 {
+        return;
+    }
+
+    let content_height = scroll_content_height(layout_box).max(rect.height);
+    let thumb_height =
+        ((rect.height / content_height) as f64 * track_height).clamp(48.0, track_height.max(48.0));
+    let thumb_top = track_top + 10.0;
+    let thumb_bottom = (thumb_top + thumb_height)
+        .min(track_bottom - 10.0)
+        .max(thumb_top);
+
+    scene.fill(
+        Fill::NonZero,
+        Affine::IDENTITY,
+        Color::from_rgba8(222, 227, 232, 210),
+        None,
+        &RoundedRect::from_rect(
+            KRect::new(
+                track_x,
+                track_top + 8.0,
+                track_x + track_width,
+                track_bottom - 8.0,
+            ),
+            5.0,
+        ),
+    );
+    scene.fill(
+        Fill::NonZero,
+        Affine::IDENTITY,
+        Color::from_rgba8(144, 153, 164, 230),
+        None,
+        &RoundedRect::from_rect(
+            KRect::new(
+                track_x + 2.0,
+                thumb_top,
+                track_x + track_width - 2.0,
+                thumb_bottom,
+            ),
+            4.0,
+        ),
+    );
+}
+
+fn scroll_content_height(layout_box: &LayoutBox) -> f32 {
+    let rect = layout_box.rect();
+    let mut bottom = rect.y + rect.height;
+    for child in layout_box.children() {
+        bottom = bottom.max(max_box_bottom(child));
+    }
+    (bottom - rect.y).max(rect.height)
+}
+
+fn max_box_bottom(layout_box: &LayoutBox) -> f32 {
+    let rect = layout_box.rect();
+    let mut bottom = rect.y + rect.height;
+    for child in layout_box.children() {
+        bottom = bottom.max(max_box_bottom(child));
+    }
+    bottom
 }
 
 // Paint an element (div, section, etc.) with background, borders, and shadow

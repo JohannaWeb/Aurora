@@ -82,7 +82,7 @@ use crate::html::Parser;
 // Import layout tree for spatial box calculations
 // RUST FUNDAMENTAL: Rust resolves names through module paths, and only public items can be reached from outside their module.
 // `use` does not copy anything; it only gives the current scope a convenient binding to that path.
-use crate::layout::{LayoutBox, LayoutTree};
+use crate::layout::{LayoutBox, LayoutTree, ViewportSize};
 
 // Import style tree for DOM nodes with applied styles
 // RUST FUNDAMENTAL: When two types live in different modules, `use` keeps the local code from turning into long path soup.
@@ -199,7 +199,8 @@ fn main() {
     // Set viewport width in pixels (width of rendering canvas)
     // RUST FUNDAMENTAL: Unsuffixed float literals start as an inferred floating-point type.
     // Rust will choose `f32` or `f64` based on surrounding context if it can; otherwise you may need an explicit suffix.
-    let viewport_width = 1200.0;
+    let viewport_width = env_f32("AURORA_VIEWPORT_WIDTH").unwrap_or(1200.0);
+    let viewport_height = env_f32("AURORA_VIEWPORT_HEIGHT").unwrap_or(900.0);
     // Parse HTML string into DOM tree structure
     // RUST FUNDAMENTAL: Borrowing with `&html` lets the parser read the string without taking ownership of it.
     // That means `html` can still be used later in this scope if needed.
@@ -248,7 +249,15 @@ fn main() {
     let mut stylesheet = Stylesheet::from_dom(&dom, url_arg.as_deref(), &identity);
     stylesheet.merge(Stylesheet::user_agent_stylesheet());
     let style_tree = StyleTree::from_dom(&dom, &stylesheet);
-    let layout = LayoutTree::from_style_tree_with_viewport_width(&style_tree, viewport_width);
+    let viewport = ViewportSize {
+        width: viewport_width,
+        height: viewport_height,
+    };
+    let content_viewport = ViewportSize {
+        width: viewport_width,
+        height: (viewport_height - window::BROWSER_CHROME_HEIGHT).max(1.0),
+    };
+    let layout = LayoutTree::from_style_tree_with_viewport(&style_tree, content_viewport);
 
     // Pre-fetch and decode all images referenced in the layout tree.
     let image_cache = load_images(layout.root(), url_arg.as_deref(), &identity);
@@ -285,7 +294,16 @@ fn main() {
     if has_screenshot || (!is_headless && has_display) {
         // Attempt to open interactive GPU window for rendering
         // RUST FUNDAMENTAL: `if let Err(error) = ...` both checks for failure and binds the error value in one step.
-        if let Err(error) = window::open(&layout, &image_cache) {
+        let window_input = window::WindowInput {
+            dom: Rc::clone(&dom),
+            stylesheet,
+            base_url: url_arg.clone(),
+            identity: identity.clone(),
+            viewport,
+            layout,
+            images: image_cache,
+        };
+        if let Err(error) = window::open(window_input) {
             // Print error if window creation fails
             eprintln!("Window disabled: {error}");
             // Suggest alternative output methods to user
@@ -438,6 +456,10 @@ fn env_flag(name: &str) -> bool {
         // Any one of these successful `Ok("...")` forms will satisfy the macro.
         Ok("1") | Ok("true") | Ok("TRUE") | Ok("yes") | Ok("YES")
     )
+}
+
+fn env_f32(name: &str) -> Option<f32> {
+    env::var(name).ok()?.parse::<f32>().ok()
 }
 
 // Construct file:// URL to a test fixture HTML file
@@ -632,7 +654,11 @@ fn collect_image_srcs(node: &LayoutBox, base_url: Option<&str>, out: &mut Vec<St
 
 // Fetch and decode all images referenced by the layout tree.
 // Returns a map from resolved URL to peniko::ImageData (RGBA8).
-fn load_images(root: &LayoutBox, base_url: Option<&str>, identity: &Identity) -> ImageCache {
+pub(crate) fn load_images(
+    root: &LayoutBox,
+    base_url: Option<&str>,
+    identity: &Identity,
+) -> ImageCache {
     let mut urls = Vec::new();
     collect_image_srcs(root, base_url, &mut urls);
 
