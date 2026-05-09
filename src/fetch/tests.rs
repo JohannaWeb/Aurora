@@ -1,8 +1,10 @@
 use super::chunked::decode_chunked_body;
+use super::fetch_string;
 use super::http::HttpResponse;
 use super::resolve_relative_url;
 use super::url::{ParsedUrl, Scheme};
 use super::FetchError;
+use opus::domain::{Capability, Identity, IdentityKind};
 
 #[test]
 fn parses_http_urls() {
@@ -71,6 +73,10 @@ fn resolves_redirect_targets() {
         resolve_relative_url(base, "http://other.test/zoom").unwrap(),
         "http://other.test/zoom"
     );
+    assert_eq!(
+        resolve_relative_url(base, "data:text/plain;base64,Y2F0cw==").unwrap(),
+        "data:text/plain;base64,Y2F0cw=="
+    );
 }
 
 #[test]
@@ -80,6 +86,25 @@ fn resolves_relative_file_paths() {
     assert_eq!(
         resolve_relative_url(base, "styles.css").unwrap(),
         "file:///tmp/aurora/fixtures/google-homepage/styles.css"
+    );
+}
+
+#[test]
+fn fetches_data_url_strings_without_network() {
+    let identity = Identity::new(
+        "did:test:fetch",
+        "Fetch Test",
+        IdentityKind::Human,
+        [Capability::ReadWorkspace],
+    );
+
+    assert_eq!(
+        fetch_string("data:text/plain;base64,Y2F0cw==", &identity).unwrap(),
+        "cats"
+    );
+    assert_eq!(
+        fetch_string("data:text/plain,hello%20aurora", &identity).unwrap(),
+        "hello aurora"
     );
 }
 

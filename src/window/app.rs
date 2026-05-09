@@ -1,7 +1,6 @@
 use crate::gpu_paint::GpuPainter;
-use crate::layout::{LayoutTree, ViewportSize};
-use crate::style::StyleTree;
 use std::sync::Arc;
+use std::time::Instant;
 use vello::kurbo::Affine;
 use vello::peniko::{Color, Fill};
 use vello::util::{RenderContext, RenderSurface};
@@ -34,26 +33,36 @@ impl AuroraApp {
     }
 
     pub(super) fn reflow(&mut self, width: u32, height: u32) {
-        if width == 0 || height == 0 {
-            return;
-        }
+        self.input.reflow(width, height);
+    }
 
-        self.input.viewport = ViewportSize {
-            width: width as f32,
-            height: height as f32,
-        };
-        let content_viewport = ViewportSize {
-            width: width as f32,
-            height: ((height as f32) - BROWSER_CHROME_HEIGHT).max(1.0),
-        };
-        let style_tree = StyleTree::from_dom(&self.input.dom, &self.input.stylesheet);
-        self.input.layout =
-            LayoutTree::from_style_tree_with_viewport(&style_tree, content_viewport);
-        self.input.images = crate::load_images(
-            self.input.layout.root(),
-            self.input.base_url.as_deref(),
-            &self.input.identity,
-        );
+    pub(super) fn run_frame_tasks(&mut self) -> bool {
+        let now = Instant::now();
+        let mut needs_reflow = false;
+        if let Some(runtime) = self.input.runtime.as_mut() {
+            needs_reflow |= runtime.tick(now);
+            needs_reflow |= runtime.drain_animation_frame_callbacks(now);
+        }
+        if needs_reflow {
+            let viewport = self.input.viewport;
+            self.reflow(viewport.width as u32, viewport.height as u32);
+        }
+        needs_reflow
+    }
+
+    pub(super) fn next_runtime_deadline(&self) -> Option<Instant> {
+        self.input
+            .runtime
+            .as_ref()
+            .and_then(|runtime| runtime.next_deadline())
+    }
+
+    pub(super) fn has_animation_frame_callbacks(&self) -> bool {
+        self.input
+            .runtime
+            .as_ref()
+            .map(|runtime| runtime.has_animation_frame_callbacks())
+            .unwrap_or(false)
     }
 
     pub(super) fn render(&mut self) {

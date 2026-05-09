@@ -5,6 +5,7 @@
 mod api;
 mod capability;
 mod chunked;
+mod data_url;
 mod errors;
 mod headers;
 mod http;

@@ -23,6 +23,7 @@ pub(in crate::js_boa) fn install_identity_accessors(
             let v = js_string_of(args.get(0).unwrap_or(&JsValue::undefined()));
             if let Node::Element(el) = &mut *cap.node.borrow_mut() {
                 el.attributes.insert("id".to_string(), v);
+                cap.registry.mark_style_dirty(&cap.node);
             }
             Ok(JsValue::undefined())
         },
@@ -48,6 +49,7 @@ pub(in crate::js_boa) fn install_identity_accessors(
             let v = js_string_of(args.get(0).unwrap_or(&JsValue::undefined()));
             if let Node::Element(el) = &mut *cap.node.borrow_mut() {
                 el.attributes.insert("class".to_string(), v);
+                cap.registry.mark_style_dirty(&cap.node);
             }
             Ok(JsValue::undefined())
         },

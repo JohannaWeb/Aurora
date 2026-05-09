@@ -26,13 +26,31 @@ make mockup-screenshot
 Render a custom fixture screenshot:
 
 ```bash
-make screenshot FIXTURE=aurora-search SCREENSHOT=/tmp/aurora-search-render.png VIEWPORT_WIDTH=1338 VIEWPORT_HEIGHT=786
+make screenshot FIXTURE=aurora-search SCREENSHOT=tests/screenshots/aurora-search.png VIEWPORT_WIDTH=1338 VIEWPORT_HEIGHT=786
 ```
 
 Render the narrower failure-size viewport:
 
 ```bash
 make screenshot FIXTURE=aurora-search SCREENSHOT=/tmp/aurora-search-1238x939.png VIEWPORT_WIDTH=1238 VIEWPORT_HEIGHT=939
+```
+
+Refresh all bundled fixture renders in `tests/screenshots`:
+
+```bash
+make all-renders
+```
+
+Render the synthetic dynamic reflow fixture:
+
+```bash
+make dynamic-screenshot
+```
+
+Render the synthetic requestAnimationFrame reflow fixture:
+
+```bash
+make raf-screenshot
 ```
 
 Run the example.com smoke test without opening a window:
@@ -47,9 +65,9 @@ Last verified locally:
 
 ```bash
 cargo test
+make all-renders
 rustfmt --check src/css.rs src/style.rs src/layout.rs src/window.rs src/gpu_paint.rs
 rustfmt --check --config skip_children=true src/main.rs
-make mockup-screenshot
 ```
 
 The old Google fixture was also rendered successfully with the same screenshot
@@ -63,6 +81,9 @@ the existing static homepage fixture.
 - Screenshot output reads `AURORA_SCREENSHOT_WIDTH` and `AURORA_SCREENSHOT_HEIGHT`.
 - Browser chrome is painted by `window.rs` in screenshot mode and by the GPU scene path in interactive mode.
 - Window resize rebuilds style, layout, and image cache before redraw.
+- `setTimeout`, `setInterval`, `requestAnimationFrame`, and `queueMicrotask` run from the frame loop.
+- JS DOM mutations mark coarse style/layout dirty bits and only dirty callbacks trigger reflow.
+- Screenshot rendering drains a bounded number of ready frame tasks before capture.
 - Page layout uses the content viewport below the built-in browser chrome.
 - Layout resolves `height`, `min-height`, and `max-height` with viewport-height units.
 - Flex children that are themselves `display: flex` participate as block-flow rows.
@@ -70,6 +91,8 @@ the existing static homepage fixture.
 - Text wrapping no longer double-counts current line width.
 - `white-space: nowrap` is inherited and honored by inline text fragments.
 - The Aurora fixture uses supported CSS only: block, flex, fixed sizes, percentages, margins, padding, borders, background, color, and font size.
+- `fixtures/dynamic-reflow` validates timer plus microtask-driven DOM updates before screenshot paint.
+- `fixtures/raf-reflow` validates `requestAnimationFrame` DOM updates before screenshot paint.
 
 ## Scrollbar
 

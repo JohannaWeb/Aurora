@@ -12,6 +12,7 @@ pub(in crate::js_boa) fn install_attribute_methods(
                 let value = js_string_of(args.get(1).unwrap_or(&JsValue::undefined()));
                 if let Node::Element(el) = &mut *cap.node.borrow_mut() {
                     el.attributes.insert(name, value);
+                    cap.registry.mark_style_dirty(&cap.node);
                 }
                 Ok(JsValue::undefined())
             },
@@ -49,6 +50,7 @@ pub(in crate::js_boa) fn install_attribute_methods(
                 let name = js_string_of(args.get(0).unwrap_or(&JsValue::undefined()));
                 if let Node::Element(el) = &mut *cap.node.borrow_mut() {
                     el.attributes.remove(&name);
+                    cap.registry.mark_style_dirty(&cap.node);
                 }
                 Ok(JsValue::undefined())
             },

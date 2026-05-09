@@ -18,7 +18,7 @@ pub(in crate::js_boa) fn install_globals(
     context: &mut Context,
     document: &NodePtr,
     _registry: &NodeRegistry,
-) {
+) -> WindowCapture {
     let global_obj = context.global_object().clone();
     install_window_core(context, &global_obj);
     let win_cap = install_timers(context, &global_obj);
@@ -27,4 +27,5 @@ pub(in crate::js_boa) fn install_globals(
     install_navigator(context);
     install_platform_objects(context, &global_obj);
     let _ = document;
+    win_cap
 }

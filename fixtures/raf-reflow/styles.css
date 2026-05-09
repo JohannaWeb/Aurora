@@ -1,0 +1,36 @@
+html,
+body {
+  margin: 0;
+  min-height: 100vh;
+  background: #eef4f8;
+  color: #1f2933;
+  font-family: sans-serif;
+}
+
+.page {
+  min-height: 100vh;
+  padding: 72px 92px;
+  background: #eef4f8;
+}
+
+h1 {
+  margin: 0 0 28px;
+  color: #1b4b5a;
+  font-size: 40px;
+  font-weight: 700;
+}
+
+.panel {
+  width: 500px;
+  padding: 26px 30px;
+  border: 2px solid #7b8794;
+  background: #ffffff;
+  color: #52606d;
+  font-size: 24px;
+}
+
+.panel.ready {
+  border-color: #2f80ed;
+  background: #dceeff;
+  color: #123c69;
+}

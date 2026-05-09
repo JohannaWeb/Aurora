@@ -35,6 +35,7 @@ pub(in crate::js_boa) fn install_command_methods(
                 let text = js_string_of(args.get(1).unwrap_or(&JsValue::undefined()));
                 let text_node = Node::text(text);
                 append_child_ptr(&cap.node, &text_node);
+                cap.registry.mark_layout_dirty(&cap.node);
                 Ok(JsValue::undefined())
             },
             cap.clone(),
@@ -48,6 +49,7 @@ pub(in crate::js_boa) fn install_command_methods(
                 let text = js_string_of(args.get(1).unwrap_or(&JsValue::undefined()));
                 let text_node = Node::text(text);
                 append_child_ptr(&cap.node, &text_node);
+                cap.registry.mark_layout_dirty(&cap.node);
                 Ok(JsValue::undefined())
             },
             cap.clone(),
@@ -64,6 +66,7 @@ pub(in crate::js_boa) fn install_command_methods(
                     ctx,
                 ) {
                     append_child_ptr(&cap.node, &el);
+                    cap.registry.mark_layout_dirty(&cap.node);
                 }
                 Ok(args.get(1).cloned().unwrap_or(JsValue::null()))
             },

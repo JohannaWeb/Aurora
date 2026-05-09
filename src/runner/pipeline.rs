@@ -16,7 +16,7 @@ pub(crate) fn run_browser(cli: CliOptions, identity: Identity) {
     let viewport = viewport_size();
     let dom = Parser::new(&html).parse_document();
 
-    run_scripts(&dom, base_url.as_deref(), &identity);
+    let runtime = run_scripts(&dom, base_url.as_deref(), &identity);
 
     let mut stylesheet = Stylesheet::from_dom(&dom, base_url.as_deref(), &identity);
     stylesheet.merge(Stylesheet::user_agent_stylesheet());
@@ -27,6 +27,9 @@ pub(crate) fn run_browser(cli: CliOptions, identity: Identity) {
     };
     let layout = LayoutTree::from_style_tree_with_viewport(&style_tree, content_viewport);
     let image_cache = load_images(layout.root(), base_url.as_deref(), &identity);
+    if let Some(runtime) = runtime.as_ref() {
+        runtime.clear_dirty_bits();
+    }
 
     print_debug_output(&cli, &dom, &style_tree, &layout);
     let _ = crate::font::get_glyph_metrics('A');
@@ -39,6 +42,7 @@ pub(crate) fn run_browser(cli: CliOptions, identity: Identity) {
         viewport,
         layout,
         image_cache,
+        runtime,
     );
 }
 
@@ -62,10 +66,14 @@ fn viewport_size() -> ViewportSize {
     }
 }
 
-fn run_scripts(dom: &crate::dom::NodePtr, base_url: Option<&str>, identity: &Identity) {
+fn run_scripts(
+    dom: &crate::dom::NodePtr,
+    base_url: Option<&str>,
+    identity: &Identity,
+) -> Option<crate::js_boa::BoaRuntime> {
     let scripts = extract_scripts(dom);
     if scripts.is_empty() {
-        return;
+        return None;
     }
 
     println!("Boa: Processing {} scripts...", scripts.len());
@@ -78,6 +86,7 @@ fn run_scripts(dom: &crate::dom::NodePtr, base_url: Option<&str>, identity: &Ide
             eprintln!("JS Error: {}", e);
         }
     }
+    Some(runtime)
 }
 
 fn script_content(
@@ -134,6 +143,7 @@ fn maybe_open_window(
     viewport: ViewportSize,
     layout: LayoutTree,
     images: crate::ImageCache,
+    runtime: Option<crate::js_boa::BoaRuntime>,
 ) {
     let has_screenshot = env::var("AURORA_SCREENSHOT").is_ok();
     let is_headless = env::var("AURORA_HEADLESS").is_ok();
@@ -148,6 +158,7 @@ fn maybe_open_window(
             viewport,
             layout,
             images,
+            runtime,
         };
         if let Err(error) = crate::window::open(window_input) {
             eprintln!("Window disabled: {error}");

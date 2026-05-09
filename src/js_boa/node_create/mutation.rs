@@ -15,6 +15,7 @@ pub(in crate::js_boa) fn install_mutation_methods(
                     return Ok(args.get(0).cloned().unwrap_or(JsValue::null()));
                 };
                 append_child_ptr(&cap.node, &child);
+                cap.registry.mark_layout_dirty(&cap.node);
                 Ok(args.get(0).cloned().unwrap_or(JsValue::null()))
             },
             cap.clone(),
@@ -38,6 +39,7 @@ pub(in crate::js_boa) fn install_mutation_methods(
                     .get(1)
                     .and_then(|v| node_from_js(v, &cap.registry, ctx));
                 insert_before_ptr(&cap.node, &new_child, ref_child.as_ref());
+                cap.registry.mark_layout_dirty(&cap.node);
                 Ok(args.get(0).cloned().unwrap_or(JsValue::null()))
             },
             cap.clone(),
@@ -56,6 +58,7 @@ pub(in crate::js_boa) fn install_mutation_methods(
                     ctx,
                 ) {
                     remove_child_ptr(&cap.node, &child);
+                    cap.registry.mark_layout_dirty(&cap.node);
                 }
                 Ok(args.get(0).cloned().unwrap_or(JsValue::null()))
             },
@@ -81,6 +84,7 @@ pub(in crate::js_boa) fn install_mutation_methods(
                 );
                 if let (Some(new_c), Some(old_c)) = (new_child, old_child) {
                     replace_child_ptr(&cap.node, &new_c, &old_c);
+                    cap.registry.mark_layout_dirty(&cap.node);
                 }
                 Ok(args.get(1).cloned().unwrap_or(JsValue::null()))
             },
@@ -96,6 +100,7 @@ pub(in crate::js_boa) fn install_mutation_methods(
             |_this, _args, cap: &NodeCapture, _ctx| {
                 if let Some(parent) = find_parent(&cap.document, &cap.node) {
                     remove_child_ptr(&parent, &cap.node);
+                    cap.registry.mark_layout_dirty(&parent);
                 }
                 Ok(JsValue::undefined())
             },

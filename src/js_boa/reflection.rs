@@ -37,6 +37,7 @@ pub(super) fn install_attribute_reflector(
     #[derive(Clone)]
     struct AttrCap {
         node: NodePtr,
+        registry: NodeRegistry,
         attribute: String,
         fallback: &'static str,
     }
@@ -47,6 +48,7 @@ pub(super) fn install_attribute_reflector(
 
     let attr_cap = AttrCap {
         node: cap.node.clone(),
+        registry: cap.registry.clone(),
         attribute: attribute.to_string(),
         fallback,
     };
@@ -70,6 +72,7 @@ pub(super) fn install_attribute_reflector(
             let value = js_string_of(args.get(0).unwrap_or(&JsValue::undefined()));
             if let Node::Element(el) = &mut *cap.node.borrow_mut() {
                 el.attributes.insert(cap.attribute.clone(), value);
+                cap.registry.mark_style_dirty(&cap.node);
             }
             Ok(JsValue::undefined())
         },
@@ -88,6 +91,7 @@ pub(super) fn install_bool_attribute_reflector(
     #[derive(Clone)]
     struct BoolAttrCap {
         node: NodePtr,
+        registry: NodeRegistry,
         attribute: String,
     }
     unsafe impl Trace for BoolAttrCap {
@@ -97,6 +101,7 @@ pub(super) fn install_bool_attribute_reflector(
 
     let attr_cap = BoolAttrCap {
         node: cap.node.clone(),
+        registry: cap.registry.clone(),
         attribute: attribute.to_string(),
     };
     let getter = NativeFunction::from_copy_closure_with_captures(
@@ -120,6 +125,7 @@ pub(super) fn install_bool_attribute_reflector(
                 } else {
                     el.attributes.remove(&cap.attribute);
                 }
+                cap.registry.mark_style_dirty(&cap.node);
             }
             Ok(JsValue::undefined())
         },

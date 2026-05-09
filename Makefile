@@ -1,14 +1,15 @@
 IMAGE ?= aurora
 PROJECTS_DIR := $(abspath ..)
 DOCKERFILE := $(abspath Dockerfile)
-SCREENSHOT ?= /tmp/google-homepage.png
+SCREENSHOT_ROOT ?= tests/screenshots
+SCREENSHOT ?= $(SCREENSHOT_ROOT)/google-homepage.png
 FIXTURE ?= google-homepage
 VIEWPORT_WIDTH ?= 1338
 VIEWPORT_HEIGHT ?= 786
 SCREENSHOT_DIR := $(dir $(abspath $(SCREENSHOT)))
 SCREENSHOT_FILE := $(notdir $(SCREENSHOT))
 
-.PHONY: docker-build docker-run docker-fixture docker-x11 docker-screenshot screenshot mockup-screenshot check-line-cap
+.PHONY: docker-build docker-run docker-fixture docker-x11 docker-screenshot screenshot mockup-screenshot dynamic-screenshot raf-screenshot all-renders check-line-cap
 
 docker-build:
 	docker build -f $(DOCKERFILE) -t $(IMAGE) $(PROJECTS_DIR)
@@ -40,7 +41,20 @@ screenshot:
 	cargo run -- --fixture $(FIXTURE)
 
 mockup-screenshot:
-	$(MAKE) screenshot FIXTURE=aurora-search SCREENSHOT=/tmp/aurora-search.png VIEWPORT_WIDTH=1338 VIEWPORT_HEIGHT=786
+	$(MAKE) screenshot FIXTURE=aurora-search SCREENSHOT=$(SCREENSHOT_ROOT)/aurora-search.png VIEWPORT_WIDTH=1338 VIEWPORT_HEIGHT=786
+
+dynamic-screenshot:
+	$(MAKE) screenshot FIXTURE=dynamic-reflow SCREENSHOT=$(SCREENSHOT_ROOT)/dynamic-reflow.png VIEWPORT_WIDTH=900 VIEWPORT_HEIGHT=620
+
+raf-screenshot:
+	$(MAKE) screenshot FIXTURE=raf-reflow SCREENSHOT=$(SCREENSHOT_ROOT)/raf-reflow.png VIEWPORT_WIDTH=900 VIEWPORT_HEIGHT=620
+
+all-renders:
+	$(MAKE) screenshot FIXTURE=google-homepage SCREENSHOT=$(SCREENSHOT_ROOT)/google-homepage.png VIEWPORT_WIDTH=1338 VIEWPORT_HEIGHT=786
+	$(MAKE) screenshot FIXTURE=aurora-search SCREENSHOT=$(SCREENSHOT_ROOT)/aurora-search.png VIEWPORT_WIDTH=1338 VIEWPORT_HEIGHT=786
+	$(MAKE) screenshot FIXTURE=demo SCREENSHOT=$(SCREENSHOT_ROOT)/demo.png VIEWPORT_WIDTH=1200 VIEWPORT_HEIGHT=900
+	$(MAKE) screenshot FIXTURE=dynamic-reflow SCREENSHOT=$(SCREENSHOT_ROOT)/dynamic-reflow.png VIEWPORT_WIDTH=900 VIEWPORT_HEIGHT=620
+	$(MAKE) screenshot FIXTURE=raf-reflow SCREENSHOT=$(SCREENSHOT_ROOT)/raf-reflow.png VIEWPORT_WIDTH=900 VIEWPORT_HEIGHT=620
 
 check-line-cap:
 	@find src -name '*.rs' -exec wc -l {} + | awk '$$1 > 200 && $$2 != "total" { print $$1, $$2; bad=1 } END { if (bad) { print "FAIL: files above 200-line cap"; exit 1 } else { print "OK: all src files within 200-line cap" } }'

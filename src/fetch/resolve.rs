@@ -4,12 +4,12 @@ use super::url::ParsedUrl;
 use super::FetchError;
 
 pub fn resolve_relative_url(base: &str, relative: &str) -> Result<String, FetchError> {
-    if let Some(base_path) = base.strip_prefix("file://") {
-        return resolve_relative_file_url(base_path, relative);
+    if is_absolute_url(relative) {
+        return Ok(relative.to_string());
     }
 
-    if relative.starts_with("http://") || relative.starts_with("https://") {
-        return Ok(relative.to_string());
+    if let Some(base_path) = base.strip_prefix("file://") {
+        return resolve_relative_file_url(base_path, relative);
     }
 
     let base_parsed = ParsedUrl::parse(base)?;
@@ -46,10 +46,6 @@ pub fn resolve_relative_url(base: &str, relative: &str) -> Result<String, FetchE
 }
 
 fn resolve_relative_file_url(base_path: &str, relative: &str) -> Result<String, FetchError> {
-    if relative.starts_with("file://") {
-        return Ok(relative.to_string());
-    }
-
     let base = Path::new(base_path);
     let resolved = if relative.starts_with('/') {
         PathBuf::from(relative)
@@ -72,6 +68,15 @@ fn resolve_relative_file_url(base_path: &str, relative: &str) -> Result<String, 
     };
 
     Ok(format!("file://{}", absolute.display()))
+}
+
+fn is_absolute_url(value: &str) -> bool {
+    matches!(
+        value.split_once(':'),
+        Some((scheme, _)) if scheme
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '+' | '-' | '.'))
+    )
 }
 
 fn normalize_path(path: PathBuf) -> PathBuf {

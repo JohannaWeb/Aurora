@@ -165,7 +165,7 @@ cargo run -- --fixture demo
 To save a screenshot from the fixture:
 
 ```bash
-AURORA_SCREENSHOT=/tmp/google-homepage.png cargo run -- --fixture google-homepage
+make screenshot FIXTURE=google-homepage
 ```
 
 To save the Aurora mockup screenshot at the target size:
@@ -173,6 +173,20 @@ To save the Aurora mockup screenshot at the target size:
 ```bash
 make mockup-screenshot
 ```
+
+To refresh every bundled fixture render in `tests/screenshots`:
+
+```bash
+make all-renders
+```
+
+The generated render set is:
+
+- `tests/screenshots/google-homepage.png`
+- `tests/screenshots/aurora-search.png`
+- `tests/screenshots/demo.png`
+- `tests/screenshots/dynamic-reflow.png`
+- `tests/screenshots/raf-reflow.png`
 
 Optional debug dumps:
 
@@ -217,4 +231,3 @@ mockup fixture status, render commands, and remaining scrollbar task.
 5. Turn runtime survival stubs into scheduled/evented implementations where it matters.
 6. Connect JavaScript-triggered DOM mutation more deeply into style/layout invalidation.
 7. Explore protocol-native identity integration once the rendering and runtime core are more stable.
-

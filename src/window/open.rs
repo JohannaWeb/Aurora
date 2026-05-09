@@ -5,7 +5,7 @@ use winit::event_loop::EventLoop;
 
 pub fn open(input: WindowInput) -> Result<(), String> {
     if let Ok(path) = std::env::var("AURORA_SCREENSHOT") {
-        render_to_file(&input, &path);
+        render_to_file(input, &path);
         return Ok(());
     }
 

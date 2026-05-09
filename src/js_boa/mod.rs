@@ -27,6 +27,12 @@ mod observers;
 mod reflection;
 mod registry;
 mod runtime;
+#[cfg(test)]
+mod runtime_raf_tests;
+#[cfg(test)]
+mod runtime_style_tests;
+#[cfg(test)]
+mod runtime_tests;
 mod selectors;
 mod serialization;
 mod storage;

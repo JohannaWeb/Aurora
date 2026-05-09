@@ -12,6 +12,7 @@ pub(in crate::js_boa) fn build_classlist_object(
                     set.insert(cls.clone());
                 });
             }
+            cap.registry.mark_style_dirty(&cap.node);
             Ok(JsValue::undefined())
         },
         cap.clone(),
@@ -24,6 +25,7 @@ pub(in crate::js_boa) fn build_classlist_object(
                     set.remove(&cls);
                 });
             }
+            cap.registry.mark_style_dirty(&cap.node);
             Ok(JsValue::undefined())
         },
         cap.clone(),
@@ -53,6 +55,7 @@ pub(in crate::js_boa) fn build_classlist_object(
                     present = true;
                 }
             });
+            cap.registry.mark_style_dirty(&cap.node);
             Ok(JsValue::from(present))
         },
         cap.clone(),
@@ -66,6 +69,7 @@ pub(in crate::js_boa) fn build_classlist_object(
                     set.insert(new_cls.clone());
                 }
             });
+            cap.registry.mark_style_dirty(&cap.node);
             Ok(JsValue::from(true))
         },
         cap.clone(),

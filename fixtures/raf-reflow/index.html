@@ -1,0 +1,22 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <title>Aurora rAF reflow fixture</title>
+    <link rel="stylesheet" href="styles.css">
+  </head>
+  <body>
+    <main class="page">
+      <h1>animation frame reflow</h1>
+      <section id="panel" class="panel">waiting for animation frame</section>
+    </main>
+    <script>
+      requestAnimationFrame(() => {
+        const panel = document.getElementById("panel");
+        panel.className = "panel ready";
+        panel.style.width = "640px";
+        panel.textContent = "requestAnimationFrame updated layout";
+      });
+    </script>
+  </body>
+</html>

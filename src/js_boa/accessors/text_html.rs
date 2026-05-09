@@ -16,6 +16,7 @@ pub(in crate::js_boa) fn install_text_html_accessors(
         |_this, args, cap: &NodeCapture, _ctx| {
             let text = js_string_of(args.get(0).unwrap_or(&JsValue::undefined()));
             set_text_content(&cap.node, &text);
+            cap.registry.mark_layout_dirty(&cap.node);
             Ok(JsValue::undefined())
         },
         cap.clone(),
@@ -33,6 +34,7 @@ pub(in crate::js_boa) fn install_text_html_accessors(
         |_this, args, cap: &NodeCapture, _ctx| {
             let text = js_string_of(args.get(0).unwrap_or(&JsValue::undefined()));
             set_text_content(&cap.node, &text);
+            cap.registry.mark_layout_dirty(&cap.node);
             Ok(JsValue::undefined())
         },
         cap.clone(),
@@ -59,6 +61,7 @@ pub(in crate::js_boa) fn install_text_html_accessors(
             };
             if let Node::Element(el) = &mut *cap.node.borrow_mut() {
                 el.children = new_children;
+                cap.registry.mark_layout_dirty(&cap.node);
             }
             Ok(JsValue::undefined())
         },

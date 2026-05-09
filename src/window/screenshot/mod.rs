@@ -8,10 +8,11 @@ mod text;
 use super::input::WindowInput;
 use super::BROWSER_CHROME_HEIGHT;
 use image::{ImageBuffer, Rgba};
+use std::time::Instant;
 
 pub(super) type ScreenshotImage = ImageBuffer<Rgba<u8>, Vec<u8>>;
 
-pub(super) fn render_to_file(input: &WindowInput, path: &str) {
+pub(super) fn render_to_file(mut input: WindowInput, path: &str) {
     eprintln!("Rendering to PNG: {}", path);
     let width = env_u32("AURORA_SCREENSHOT_WIDTH")
         .or_else(|| env_u32("AURORA_VIEWPORT_WIDTH"))
@@ -19,6 +20,8 @@ pub(super) fn render_to_file(input: &WindowInput, path: &str) {
     let height = env_u32("AURORA_SCREENSHOT_HEIGHT")
         .or_else(|| env_u32("AURORA_VIEWPORT_HEIGHT"))
         .unwrap_or(1024);
+
+    flush_ready_frame_tasks(&mut input, width, height);
 
     let mut img = ImageBuffer::new(width, height);
     for pixel in img.pixels_mut() {
@@ -43,4 +46,24 @@ pub(super) fn render_to_file(input: &WindowInput, path: &str) {
 
 fn env_u32(name: &str) -> Option<u32> {
     std::env::var(name).ok()?.parse::<u32>().ok()
+}
+
+fn flush_ready_frame_tasks(input: &mut WindowInput, width: u32, height: u32) {
+    let frames = env_u32("AURORA_SCREENSHOT_FRAMES").unwrap_or(4).min(60);
+    for _ in 0..frames {
+        let needs_reflow = {
+            let Some(runtime) = input.runtime.as_mut() else {
+                return;
+            };
+            let now = Instant::now();
+            runtime.tick(now) | runtime.drain_animation_frame_callbacks(Instant::now())
+        };
+        if needs_reflow {
+            input.reflow(width, height);
+        }
+        match input.runtime.as_ref() {
+            Some(runtime) if runtime.has_ready_work(Instant::now()) => {}
+            _ => return,
+        }
+    }
 }
