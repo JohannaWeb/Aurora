@@ -29,8 +29,9 @@ pub(super) fn render_to_file(mut input: WindowInput, path: &str) {
     }
 
     let chrome_offset = BROWSER_CHROME_HEIGHT.round() as i32;
-    layout::render_layout_with_text(&input.layout, &mut img, 0, chrome_offset);
-    scrollbar::render_scrollbars(input.layout.root(), &mut img, 0, chrome_offset);
+    let layout = input.layout.borrow();
+    layout::render_layout_with_text(&layout, &mut img, 0, chrome_offset);
+    scrollbar::render_scrollbars(layout.root(), &mut img, 0, chrome_offset);
     chrome::render_browser_chrome(
         &mut img,
         width,

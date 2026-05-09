@@ -29,6 +29,7 @@ pub struct SimpleSelector {
 pub struct Declaration {
     pub name: String,
     pub value: String,
+    pub important: bool,
 }
 
 pub type Specificity = (u8, u8, u8);

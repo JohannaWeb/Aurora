@@ -8,7 +8,7 @@ pub(super) fn collect_styles(
 ) {
     let node = node_ptr.borrow();
     match &*node {
-        Node::Document { children } => {
+        Node::Document { children, .. } => {
             for child in children {
                 collect_styles(child, base_url, identity, output);
             }

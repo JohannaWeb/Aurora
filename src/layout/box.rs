@@ -1,9 +1,11 @@
 use crate::css::{DisplayMode, EdgeSizes, Margin, StyleMap};
+use std::rc::Rc;
 
 use super::Rect;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct LayoutBox {
+    pub(in crate::layout) node: Option<crate::dom::NodePtr>,
     pub(in crate::layout) kind: LayoutKind,
     pub(in crate::layout) rect: Rect,
     pub(in crate::layout) styles: StyleMap,
@@ -39,6 +41,10 @@ pub(in crate::layout) enum LayoutKind {
 }
 
 impl LayoutBox {
+    pub fn node(&self) -> Option<crate::dom::NodePtr> {
+        self.node.clone()
+    }
+
     pub fn rect(&self) -> Rect {
         self.rect
     }
@@ -48,7 +54,7 @@ impl LayoutBox {
     }
 
     pub fn total_height(&self) -> f32 {
-        self.margin.top + self.rect.height + self.margin.bottom
+        self.margin.top.to_px() + self.rect.height + self.margin.bottom.to_px()
     }
 
     #[allow(dead_code)]
@@ -133,5 +139,37 @@ impl LayoutBox {
         for child in &mut self.children {
             child.offset(dx, dy);
         }
+    }
+
+    pub fn find_node(&self, node: &crate::dom::NodePtr) -> Option<&LayoutBox> {
+        if self
+            .node
+            .as_ref()
+            .map(|n| Rc::ptr_eq(n, node))
+            .unwrap_or(false)
+        {
+            return Some(self);
+        }
+        for child in &self.children {
+            if let Some(found) = child.find_node(node) {
+                return Some(found);
+            }
+        }
+        None
+    }
+
+    pub fn hit_test(&self, x: f32, y: f32) -> Option<crate::dom::NodePtr> {
+        if !self.rect.contains(x, y) {
+            return None;
+        }
+
+        // Search children in reverse order (topmost first)
+        for child in self.children.iter().rev() {
+            if let Some(found) = child.hit_test(x, y) {
+                return Some(found);
+            }
+        }
+
+        self.node.clone()
     }
 }

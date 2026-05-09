@@ -13,6 +13,7 @@ mod inline;
 mod inline_sequence;
 mod inline_text;
 mod rect;
+mod taffy_adapter;
 mod text_metrics;
 mod tree;
 
@@ -21,6 +22,8 @@ mod tests;
 
 pub use r#box::LayoutBox;
 pub use rect::Rect;
+#[allow(unused_imports)]
+pub use taffy_adapter::style_to_taffy;
 pub use tree::{LayoutTree, ViewportSize};
 
 pub(in crate::layout) use r#box::LayoutKind;

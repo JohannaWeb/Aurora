@@ -2,11 +2,13 @@ use super::*;
 
 mod family;
 mod identity;
+mod layout;
 mod objects;
 mod text_html;
 
 use family::*;
 use identity::*;
+use layout::*;
 use objects::*;
 use text_html::*;
 
@@ -19,4 +21,5 @@ pub(in crate::js_boa) fn install_accessors(
     install_identity_accessors(obj, cap, context);
     install_family_accessors(obj, cap, context);
     install_object_accessors(obj, cap, context);
+    install_layout_accessors(obj, cap, context);
 }

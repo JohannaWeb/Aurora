@@ -15,7 +15,7 @@ pub(in crate::js_boa) fn find_by_id(node: &NodePtr, id: &str) -> Option<NodePtr>
             }
             None
         }
-        Node::Document { children } => {
+        Node::Document { children, .. } => {
             for c in children {
                 if let Some(found) = find_by_id(c, id) {
                     return Some(found);
@@ -42,7 +42,7 @@ pub(in crate::js_boa) fn find_by_tag(node: &NodePtr, tag: &str) -> Option<NodePt
             }
             None
         }
-        Node::Document { children } => {
+        Node::Document { children, .. } => {
             for c in children {
                 if let Some(found) = find_by_tag(c, tag) {
                     return Some(found);
@@ -65,7 +65,7 @@ pub(in crate::js_boa) fn collect_by_tag(node: &NodePtr, tag: &str, out: &mut Vec
                 collect_by_tag(c, tag, out);
             }
         }
-        Node::Document { children } => {
+        Node::Document { children, .. } => {
             for c in children {
                 collect_by_tag(c, tag, out);
             }
@@ -87,7 +87,7 @@ pub(in crate::js_boa) fn collect_by_class(node: &NodePtr, cls: &str, out: &mut V
                 collect_by_class(c, cls, out);
             }
         }
-        Node::Document { children } => {
+        Node::Document { children, .. } => {
             for c in children {
                 collect_by_class(c, cls, out);
             }
@@ -112,7 +112,7 @@ pub(in crate::js_boa) fn collect_by_attr(
                 collect_by_attr(c, key, value, out);
             }
         }
-        Node::Document { children } => {
+        Node::Document { children, .. } => {
             for c in children {
                 collect_by_attr(c, key, value, out);
             }

@@ -49,7 +49,7 @@ fn animation_frame_scheduled_from_animation_frame_waits_for_next_frame() {
 
 fn text_content(node: &NodePtr) -> String {
     match &*node.borrow() {
-        Node::Document { children } => children.iter().map(text_content).collect(),
+        Node::Document { children, .. } => children.iter().map(text_content).collect(),
         Node::Element(element) => element.children.iter().map(text_content).collect(),
         Node::Text(text) => text.clone(),
     }

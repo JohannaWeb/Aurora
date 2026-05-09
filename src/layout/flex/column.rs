@@ -20,7 +20,7 @@ pub(super) fn position_column(
     );
 
     for child in children {
-        let new_y = current_y + child.margin.top;
+        let new_y = current_y + child.margin.top.to_px();
         let new_x = match ctx.align {
             AlignItems::Center => {
                 let free_w = (ctx.content_width - child.total_width()).max(0.0);

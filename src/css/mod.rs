@@ -4,6 +4,7 @@ mod ast;
 mod at_rules;
 mod display;
 mod dom_styles;
+mod inline_style;
 mod length;
 mod properties;
 mod selector;
@@ -13,7 +14,11 @@ mod style_map_resolve;
 mod stylesheet;
 mod variables;
 
+#[cfg(test)]
+mod tests;
+
 pub use ast::{Declaration, ElementData, Rule, Selector, SimpleSelector, Specificity};
+pub use inline_style::parse_style_text;
 #[allow(unused_imports)]
 pub use length::{parse_length_value, LengthValue};
 pub use properties::{

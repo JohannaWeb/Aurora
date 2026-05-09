@@ -16,7 +16,7 @@ fn walk(node: &crate::dom::NodePtr, scripts: &mut Vec<(String, bool)>) {
                 walk(child, scripts);
             }
         }
-        crate::dom::Node::Document { children } => {
+        crate::dom::Node::Document { children, .. } => {
             for child in children {
                 walk(child, scripts);
             }

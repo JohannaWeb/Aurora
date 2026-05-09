@@ -26,6 +26,7 @@ impl LayoutBox {
         for child in children {
             if let Some(text) = child.text() {
                 let fragments = Self::layout_text_fragments(
+                    Some(child.node.clone()),
                     &text,
                     child.styles().clone(),
                     x,
@@ -83,6 +84,7 @@ impl LayoutBox {
         };
 
         Some(Self {
+            node: None,
             // They let the layout tree represent structure that did not exist explicitly in the source DOM.
             kind: LayoutKind::Block {
                 tag_name: "anonymous-inline".to_string(),

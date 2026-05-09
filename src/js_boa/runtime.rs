@@ -2,12 +2,12 @@ use super::*;
 use std::time::Instant;
 
 pub struct BoaRuntime {
-    context: Context,
+    pub(super) context: Context,
     #[allow(dead_code)]
     document: NodePtr,
-    #[allow(dead_code)]
-    registry: NodeRegistry,
+    pub(super) registry: NodeRegistry,
     window: WindowCapture,
+    pub(super) sync_reflow_callback: Option<Box<dyn Fn()>>,
 }
 
 impl BoaRuntime {
@@ -26,7 +26,51 @@ impl BoaRuntime {
             document,
             registry,
             window,
+            sync_reflow_callback: None,
         }
+    }
+
+    pub fn set_shared_state(
+        &mut self,
+        layout_tree: Rc<RefCell<crate::layout::LayoutTree>>,
+        stylesheet: Rc<RefCell<crate::css::Stylesheet>>,
+        viewport: Rc<RefCell<crate::layout::ViewportSize>>,
+    ) {
+        self.registry
+            .set_shared_state(layout_tree, stylesheet, viewport, self.document.clone());
+    }
+
+    pub fn perform_sync_reflow(&self) {
+        self.registry.perform_sync_reflow();
+    }
+
+    pub fn dispatch_event(&mut self, node: &NodePtr, event_type: &str) -> bool {
+        let node_id = {
+            // Find the ID by looking up in registry nodes
+            let nodes = self.registry.nodes.borrow();
+            nodes
+                .iter()
+                .find(|(_, n)| Rc::ptr_eq(n, node))
+                .map(|(id, _)| *id)
+        };
+
+        let Some(id) = node_id else {
+            return false;
+        };
+
+        let listeners = self.registry.get_listeners(id, event_type);
+        if listeners.is_empty() {
+            return false;
+        }
+
+        let mut handled = false;
+        for listener in listeners {
+            let _ = listener.call(&JsValue::undefined(), &[], &mut self.context);
+            handled = true;
+        }
+        self.context.run_jobs();
+        self.drain_microtasks();
+        handled
     }
 
     pub fn execute(&mut self, script: &str) -> JsResult<JsValue> {
@@ -38,6 +82,19 @@ impl BoaRuntime {
 
     pub fn clear_dirty_bits(&self) {
         self.registry.clear_dirty_bits();
+    }
+
+    pub fn set_sync_reflow_callback<F>(&mut self, callback: F)
+    where
+        F: Fn() + 'static,
+    {
+        self.sync_reflow_callback = Some(Box::new(callback));
+    }
+
+    pub fn request_sync_reflow(&self) {
+        if let Some(ref callback) = self.sync_reflow_callback {
+            callback();
+        }
     }
 
     pub fn tick(&mut self, now: Instant) -> bool {

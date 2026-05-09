@@ -108,7 +108,7 @@ fn inline_style_css_text_assignment_replaces_attribute_and_requests_reflow() {
 
 fn body_attr(node: &NodePtr, name: &str) -> Option<String> {
     match &*node.borrow() {
-        Node::Document { children } => children.iter().find_map(|child| body_attr(child, name)),
+        Node::Document { children, .. } => children.iter().find_map(|child| body_attr(child, name)),
         Node::Element(element) if element.tag_name == "body" => {
             element.attributes.get(name).cloned()
         }

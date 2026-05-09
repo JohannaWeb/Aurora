@@ -11,6 +11,12 @@ pub struct Rect {
     pub height: f32,
 }
 
+impl Rect {
+    pub fn contains(&self, x: f32, y: f32) -> bool {
+        x >= self.x && x <= self.x + self.width && y >= self.y && y <= self.y + self.height
+    }
+}
+
 impl Display for Rect {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(

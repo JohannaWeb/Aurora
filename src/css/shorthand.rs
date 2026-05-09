@@ -11,9 +11,9 @@ pub(super) fn parse_margin_shorthand(value: Option<&str>) -> Margin {
         [all] => {
             let val = parse_margin_value(all);
             Margin {
-                top: val.to_px(),
+                top: val,
                 right: val,
-                bottom: val.to_px(),
+                bottom: val,
                 left: val,
             }
         }
@@ -21,9 +21,9 @@ pub(super) fn parse_margin_shorthand(value: Option<&str>) -> Margin {
             let v = parse_margin_value(vertical);
             let h = parse_margin_value(horizontal);
             Margin {
-                top: v.to_px(),
+                top: v,
                 right: h,
-                bottom: v.to_px(),
+                bottom: v,
                 left: h,
             }
         }
@@ -32,9 +32,9 @@ pub(super) fn parse_margin_shorthand(value: Option<&str>) -> Margin {
             let h = parse_margin_value(horizontal);
             let b = parse_margin_value(bottom);
             Margin {
-                top: t.to_px(),
+                top: t,
                 right: h,
-                bottom: b.to_px(),
+                bottom: b,
                 left: h,
             }
         }
@@ -44,9 +44,9 @@ pub(super) fn parse_margin_shorthand(value: Option<&str>) -> Margin {
             let b = parse_margin_value(bottom);
             let l = parse_margin_value(left);
             Margin {
-                top: t.to_px(),
+                top: t,
                 right: r,
-                bottom: b.to_px(),
+                bottom: b,
                 left: l,
             }
         }

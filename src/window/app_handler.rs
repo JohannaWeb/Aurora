@@ -17,13 +17,14 @@ impl winit::application::ApplicationHandler for AuroraApp {
     }
 
     fn resumed(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
-        let initial_width = self.input.viewport.width.max(1.0) as u32;
-        let initial_height = self.input.viewport.height.max(1.0) as u32;
+        let viewport = *self.input.viewport.borrow();
+        let initial_width = viewport.width.max(1.0) as u32;
+        let initial_height = viewport.height.max(1.0) as u32;
         let window_attr = Window::default_attributes()
             .with_title("Aurora Browser (GPU Accelerated)")
             .with_inner_size(winit::dpi::LogicalSize::new(
-                self.input.viewport.width as f64,
-                self.input.viewport.height as f64,
+                viewport.width as f64,
+                viewport.height as f64,
             ));
 
         let window = Arc::new(
@@ -56,6 +57,15 @@ impl winit::application::ApplicationHandler for AuroraApp {
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
             WindowEvent::Resized(size) => self.handle_resize(size.width, size.height),
+            WindowEvent::CursorMoved { position, .. } => {
+                self.mouse_x = position.x;
+                self.mouse_y = position.y;
+            }
+            WindowEvent::MouseInput {
+                state: ElementState::Pressed,
+                button: winit::event::MouseButton::Left,
+                ..
+            } => self.handle_click(),
             WindowEvent::RedrawRequested => {
                 if self.surface.is_some() {
                     self.run_frame_tasks();
@@ -105,6 +115,24 @@ impl AuroraApp {
                 self.request_redraw();
             }
             _ => {}
+        }
+    }
+
+    fn handle_click(&mut self) {
+        let content_x = self.mouse_x as f32;
+        let content_y = (self.mouse_y - super::BROWSER_CHROME_HEIGHT as f64 + self.scroll_y) as f32;
+
+        let hit_node = {
+            let layout = self.input.layout.borrow();
+            layout.hit_test(content_x, content_y)
+        };
+
+        if let Some(node) = hit_node {
+            if let Some(runtime) = self.input.runtime.as_mut() {
+                if runtime.dispatch_event(&node, "click") {
+                    self.request_redraw();
+                }
+            }
         }
     }
 

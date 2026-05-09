@@ -20,8 +20,15 @@ impl StyleMap {
 
     pub fn display_mode(&self) -> DisplayMode {
         match self.0.get("display").map(String::as_str) {
-            Some("inline") | Some("inline-block") => DisplayMode::Inline,
+            Some("inline") => DisplayMode::Inline,
+            Some("inline-block") => DisplayMode::InlineBlock,
             Some("flex") => DisplayMode::Flex,
+            Some("inline-flex") => DisplayMode::InlineFlex,
+            Some("grid") => DisplayMode::Grid,
+            Some("inline-grid") => DisplayMode::InlineGrid,
+            Some("flow-root") => DisplayMode::FlowRoot,
+            Some("table") | Some("inline-table") => DisplayMode::Table,
+            Some("list-item") => DisplayMode::ListItem,
             Some("none") => DisplayMode::None,
             _ => DisplayMode::Block,
         }
@@ -96,14 +103,14 @@ impl StyleMap {
 
     pub fn margin(&self) -> Margin {
         let mut margin = parse_margin_shorthand(self.get("margin"));
-        if let Some(top) = self.get("margin-top").and_then(parse_length_px) {
-            margin.top = top;
+        if let Some(top) = self.get("margin-top") {
+            margin.top = parse_margin_value(top);
         }
         if let Some(right) = self.get("margin-right") {
             margin.right = parse_margin_value(right);
         }
-        if let Some(bottom) = self.get("margin-bottom").and_then(parse_length_px) {
-            margin.bottom = bottom;
+        if let Some(bottom) = self.get("margin-bottom") {
+            margin.bottom = parse_margin_value(bottom);
         }
         if let Some(left) = self.get("margin-left") {
             margin.left = parse_margin_value(left);

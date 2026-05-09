@@ -7,6 +7,7 @@ use super::{LayoutBox, LayoutKind, Rect};
 
 impl LayoutBox {
     pub(in crate::layout) fn layout_container(
+        node: Option<crate::dom::NodePtr>,
         kind: LayoutKind,
         styles: StyleMap,
         margin: Margin,
@@ -19,7 +20,7 @@ impl LayoutBox {
         viewport_height: f32,
     ) -> Self {
         let mut rect_x = x + margin.left.to_px();
-        let rect_y = y + margin.top;
+        let rect_y = y + margin.top.to_px();
         let available_rect_width = (available_width - margin.horizontal()).max(0.0);
         let default_content_width =
             (available_rect_width - padding.horizontal() - border.horizontal()).max(0.0);
@@ -69,7 +70,12 @@ impl LayoutBox {
                 .map(|_| {
                     matches!(
                         child.styles().display_mode(),
-                        DisplayMode::Block | DisplayMode::Flex
+                        DisplayMode::Block
+                            | DisplayMode::Flex
+                            | DisplayMode::Grid
+                            | DisplayMode::FlowRoot
+                            | DisplayMode::Table
+                            | DisplayMode::ListItem
                     )
                 })
                 .unwrap_or(false);
@@ -88,7 +94,7 @@ impl LayoutBox {
                 let child_margin = child.styles().margin();
                 // The engine computes how much vertical space two adjacent margins share.
                 let collapse_overlap = if previous_was_block {
-                    previous_block_bottom_margin.min(child_margin.top)
+                    previous_block_bottom_margin.min(child_margin.top.to_px())
                 } else {
                     0.0
                 };
@@ -114,7 +120,7 @@ impl LayoutBox {
                     }
 
                     cursor_y += layout_child.total_height();
-                    previous_block_bottom_margin = layout_child.margin.bottom;
+                    previous_block_bottom_margin = layout_child.margin.bottom.to_px();
                     previous_was_block = true;
                     layout_children.push(layout_child);
                 }
@@ -142,6 +148,7 @@ impl LayoutBox {
         let resolved_content_height = clamp_content_height(&styles, inner_height, viewport_height);
 
         Self {
+            node,
             kind,
             rect: Rect {
                 x: rect_x,

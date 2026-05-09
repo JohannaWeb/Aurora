@@ -42,4 +42,12 @@ impl LayoutTree {
     pub fn root(&self) -> &LayoutBox {
         &self.root
     }
+
+    pub fn find_box_for_node(&self, node: &crate::dom::NodePtr) -> Option<&LayoutBox> {
+        self.root.find_node(node)
+    }
+
+    pub fn hit_test(&self, x: f32, y: f32) -> Option<crate::dom::NodePtr> {
+        self.root.hit_test(x, y)
+    }
 }

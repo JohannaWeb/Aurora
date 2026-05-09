@@ -30,6 +30,7 @@ impl LayoutBox {
 
         match node.tag_name() {
             None if node.text().is_none() => Some(Self::layout_container(
+                Some(node.node.clone()),
                 LayoutKind::Viewport,
                 node.styles().clone(),
                 Margin::zero(),
@@ -45,6 +46,7 @@ impl LayoutBox {
                 Self::from_element(&tag_name, node, x, y, available_width, viewport_height)
             }
             None => Some(Self::layout_text(
+                Some(node.node.clone()),
                 &node.text().unwrap_or_default(),
                 node.styles().clone(),
                 x,
@@ -99,7 +101,12 @@ impl LayoutBox {
                     viewport_height,
                 ))
             }
-            DisplayMode::Block => Some(Self::layout_container(
+            DisplayMode::Block
+            | DisplayMode::Grid
+            | DisplayMode::FlowRoot
+            | DisplayMode::Table
+            | DisplayMode::ListItem => Some(Self::layout_container(
+                Some(node.node.clone()),
                 LayoutKind::Block {
                     tag_name: tag_name.to_string(),
                 },
@@ -113,21 +120,25 @@ impl LayoutBox {
                 available_width,
                 viewport_height,
             )),
-            DisplayMode::InlineBlock => Some(Self::layout_container(
-                LayoutKind::InlineBlock {
-                    tag_name: tag_name.to_string(),
-                },
-                styles,
-                node.styles().margin(),
-                node.styles().border_width(),
-                node.styles().padding(),
-                node.children(),
-                x,
-                y,
-                available_width,
-                viewport_height,
-            )),
+            DisplayMode::InlineBlock | DisplayMode::InlineFlex | DisplayMode::InlineGrid => {
+                Some(Self::layout_container(
+                    Some(node.node.clone()),
+                    LayoutKind::InlineBlock {
+                        tag_name: tag_name.to_string(),
+                    },
+                    styles,
+                    node.styles().margin(),
+                    node.styles().border_width(),
+                    node.styles().padding(),
+                    node.children(),
+                    x,
+                    y,
+                    available_width,
+                    viewport_height,
+                ))
+            }
             DisplayMode::Flex => Some(Self::layout_flex_container(
+                Some(node.node.clone()),
                 LayoutKind::Block {
                     tag_name: tag_name.to_string(),
                 },
@@ -142,6 +153,7 @@ impl LayoutBox {
                 viewport_height,
             )),
             DisplayMode::Inline => Some(Self::layout_inline(
+                Some(node.node.clone()),
                 tag_name,
                 styles,
                 node.styles().margin(),

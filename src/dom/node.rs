@@ -8,11 +8,21 @@ use std::rc::Rc;
 /// provides runtime-checked interior mutability.
 pub type NodePtr = Rc<RefCell<Node>>;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DocumentMode {
+    NoQuirks,
+    Quirks,
+    LimitedQuirks,
+}
+
 /// Enum representing different types of DOM nodes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Node {
     /// Document root node containing top-level children.
-    Document { children: Vec<NodePtr> },
+    Document {
+        children: Vec<NodePtr>,
+        mode: DocumentMode,
+    },
     /// Element node with tag name, attributes, and children.
     Element(ElementNode),
     /// Text node containing raw string content.
@@ -33,7 +43,11 @@ pub struct ElementNode {
 impl Node {
     /// Create a document node wrapping top-level child nodes.
     pub fn document(children: Vec<NodePtr>) -> NodePtr {
-        Rc::new(RefCell::new(Self::Document { children }))
+        Self::document_with_mode(children, DocumentMode::NoQuirks)
+    }
+
+    pub fn document_with_mode(children: Vec<NodePtr>, mode: DocumentMode) -> NodePtr {
+        Rc::new(RefCell::new(Self::Document { children, mode }))
     }
 
     /// Create an element node with tag name, attributes, and children.

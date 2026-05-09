@@ -56,7 +56,7 @@ pub(in crate::js_boa) fn install_text_html_accessors(
             // Minimal: treat as HTML fragment via the existing Parser.
             let parsed = crate::html::Parser::new(&text).parse_document();
             let new_children: Vec<NodePtr> = match &*parsed.borrow() {
-                Node::Document { children } => children.clone(),
+                Node::Document { children, .. } => children.clone(),
                 _ => Vec::new(),
             };
             if let Node::Element(el) = &mut *cap.node.borrow_mut() {

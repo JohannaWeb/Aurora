@@ -7,7 +7,7 @@ impl Node {
         let indent = "  ".repeat(depth);
 
         match self {
-            Node::Document { children } => {
+            Node::Document { children, .. } => {
                 writeln!(f, "{indent}#document")?;
                 for child in children {
                     child.borrow().fmt_with_indent(f, depth + 1)?;

@@ -17,6 +17,7 @@ use types::FlexContext;
 
 impl LayoutBox {
     pub(in crate::layout) fn layout_flex_container(
+        node: Option<crate::dom::NodePtr>,
         kind: LayoutKind,
         styles: StyleMap,
         margin: Margin,
@@ -29,7 +30,7 @@ impl LayoutBox {
         viewport_height: f32,
     ) -> Self {
         let mut rect_x = x + margin.left.to_px();
-        let rect_y = y + margin.top;
+        let rect_y = y + margin.top.to_px();
         let available_rect_width = (available_width - margin.horizontal()).max(0.0);
         let default_content_width =
             (available_rect_width - padding.horizontal() - border.horizontal()).max(0.0);
@@ -72,6 +73,7 @@ impl LayoutBox {
         }
 
         Self {
+            node,
             kind,
             rect: Rect {
                 x: rect_x,

@@ -71,19 +71,7 @@ pub(super) fn install_style_property_accessors(
     }
 }
 
-pub(super) fn parse_style_text(css: &str) -> BTreeMap<String, String> {
-    let mut style = BTreeMap::new();
-    for part in css.split(';') {
-        if let Some((key, value)) = part.split_once(':') {
-            let key = key.trim();
-            let value = value.trim();
-            if !key.is_empty() && !value.is_empty() {
-                style.insert(key.to_string(), value.to_string());
-            }
-        }
-    }
-    style
-}
+pub(crate) use crate::css::parse_style_text;
 
 pub(super) fn sync_style_attribute(node: &NodePtr, style: &BTreeMap<String, String>) {
     if let Node::Element(el) = &mut *node.borrow_mut() {

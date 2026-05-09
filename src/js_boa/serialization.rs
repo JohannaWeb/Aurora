@@ -14,7 +14,7 @@ pub(super) fn serialize_inner_html(node: &NodePtr) -> String {
                 serialize(c, &mut out);
             }
         }
-        Node::Document { children } => {
+        Node::Document { children, .. } => {
             for c in children {
                 serialize(c, &mut out);
             }
@@ -45,7 +45,7 @@ pub(super) fn serialize(node: &NodePtr, out: &mut String) {
             out.push_str(&el.tag_name);
             out.push('>');
         }
-        Node::Document { children } => {
+        Node::Document { children, .. } => {
             for c in children {
                 serialize(c, out);
             }

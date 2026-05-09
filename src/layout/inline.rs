@@ -7,6 +7,7 @@ use super::{LayoutBox, LayoutKind, Rect};
 
 impl LayoutBox {
     pub(in crate::layout) fn layout_inline(
+        node: Option<crate::dom::NodePtr>,
         tag_name: &str,
         styles: StyleMap,
         margin: Margin,
@@ -19,7 +20,7 @@ impl LayoutBox {
         viewport_height: f32,
     ) -> Self {
         let rect_x = x + margin.left.to_px();
-        let rect_y = y + margin.top;
+        let rect_y = y + margin.top.to_px();
         let available_rect_width = (available_width - margin.horizontal()).max(0.0);
         let default_content_width =
             (available_rect_width - padding.horizontal() - border.horizontal())
@@ -41,6 +42,7 @@ impl LayoutBox {
             if let Some(text) = child.text() {
                 // while delegating text wrapping details to a separate routine.
                 let fragments = Self::layout_text_fragments(
+                    Some(child.node.clone()),
                     &text,
                     child.styles().clone(),
                     content_x,
@@ -128,6 +130,7 @@ impl LayoutBox {
         }
 
         Self {
+            node,
             kind: LayoutKind::Inline {
                 tag_name: tag_name.to_string(),
             },

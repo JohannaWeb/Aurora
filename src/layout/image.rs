@@ -18,7 +18,7 @@ impl LayoutBox {
         display_mode: DisplayMode,
     ) -> Self {
         let rect_x = x + margin.left.to_px();
-        let rect_y = y + margin.top;
+        let rect_y = y + margin.top.to_px();
         let available_rect_width = (available_width - margin.horizontal()).max(0.0);
         // into a borrowed optional string slice and then parses it if present.
         let width_hint = node
@@ -35,6 +35,7 @@ impl LayoutBox {
         let content_height = clamp_content_height(&styles, height_hint, viewport_height);
 
         Self {
+            node: Some(node.node.clone()),
             kind: LayoutKind::Image {
                 src: node.attribute("src").map(|s| s.to_string()),
                 alt: node.attribute("alt").map(|s| s.to_string()),

@@ -42,7 +42,7 @@ pub(in crate::js_boa) fn install_family_accessors(
                         .filter(|c| matches!(&*c.borrow(), Node::Element(_)))
                         .cloned()
                         .collect(),
-                    Node::Document { children } => children
+                    Node::Document { children, .. } => children
                         .iter()
                         .filter(|c| matches!(&*c.borrow(), Node::Element(_)))
                         .cloned()
@@ -62,7 +62,7 @@ pub(in crate::js_boa) fn install_family_accessors(
                 let b = cap.node.borrow();
                 match &*b {
                     Node::Element(el) => el.children.clone(),
-                    Node::Document { children } => children.clone(),
+                    Node::Document { children, .. } => children.clone(),
                     _ => Vec::new(),
                 }
             };
@@ -160,7 +160,7 @@ pub(in crate::js_boa) fn install_family_accessors(
                         .iter()
                         .filter(|c| matches!(&*c.borrow(), Node::Element(_)))
                         .count(),
-                    Node::Document { children } => children
+                    Node::Document { children, .. } => children
                         .iter()
                         .filter(|c| matches!(&*c.borrow(), Node::Element(_)))
                         .count(),

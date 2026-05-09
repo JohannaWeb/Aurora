@@ -4,10 +4,17 @@ use super::text_metrics::{line_height_from_styles, measure_text_width};
 use super::{LayoutBox, LayoutKind, Rect};
 
 impl LayoutBox {
-    pub(in crate::layout) fn layout_text(text: &str, styles: StyleMap, x: f32, y: f32) -> Self {
+    pub(in crate::layout) fn layout_text(
+        node: Option<crate::dom::NodePtr>,
+        text: &str,
+        styles: StyleMap,
+        x: f32,
+        y: f32,
+    ) -> Self {
         let line_height = line_height_from_styles(&styles);
 
         Self {
+            node,
             kind: LayoutKind::Text {
                 text: text.to_string(),
             },
@@ -25,22 +32,8 @@ impl LayoutBox {
         }
     }
 
-    fn decode_entities(text: &str) -> String {
-        text.replace("&quot;", "\"")
-            .replace("&amp;", "&")
-            .replace("&lt;", "<")
-            .replace("&gt;", ">")
-            .replace("&apos;", "'")
-            .replace("&copy;", "©")
-            .replace("&reg;", "®")
-            .replace("&trade;", "™")
-            .replace("&bull;", "•")
-            .replace("&middot;", "·")
-            .replace("&ndash;", "–")
-            .replace("&mdash;", "—")
-    }
-
     pub(in crate::layout) fn layout_text_fragments(
+        node: Option<crate::dom::NodePtr>,
         text: &str,
         styles: StyleMap,
         x: f32,
@@ -51,7 +44,6 @@ impl LayoutBox {
         max_line_width: &mut f32,
     ) -> Vec<Self> {
         let mut fragments = Vec::new();
-        let text = Self::decode_entities(text);
         let base_line_height = line_height_from_styles(&styles);
 
         if styles.white_space() == WhiteSpace::NoWrap {
@@ -60,7 +52,7 @@ impl LayoutBox {
                 return fragments;
             }
 
-            let fragment = Self::layout_text(&text, styles, *line_x, *line_y);
+            let fragment = Self::layout_text(node, &text, styles, *line_x, *line_y);
             *line_x += fragment.rect.width;
             *line_height = (*line_height).max(base_line_height);
             *max_line_width = max_line_width.max(*line_x - x);
@@ -92,8 +84,13 @@ impl LayoutBox {
             if !current_line.is_empty() && candidate_width > remaining_width {
                 if !current_line.is_empty() {
                     // and it keeps each laid-out text fragment self-contained.
-                    let fragment =
-                        Self::layout_text(&current_line, styles.clone(), *line_x, *line_y);
+                    let fragment = Self::layout_text(
+                        node.clone(),
+                        &current_line,
+                        styles.clone(),
+                        *line_x,
+                        *line_y,
+                    );
                     *line_x += fragment.rect.width;
                     *max_line_width = max_line_width.max(*line_x - x);
                     fragments.push(fragment);
@@ -115,7 +112,13 @@ impl LayoutBox {
                 *line_x = x;
                 *line_height = 0.0;
             }
-            let fragment = Self::layout_text(&current_line, styles.clone(), *line_x, *line_y);
+            let fragment = Self::layout_text(
+                node.clone(),
+                &current_line,
+                styles.clone(),
+                *line_x,
+                *line_y,
+            );
             *line_x += fragment.rect.width;
             *line_height = (*line_height).max(base_line_height);
             *max_line_width = max_line_width.max(*line_x - x);

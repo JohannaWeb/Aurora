@@ -42,18 +42,18 @@ impl MarginValue {
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Margin {
-    pub top: f32,
+    pub top: MarginValue,
     pub right: MarginValue,
-    pub bottom: f32,
+    pub bottom: MarginValue,
     pub left: MarginValue,
 }
 
 impl Margin {
     pub fn zero() -> Self {
         Self {
-            top: 0.0,
+            top: MarginValue::Px(0.0),
             right: MarginValue::Px(0.0),
-            bottom: 0.0,
+            bottom: MarginValue::Px(0.0),
             left: MarginValue::Px(0.0),
         }
     }
@@ -63,7 +63,7 @@ impl Margin {
     }
 
     pub fn vertical(&self) -> f32 {
-        self.top + self.bottom
+        self.top.to_px() + self.bottom.to_px()
     }
 }
 
@@ -73,6 +73,12 @@ pub enum DisplayMode {
     Inline,
     InlineBlock,
     Flex,
+    InlineFlex,
+    Grid,
+    InlineGrid,
+    FlowRoot,
+    Table,
+    ListItem,
     None,
 }
 

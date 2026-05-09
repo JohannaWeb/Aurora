@@ -6,4 +6,4 @@ mod display;
 mod node;
 mod ops;
 
-pub use node::{ElementNode, Node, NodePtr};
+pub use node::{DocumentMode, ElementNode, Node, NodePtr};

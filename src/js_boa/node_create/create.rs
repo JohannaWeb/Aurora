@@ -73,8 +73,6 @@ pub(in crate::js_boa) fn create_js_node(
     init.property(js_string!("clientLeft"), 0, Attribute::all());
     init.property(js_string!("offsetTop"), 0, Attribute::all());
     init.property(js_string!("offsetLeft"), 0, Attribute::all());
-    init.property(js_string!("offsetWidth"), 0, Attribute::all());
-    init.property(js_string!("offsetHeight"), 0, Attribute::all());
 
     install_mutation_methods(&mut init, &cap);
     install_attribute_methods(&mut init, &cap);

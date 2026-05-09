@@ -103,7 +103,7 @@ pub(in crate::js_boa) fn query_first_rec(
     }
     let kids: Vec<NodePtr> = match &*node.borrow() {
         Node::Element(el) => el.children.clone(),
-        Node::Document { children } => children.clone(),
+        Node::Document { children, .. } => children.clone(),
         _ => Vec::new(),
     };
     for c in kids {
@@ -128,7 +128,7 @@ pub(in crate::js_boa) fn query_all_rec(
     }
     let kids: Vec<NodePtr> = match &*node.borrow() {
         Node::Element(el) => el.children.clone(),
-        Node::Document { children } => children.clone(),
+        Node::Document { children, .. } => children.clone(),
         _ => Vec::new(),
     };
     for c in kids {

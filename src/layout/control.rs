@@ -19,7 +19,7 @@ impl LayoutBox {
         viewport_height: f32,
     ) -> Self {
         let mut rect_x = x + margin.left.to_px();
-        let rect_y = y + margin.top;
+        let rect_y = y + margin.top.to_px();
         let available_rect_width = (available_width - margin.horizontal()).max(0.0);
         // keep this constructor focused on layout policy instead of low-level string or text-measurement details.
         let label = control_label(tag_name, node);
@@ -68,6 +68,7 @@ impl LayoutBox {
             let text_y = content_y + ((content_height - text_height).max(0.0) / 2.0);
 
             children.push(Self {
+                node: None,
                 kind: LayoutKind::Text { text: label },
                 rect: Rect {
                     x: text_x,
@@ -84,6 +85,7 @@ impl LayoutBox {
         }
 
         Self {
+            node: Some(node.node.clone()),
             kind: LayoutKind::Control {
                 tag_name: tag_name.to_string(),
             },

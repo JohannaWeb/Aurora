@@ -24,13 +24,13 @@ pub(super) fn position_row(
         let new_y = match ctx.align {
             AlignItems::Center => {
                 let free_y = (resolved_content_height - child.total_height()).max(0.0);
-                ctx.content_y + free_y / 2.0 + child.margin.top
+                ctx.content_y + free_y / 2.0 + child.margin.top.to_px()
             }
             AlignItems::FlexEnd => {
                 let free_y = (resolved_content_height - child.total_height()).max(0.0);
-                ctx.content_y + free_y + child.margin.top
+                ctx.content_y + free_y + child.margin.top.to_px()
             }
-            _ => ctx.content_y + child.margin.top,
+            _ => ctx.content_y + child.margin.top.to_px(),
         };
 
         child.offset(new_x - child.rect.x, new_y - child.rect.y);

@@ -7,6 +7,7 @@ use crate::html::Parser;
 use crate::layout::{LayoutTree, ViewportSize};
 use crate::style::StyleTree;
 use opus::domain::Identity;
+use std::cell::RefCell;
 use std::env;
 use std::rc::Rc;
 
@@ -16,7 +17,7 @@ pub(crate) fn run_browser(cli: CliOptions, identity: Identity) {
     let viewport = viewport_size();
     let dom = Parser::new(&html).parse_document();
 
-    let runtime = run_scripts(&dom, base_url.as_deref(), &identity);
+    let mut runtime = run_scripts(&dom, base_url.as_deref(), &identity);
 
     let mut stylesheet = Stylesheet::from_dom(&dom, base_url.as_deref(), &identity);
     stylesheet.merge(Stylesheet::user_agent_stylesheet());
@@ -27,20 +28,30 @@ pub(crate) fn run_browser(cli: CliOptions, identity: Identity) {
     };
     let layout = LayoutTree::from_style_tree_with_viewport(&style_tree, content_viewport);
     let image_cache = load_images(layout.root(), base_url.as_deref(), &identity);
-    if let Some(runtime) = runtime.as_ref() {
+
+    let stylesheet_rc = Rc::new(RefCell::new(stylesheet));
+    let viewport_rc = Rc::new(RefCell::new(viewport));
+    let layout_rc = Rc::new(RefCell::new(layout));
+
+    if let Some(runtime) = runtime.as_mut() {
+        runtime.set_shared_state(
+            layout_rc.clone(),
+            stylesheet_rc.clone(),
+            viewport_rc.clone(),
+        );
         runtime.clear_dirty_bits();
     }
 
-    print_debug_output(&cli, &dom, &style_tree, &layout);
+    print_debug_output(&cli, &dom, &style_tree, &layout_rc.borrow());
     let _ = crate::font::get_glyph_metrics('A');
 
     maybe_open_window(
         dom,
-        stylesheet,
+        stylesheet_rc,
         base_url,
         identity,
-        viewport,
-        layout,
+        viewport_rc,
+        layout_rc,
         image_cache,
         runtime,
     );
@@ -137,11 +148,11 @@ fn print_debug_output(
 
 fn maybe_open_window(
     dom: crate::dom::NodePtr,
-    stylesheet: Stylesheet,
+    stylesheet: Rc<RefCell<Stylesheet>>,
     base_url: Option<String>,
     identity: Identity,
-    viewport: ViewportSize,
-    layout: LayoutTree,
+    viewport: Rc<RefCell<ViewportSize>>,
+    layout: Rc<RefCell<LayoutTree>>,
     images: crate::ImageCache,
     runtime: Option<crate::js_boa::BoaRuntime>,
 ) {

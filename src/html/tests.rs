@@ -1,28 +1,48 @@
 use super::Parser;
-use crate::dom::{Node, NodePtr};
+use crate::dom::{DocumentMode, Node, NodePtr};
 use std::collections::BTreeMap;
 
 fn element(tag: &str, children: Vec<NodePtr>) -> NodePtr {
     Node::element_with_attributes(tag, BTreeMap::new(), children)
 }
 
+fn document_with_body(body_children: Vec<NodePtr>) -> NodePtr {
+    document_with_head_and_body(Vec::new(), body_children, DocumentMode::Quirks)
+}
+
+fn standards_document_with_body(body_children: Vec<NodePtr>) -> NodePtr {
+    document_with_head_and_body(Vec::new(), body_children, DocumentMode::NoQuirks)
+}
+
+fn document_with_head_and_body(
+    head_children: Vec<NodePtr>,
+    body_children: Vec<NodePtr>,
+    mode: DocumentMode,
+) -> NodePtr {
+    Node::document_with_mode(
+        vec![element(
+            "html",
+            vec![
+                element("head", head_children),
+                element("body", body_children),
+            ],
+        )],
+        mode,
+    )
+}
+
 #[test]
 fn parses_nested_html_into_dom_tree() {
-    let mut parser = Parser::new("<html><body><p>Hello</p><p>World</p></body></html>");
+    let mut parser =
+        Parser::new("<!doctype html><html><body><p>Hello</p><p>World</p></body></html>");
     let document = parser.parse_document();
 
     assert_eq!(
         document,
-        Node::document(vec![element(
-            "html",
-            vec![element(
-                "body",
-                vec![
-                    element("p", vec![Node::text("Hello")]),
-                    element("p", vec![Node::text("World")]),
-                ],
-            )],
-        )])
+        standards_document_with_body(vec![
+            element("p", vec![Node::text("Hello")]),
+            element("p", vec![Node::text("World")]),
+        ])
     );
 }
 
@@ -33,7 +53,7 @@ fn ignores_whitespace_only_text_nodes() {
 
     assert_eq!(
         document,
-        Node::document(vec![Node::element(
+        document_with_body(vec![Node::element(
             "div",
             vec![Node::element("p", vec![Node::text("Text")])],
         )])
@@ -47,10 +67,14 @@ fn keeps_script_contents_as_raw_text() {
 
     assert_eq!(
         document,
-        Node::document(vec![Node::element(
-            "script",
-            vec![Node::text("if (a < b) { run(); }")],
-        )])
+        document_with_head_and_body(
+            vec![Node::element(
+                "script",
+                vec![Node::text("if (a < b) { run(); }")],
+            )],
+            Vec::new(),
+            DocumentMode::Quirks,
+        )
     );
 }
 
@@ -61,7 +85,7 @@ fn keeps_mismatched_closing_tag_for_parent_recovery() {
 
     assert_eq!(
         document,
-        Node::document(vec![
+        document_with_body(vec![
             Node::element("div", vec![Node::element("span", vec![Node::text("t")])],),
             Node::element("p", vec![Node::text("x")]),
         ])
@@ -80,7 +104,7 @@ fn treats_img_as_void_element() {
 
     assert_eq!(
         document,
-        Node::document(vec![Node::element(
+        document_with_body(vec![Node::element(
             "div",
             vec![
                 Node::element_with_attributes("img", img_attributes, Vec::new()),
@@ -106,7 +130,7 @@ fn preserves_tag_attributes() {
 
     assert_eq!(
         document,
-        Node::document(vec![Node::element_with_attributes(
+        document_with_body(vec![Node::element_with_attributes(
             "div",
             div_attributes,
             vec![Node::element_with_attributes(
@@ -137,7 +161,7 @@ fn handles_quoted_attributes_with_special_characters() {
 
     assert_eq!(
         document,
-        Node::document(vec![Node::element_with_attributes(
+        document_with_body(vec![Node::element_with_attributes(
             "a",
             a_attributes,
             vec![Node::text("Link")],
@@ -158,10 +182,74 @@ fn handles_json_in_data_attributes() {
 
     assert_eq!(
         document,
-        Node::document(vec![Node::element_with_attributes(
+        document_with_body(vec![Node::element_with_attributes(
             "div",
             div_attributes,
             vec![],
+        )])
+    );
+}
+
+#[test]
+fn foster_parents_text_around_table_content() {
+    let mut parser = Parser::new("<div><table>before<tr><td>cell</td></tr>after</table></div>");
+    let document = parser.parse_document();
+
+    assert_eq!(
+        document,
+        document_with_body(vec![Node::element(
+            "div",
+            vec![
+                Node::text("before"),
+                Node::text("after"),
+                Node::element(
+                    "table",
+                    vec![Node::element(
+                        "tbody",
+                        vec![Node::element(
+                            "tr",
+                            vec![Node::element("td", vec![Node::text("cell")])],
+                        )],
+                    )],
+                ),
+            ],
+        )])
+    );
+}
+
+#[test]
+fn reconstructs_formatting_elements_with_adoption_agency_algorithm() {
+    let mut parser = Parser::new("<p><b>one<i>two</b>three</i></p>");
+    let document = parser.parse_document();
+
+    assert_eq!(
+        document,
+        document_with_body(vec![Node::element(
+            "p",
+            vec![
+                Node::element(
+                    "b",
+                    vec![
+                        Node::text("one"),
+                        Node::element("i", vec![Node::text("two")]),
+                    ],
+                ),
+                Node::element("i", vec![Node::text("three")]),
+            ],
+        )])
+    );
+}
+
+#[test]
+fn parses_textarea_as_rcdata_and_decodes_entities() {
+    let mut parser = Parser::new("<textarea>Tom &amp; Jerry &lt;b&gt;</textarea>");
+    let document = parser.parse_document();
+
+    assert_eq!(
+        document,
+        document_with_body(vec![Node::element(
+            "textarea",
+            vec![Node::text("Tom & Jerry <b>")],
         )])
     );
 }

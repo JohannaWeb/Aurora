@@ -15,7 +15,11 @@ impl Display for Stylesheet {
                 if index > 0 {
                     write!(f, " ")?;
                 }
-                write!(f, "{}: {};", declaration.name, declaration.value)?;
+                write!(f, "{}: {}", declaration.name, declaration.value)?;
+                if declaration.important {
+                    write!(f, " !important")?;
+                }
+                write!(f, ";")?;
             }
             writeln!(f, " }}")?;
         }

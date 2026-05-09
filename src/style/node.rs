@@ -53,7 +53,7 @@ impl StyledNode {
     ) -> Self {
         let node_borrow = node.borrow();
         match &*node_borrow {
-            Node::Document { children } => {
+            Node::Document { children, .. } => {
                 let children_vec = children.clone();
                 drop(node_borrow);
                 Self {
@@ -79,6 +79,11 @@ impl StyledNode {
                     attributes: element.attributes.clone(),
                 };
                 let mut styles = stylesheet.styles_for(&current_data, element_ancestors);
+                if let Some(inline_style) = element.attributes.get("style") {
+                    for (name, value) in crate::css::parse_style_text(inline_style) {
+                        styles.set(name, value);
+                    }
+                }
                 styles.resolve_vars(style_ancestors);
                 apply_inherited_element_styles(&mut styles, &inherited);
 

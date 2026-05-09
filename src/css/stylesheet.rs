@@ -1,5 +1,7 @@
 use std::collections::BTreeMap;
 
+use cssparser::{parse_important, Parser, ParserInput, RuleBodyParser, ToCss};
+
 use crate::dom::NodePtr;
 
 use super::at_rules::strip_at_rules;
@@ -41,15 +43,9 @@ impl Stylesheet {
         let mut variables = BTreeMap::new();
         let stripped = strip_at_rules(source, fetch_ctx, 0);
 
-        for (source_order, chunk) in stripped.split('}').enumerate() {
-            let chunk = chunk.trim();
-            if chunk.is_empty() {
-                continue;
-            }
-            let Some((selector_part, declarations_part)) = chunk.split_once('{') else {
-                continue;
-            };
-            let selector_part = selector_part.trim();
+        for (source_order, (selector_part, declarations_part)) in
+            iter_qualified_rules(&stripped).into_iter().enumerate()
+        {
             let declarations = parse_declarations(selector_part, declarations_part, &mut variables);
             if declarations.is_empty() {
                 continue;
@@ -92,13 +88,17 @@ impl Stylesheet {
             .collect::<Vec<_>>();
         matching_rules.sort_by_key(|rule| (rule.selector.specificity(), rule.source_order));
 
-        for rule in matching_rules {
-            for declaration in &rule.declarations {
-                styles.0.insert(
-                    declaration.name.clone(),
-                    self.resolve_variables(&declaration.value),
-                );
-            }
+        apply_declarations(&mut styles, matching_rules, self);
+        styles
+    }
+
+    pub(crate) fn inline_styles(&self, declarations: &[Declaration]) -> StyleMap {
+        let mut styles = StyleMap::default();
+        for declaration in declarations {
+            styles.0.insert(
+                declaration.name.clone(),
+                self.resolve_variables(&declaration.value),
+            );
         }
 
         styles
@@ -132,29 +132,159 @@ impl Stylesheet {
     }
 }
 
+pub(crate) fn parse_declarations_for_style_attribute(source: &str) -> Vec<Declaration> {
+    parse_declarations("*", source, &mut BTreeMap::new())
+}
+
+fn iter_qualified_rules(source: &str) -> Vec<(&str, &str)> {
+    let mut rules = Vec::new();
+    let mut selector_start = 0;
+    let mut block_start = None;
+    let mut depth = 0usize;
+    let mut quote = None;
+    let mut escape = false;
+
+    for (index, ch) in source.char_indices() {
+        if escape {
+            escape = false;
+            continue;
+        }
+        if ch == '\\' {
+            escape = true;
+            continue;
+        }
+        if let Some(open_quote) = quote {
+            if ch == open_quote {
+                quote = None;
+            }
+            continue;
+        }
+        if ch == '"' || ch == '\'' {
+            quote = Some(ch);
+            continue;
+        }
+
+        match ch {
+            '{' => {
+                if depth == 0 {
+                    block_start = Some(index);
+                }
+                depth += 1;
+            }
+            '}' if depth > 0 => {
+                depth -= 1;
+                if depth == 0 {
+                    if let Some(start) = block_start.take() {
+                        let selector = source[selector_start..start].trim();
+                        let body = source[start + 1..index].trim();
+                        if !selector.is_empty() && !body.is_empty() {
+                            rules.push((selector, body));
+                        }
+                    }
+                    selector_start = index + ch.len_utf8();
+                }
+            }
+            _ => {}
+        }
+    }
+
+    rules
+}
+
 fn parse_declarations(
     selector_part: &str,
     declarations_part: &str,
     variables: &mut BTreeMap<String, String>,
 ) -> Vec<Declaration> {
-    declarations_part
-        .split(';')
-        .filter_map(|declaration| {
-            let declaration = declaration.trim();
-            if declaration.is_empty() {
-                return None;
-            }
-            let (name, value) = declaration.split_once(':')?;
-            let name = name.trim().to_string();
-            let value = value
-                .trim()
-                .trim_end_matches("!important")
-                .trim()
-                .to_string();
-            if name.starts_with("--") && matches!(selector_part, ":root" | "*" | "html") {
-                variables.insert(name.clone(), value.clone());
-            }
-            Some(Declaration { name, value })
-        })
+    let mut input = ParserInput::new(declarations_part);
+    let mut parser = Parser::new(&mut input);
+    let mut declaration_parser = AuroraDeclarationParser {
+        selector_part,
+        variables,
+    };
+
+    RuleBodyParser::new(&mut parser, &mut declaration_parser)
+        .filter_map(Result::ok)
         .collect()
+}
+
+fn apply_declarations(styles: &mut StyleMap, rules: Vec<&Rule>, stylesheet: &Stylesheet) {
+    let mut normal = Vec::new();
+    let mut important = Vec::new();
+    for rule in rules {
+        for declaration in &rule.declarations {
+            if declaration.important {
+                important.push(declaration);
+            } else {
+                normal.push(declaration);
+            }
+        }
+    }
+
+    for declaration in normal.into_iter().chain(important) {
+        styles.0.insert(
+            declaration.name.clone(),
+            stylesheet.resolve_variables(&declaration.value),
+        );
+    }
+}
+
+struct AuroraDeclarationParser<'a, 'b> {
+    selector_part: &'a str,
+    variables: &'b mut BTreeMap<String, String>,
+}
+
+impl<'i> cssparser::DeclarationParser<'i> for AuroraDeclarationParser<'_, '_> {
+    type Declaration = Declaration;
+    type Error = ();
+
+    fn parse_value<'t>(
+        &mut self,
+        name: cssparser::CowRcStr<'i>,
+        input: &mut Parser<'i, 't>,
+    ) -> Result<Self::Declaration, cssparser::ParseError<'i, Self::Error>> {
+        let name = name.to_ascii_lowercase();
+        let mut value = input
+            .parse_until_before(cssparser::Delimiter::Bang, |input| {
+                let mut value = String::new();
+                while let Ok(token) = input.next_including_whitespace_and_comments() {
+                    value.push_str(&token.to_css_string());
+                }
+                Ok::<_, cssparser::ParseError<'i, Self::Error>>(value)
+            })?
+            .trim()
+            .to_string();
+        let important = input.try_parse(parse_important).is_ok();
+        value = value.trim().to_string();
+        if name.starts_with("--") && matches!(self.selector_part, ":root" | "*" | "html") {
+            self.variables.insert(name.clone(), value.clone());
+        }
+        Ok(Declaration {
+            name: name.to_string(),
+            value,
+            important,
+        })
+    }
+}
+
+impl<'i> cssparser::AtRuleParser<'i> for AuroraDeclarationParser<'_, '_> {
+    type Prelude = ();
+    type AtRule = Declaration;
+    type Error = ();
+}
+
+impl<'i> cssparser::QualifiedRuleParser<'i> for AuroraDeclarationParser<'_, '_> {
+    type Prelude = ();
+    type QualifiedRule = Declaration;
+    type Error = ();
+}
+
+impl<'i> cssparser::RuleBodyItemParser<'i, Declaration, ()> for AuroraDeclarationParser<'_, '_> {
+    fn parse_declarations(&self) -> bool {
+        true
+    }
+
+    fn parse_qualified(&self) -> bool {
+        false
+    }
 }

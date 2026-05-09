@@ -7,7 +7,7 @@
 > Philosophy (Nico's, adopted): _"If there's a crate that implements a subsystem in a way that can be used standalone then we'll use it. But we'll also extend it / contribute to it / treat it like part of our engine rather than treating it like a black box. If there's not then we'll build our own."_
 
 ---
-
+F
 ## Phase 0 — Foundations and reference reading
 
 Before changing any code, internalise the prior art Nico pointed at. The whole plan below lifts the same crates Blitz uses; reading their codebases is the fastest path to "doing it the way it's done."
@@ -48,13 +48,13 @@ This deletes `src/html/` (~5 files, ~400 LoC of fragile state machine) and repla
 
 ### Work items
 
-- [ ] Add `html5ever` and `markup5ever` to `Cargo.toml`.
-- [ ] Implement the `TreeSink` trait on a thin adapter over `crate::dom::NodePtr`. The tree-builder pushes nodes into your own tree shape — you don't have to adopt their tree.
-- [ ] Replace `Parser::parse_document` (`src/html/parser.rs`) with `html5ever::parse_document(sink, ParseOpts::default()).from_utf8().read_from(&mut bytes)?`.
-- [ ] Delete `src/html/parser.rs`, `tokenizer.rs`, `tag_parsing.rs`, `tokens.rs`, `text.rs`, `classify.rs`. Keep only the test fixtures (move to integration tests against the new sink).
-- [ ] Move the duplicate `decode_entities` out of `src/layout/inline_text.rs:35–48` — html5ever decodes entities at the tokenizer level, so the layout layer must not decode again.
-- [ ] Add a quirks-mode flag to the document, plumbed from html5ever's `quirks_mode`. Required for correct cascade and width calculation later.
-- [ ] **Test:** find any HTML5 conformance suite snippet that tests foster parenting (`<table>X<td>` style), formatting-element reconstruction (the "adoption agency"), and `<textarea>` RCDATA. Verify the tree shape matches a real browser.
+- [x] Add `html5ever` and `markup5ever` to `Cargo.toml`.
+- [x] Implement the `TreeSink` trait on a thin adapter over `crate::dom::NodePtr`. The tree-builder pushes nodes into your own tree shape — you don't have to adopt their tree.
+- [x] Replace `Parser::parse_document` (`src/html/parser.rs`) with `html5ever::parse_document(sink, ParseOpts::default()).from_utf8().read_from(&mut bytes)?`.
+- [x] Delete `src/html/parser.rs`, `tokenizer.rs`, `tag_parsing.rs`, `tokens.rs`, `text.rs`, `classify.rs`. Keep only the test fixtures (move to integration tests against the new sink).
+- [x] Move the duplicate `decode_entities` out of `src/layout/inline_text.rs:35–48` — html5ever decodes entities at the tokenizer level, so the layout layer must not decode again.
+- [x] Add a quirks-mode flag to the document, plumbed from html5ever's `quirks_mode`. Required for correct cascade and width calculation later.
+- [x] **Test:** find any HTML5 conformance suite snippet that tests foster parenting (`<table>X<td>` style), formatting-element reconstruction (the "adoption agency"), and `<textarea>` RCDATA. Verify the tree shape matches a real browser.
 
 ### Outcomes
 
@@ -80,21 +80,21 @@ This deletes `src/css/` selector parsing, `src/css/stylesheet.rs` rule splitter,
 
 ### Work items
 
-- [ ] Add `cssparser` and `selectors` (and optionally `lightningcss` if you want a richer prebuilt parser) to `Cargo.toml`.
-- [ ] Replace `Stylesheet::parse` and `Stylesheet::do_parse` (`src/css/stylesheet.rs:35–73`) with a `cssparser::Parser`-driven walker that produces a `Vec<Rule>` with proper at-rule handling. Delete the `split('}')` rule splitter — it is wrong on `content: '}'`, `data:` URLs, and any nested at-rule.
+- [x] Add `cssparser` and `selectors` (and optionally `lightningcss` if you want a richer prebuilt parser) to `Cargo.toml`.
+- [x] Replace `Stylesheet::parse` and `Stylesheet::do_parse` (`src/css/stylesheet.rs:35–73`) with a `cssparser::Parser`-driven walker that produces a `Vec<Rule>` with proper at-rule handling. Delete the `split('}')` rule splitter — it is wrong on `content: '}'`, `data:` URLs, and any nested at-rule.
 - [ ] Replace `Selector::parse` and `SimpleSelector::parse` (`src/css/selector.rs`) with a `selectors::parser::Parser` and an `Impl` trait that maps your `dom::ElementNode` into the `selectors` crate's `Element` trait. This gives you `>`, `+`, `~`, attribute selectors, pseudo-classes, `:not()`, and `:is()` for free.
 - [ ] Implement the `selectors::Element` trait on `crate::dom::NodePtr`. This is the bridge that lets the selectors crate _resolve_ matches against your tree, not just parse selectors.
 - [ ] Delete `src/js_boa/selectors/simple.rs` and route JS-side `querySelector*` through the same engine. Two divergent selector parsers is a bug.
-- [ ] Implement real `!important` cascade ordering. Today `stylesheet.rs:151` does `trim_end_matches("!important")` and treats the declaration as normal. Move this to a per-declaration `important: bool` and apply origin-and-importance ordering per the [CSS Cascade and Inheritance spec](https://www.w3.org/TR/css-cascade-4/#cascade).
+- [x] Implement real `!important` cascade ordering. Today `stylesheet.rs:151` does `trim_end_matches("!important")` and treats the declaration as normal. Move this to a per-declaration `important: bool` and apply origin-and-importance ordering per the [CSS Cascade and Inheritance spec](https://www.w3.org/TR/css-cascade-4/#cascade).
 - [ ] Replace the seven hardcoded inherited properties (`src/style/node.rs:140–148`) with a property registry that declares, per property, parsing + inheritance + initial value. (Stylo/vizia_style both demonstrate this pattern.)
 - [ ] Replace the quadratic `var()` resolver (`stylesheet.rs:107–132`) with cssparser's nested parsing or a resolver that walks the AST once.
-- [ ] Replace the `display_mode` mapping (`src/css/style_map.rs:21–28`) with a real `display: <inside>/<outside>` model. Restore `inline-block` to its own variant and add `grid`, `table`, `flow-root`, `inline-flex`, `inline-grid`, `list-item`, `none`.
-- [ ] Replace `Margin` (`src/css/properties.rs:43–49`) so `top` and `bottom` can be `auto`. Today they are `f32` and `auto` is structurally inexpressible.
-- [ ] Move inline-style parsing out of `src/js_boa/` and into `src/css/`. The cascade currently calls `crate::js_boa::parse_style_text` (`src/style/node.rs:83`) — wrong direction.
+- [x] Replace the `display_mode` mapping (`src/css/style_map.rs:21–28`) with a real `display: <inside>/<outside>` model. Restore `inline-block` to its own variant and add `grid`, `table`, `flow-root`, `inline-flex`, `inline-grid`, `list-item`, `none`.
+- [x] Replace `Margin` (`src/css/properties.rs:43–49`) so `top` and `bottom` can be `auto`. Today they are `f32` and `auto` is structurally inexpressible.
+- [x] Move inline-style parsing out of `src/js_boa/` and into `src/css/`. The cascade currently calls `crate::js_boa::parse_style_text` (`src/style/node.rs:83`) — wrong direction.
 - [ ] Replace the user-agent stylesheet (`src/css/stylesheet.rs:21–33`) with a real one. Use [Servo's UA stylesheet](https://github.com/servo/servo/blob/main/resources/user-agent.css) or Blitz's as a starting point. Includes correct `display` for table elements, lists, forms, and replaced elements. Remove the made-up colour names (`accent`, `rust`, `coal`, `ink`).
 - [ ] Add bucketed selector matching: hash rules by rightmost simple-selector tag/ID/class. Required to make `Stylesheet::styles_for` (`stylesheet.rs:88–93`) something other than O(R·N).
 - [ ] Add `calc()`, `min()`, `max()`, `clamp()` parsing once cssparser is in.
-- [ ] Add the missing length units in `src/css/length.rs`: `pt`, `pc`, `cm`, `mm`, `in`, `Q`, `ch`, `ex`, `vmin`, `vmax`, `svh`/`lvh`/`dvh`.
+- [x] Add the missing length units in `src/css/length.rs`: `pt`, `pc`, `cm`, `mm`, `in`, `Q`, `ch`, `ex`, `vmin`, `vmax`, `svh`/`lvh`/`dvh`.
 
 ### Outcomes
 
@@ -110,7 +110,7 @@ This deletes `src/layout/block.rs`, `src/layout/flex/*`, `src/layout/construct.r
 
 ### Work items
 
-- [ ] Add `taffy` to `Cargo.toml`.
+- [x] Add `taffy` to `Cargo.toml`.
 - [ ] Read [Taffy's `LayoutInput` / `LayoutOutput`](https://github.com/DioxusLabs/taffy/blob/main/src/tree/layout.rs). _"I'd also encourage you to look at the LayoutInput and LayoutOutput types that form a key part of the interface that all of the layout algorithms conform to."_
 - [ ] Read each algorithm's entry function in turn:
   - [ ] [Flexbox](https://github.com/DioxusLabs/taffy/blob/main/src/compute/flexbox.rs#L166)
@@ -119,7 +119,7 @@ This deletes `src/layout/block.rs`, `src/layout/flex/*`, `src/layout/construct.r
 - [ ] Decide between the two integration shapes:
   - [ ] **Owned tree** — store nodes in `taffy::TaffyTree<UserData>`. Simpler. Used by many small consumers.
   - [ ] **Custom `LayoutPartialTree`** — implement Taffy's `LayoutPartialTree` / `TraversePartialTree` traits on your own DOM/Style tree. This is what Blitz does. More code, but no double-storage of the tree shape. **Recommended** to match Blitz's approach.
-- [ ] Map `crate::style::StyledNode` → `taffy::Style` per element. Encapsulate this in a `style_to_taffy` adapter. CSS values that don't translate (e.g. `box-sizing`, `min/max width`) become Taffy's equivalents.
+- [x] Map `crate::style::StyledNode` → `taffy::Style` per element. Encapsulate this in a `style_to_taffy` adapter. CSS values that don't translate (e.g. `box-sizing`, `min/max width`) become Taffy's equivalents.
 - [ ] Replace the entry point. `LayoutTree::from_style_tree_with_viewport` becomes a call to Taffy's `compute_layout` with the viewport size as the root's `available_space`.
 - [ ] Delete `src/layout/block.rs`, `src/layout/flex/*`, `src/layout/construct.rs`. Keep `src/layout/rect.rs` for screen-space rects.
 - [ ] Replace `LayoutBox` with a typed leaf-or-branch enum that Taffy populates. The current per-box owned `StyleMap` clone (`src/layout/box.rs:11`) goes away — Taffy does not own styles, it borrows them through the trait.

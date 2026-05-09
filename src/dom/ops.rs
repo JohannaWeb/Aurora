@@ -13,7 +13,7 @@ impl Node {
 
     fn find_node_by_id_recursive(&self, id: &str, path: &mut Vec<usize>) -> bool {
         match self {
-            Node::Document { children } => {
+            Node::Document { children, .. } => {
                 for (i, child) in children.iter().enumerate() {
                     path.push(i);
                     if child.borrow().find_node_by_id_recursive(id, path) {
@@ -48,7 +48,7 @@ impl Node {
     /// Get a child node by index from a document or element.
     pub fn get_child_mut(&mut self, index: usize) -> Option<NodePtr> {
         match self {
-            Node::Document { children } => children.get(index).cloned(),
+            Node::Document { children, .. } => children.get(index).cloned(),
             Node::Element(element) => element.children.get(index).cloned(),
             Node::Text(_) => None,
         }
