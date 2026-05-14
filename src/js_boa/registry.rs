@@ -3,6 +3,8 @@ use super::*;
 #[derive(Clone)]
 pub(super) struct NodeRegistry {
     pub(super) nodes: Rc<RefCell<BTreeMap<u32, NodePtr>>>,
+    /// Reverse map: Rc pointer address → node ID. O(1) dispatch lookup.
+    reverse_nodes: Rc<RefCell<BTreeMap<usize, u32>>>,
     pub(super) next_id: Rc<RefCell<u32>>,
     dirty: Rc<RefCell<DirtyState>>,
     pub(super) layout_tree: Rc<RefCell<Option<Rc<RefCell<crate::layout::LayoutTree>>>>>,
@@ -10,6 +12,8 @@ pub(super) struct NodeRegistry {
     pub(super) viewport: Rc<RefCell<Option<Rc<RefCell<crate::layout::ViewportSize>>>>>,
     pub(super) document: Rc<RefCell<Option<NodePtr>>>,
     pub(super) listeners: Rc<RefCell<BTreeMap<u32, BTreeMap<String, Vec<JsObject>>>>>,
+    /// Per-node invalidation via Taffy's dirty-bit API.
+    pub(super) layout_document: Rc<RefCell<Option<crate::layout::document::LayoutDocument>>>,
 }
 
 unsafe impl Trace for NodeRegistry {
@@ -21,6 +25,7 @@ impl NodeRegistry {
     pub(super) fn new() -> Self {
         Self {
             nodes: Rc::new(RefCell::new(BTreeMap::new())),
+            reverse_nodes: Rc::new(RefCell::new(BTreeMap::new())),
             next_id: Rc::new(RefCell::new(1)),
             dirty: Rc::new(RefCell::new(DirtyState::default())),
             layout_tree: Rc::new(RefCell::new(None)),
@@ -28,6 +33,7 @@ impl NodeRegistry {
             viewport: Rc::new(RefCell::new(None)),
             document: Rc::new(RefCell::new(None)),
             listeners: Rc::new(RefCell::new(BTreeMap::new())),
+            layout_document: Rc::new(RefCell::new(None)),
         }
     }
 
@@ -67,7 +73,12 @@ impl NodeRegistry {
         let mut next_id = self.next_id.borrow_mut();
         let id = *next_id;
         *next_id += 1;
+        let key = Rc::as_ptr(&node) as usize;
         self.nodes.borrow_mut().insert(id, node);
+        // Also register the reverse mapping for O(1) dispatch lookup.
+        // We store the raw pointer as a key. This is safe because we only use
+        // it for equality comparison, and nodes are not moved while registered.
+        self.reverse_nodes.borrow_mut().insert(key, id);
         id
     }
 
@@ -75,14 +86,27 @@ impl NodeRegistry {
         self.nodes.borrow().get(&id).cloned()
     }
 
-    pub(super) fn mark_style_dirty(&self, _node: &NodePtr) {
-        self.dirty.borrow_mut().style = true;
+    /// O(1) lookup of a node's registered ID. Returns None if not registered.
+    pub(super) fn node_id(&self, node: &NodePtr) -> Option<u32> {
+        let key = Rc::as_ptr(node) as usize;
+        self.reverse_nodes.borrow().get(&key).copied()
     }
 
-    pub(super) fn mark_layout_dirty(&self, _node: &NodePtr) {
+    pub(super) fn mark_style_dirty(&self, node: &NodePtr) {
+        self.dirty.borrow_mut().style = true;
+        if let Some(ld) = self.layout_document.borrow_mut().as_mut() {
+            ld.mark_dirty(node, false);
+        }
+    }
+
+    pub(super) fn mark_layout_dirty(&self, node: &NodePtr) {
         let mut dirty = self.dirty.borrow_mut();
         dirty.style = true;
         dirty.layout = true;
+        drop(dirty);
+        if let Some(ld) = self.layout_document.borrow_mut().as_mut() {
+            ld.mark_dirty(node, true);
+        }
     }
 
     pub(super) fn take_needs_reflow(&self) -> bool {
@@ -125,11 +149,20 @@ impl NodeRegistry {
                 width: viewport_val.width,
                 height: (viewport_val.height - crate::window::BROWSER_CHROME_HEIGHT).max(1.0),
             };
+
             let style_tree = crate::style::StyleTree::from_dom(document, &stylesheet.borrow());
-            let new_layout = crate::layout::LayoutTree::from_style_tree_with_viewport(
-                &style_tree,
-                content_viewport,
-            );
+
+            // Use LayoutDocument (incremental) if available, else full rebuild.
+            let new_layout = if let Some(ld) = self.layout_document.borrow_mut().as_mut() {
+                let root = ld.compute(&style_tree);
+                crate::layout::LayoutTree::from_root(root)
+            } else {
+                crate::layout::LayoutTree::from_style_tree_with_viewport(
+                    &style_tree,
+                    content_viewport,
+                )
+            };
+
             *layout_tree.borrow_mut() = new_layout;
             self.clear_dirty_bits();
         }

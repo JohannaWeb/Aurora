@@ -5,8 +5,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-rustls = { version = "0.23", features = ["ring"] }
-webpki-roots = "0.26"
+rustls = { version = "0.23", features = ["ring"] } # still needed for install_crypto_provider()
 wgpu = "23.0"
 winit = "0.30.5"
 vello = "0.7.0"
@@ -26,3 +25,5 @@ markup5ever = "0.12"
 cssparser = "0.31"
 selectors = "0.25"
 taffy = "0.5"
+parley = "0.1"
+reqwest = { version = "0.12", features = ["blocking", "rustls-tls"], default-features = false }

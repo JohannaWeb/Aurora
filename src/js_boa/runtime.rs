@@ -45,32 +45,158 @@ impl BoaRuntime {
     }
 
     pub fn dispatch_event(&mut self, node: &NodePtr, event_type: &str) -> bool {
-        let node_id = {
-            // Find the ID by looking up in registry nodes
-            let nodes = self.registry.nodes.borrow();
-            nodes
-                .iter()
-                .find(|(_, n)| Rc::ptr_eq(n, node))
-                .map(|(id, _)| *id)
-        };
-
-        let Some(id) = node_id else {
+        // O(1) lookup via reverse map.
+        let Some(id) = self.registry.node_id(node) else {
             return false;
         };
 
+        // Build a real Event object.
+        let event = self.build_event_object(event_type, node);
+
+        // Fire at the target node.
         let listeners = self.registry.get_listeners(id, event_type);
-        if listeners.is_empty() {
-            return false;
+        let mut handled = !listeners.is_empty();
+        for listener in listeners {
+            let _ = listener.call(
+                &JsValue::undefined(),
+                &[event.clone().into()],
+                &mut self.context,
+            );
         }
 
-        let mut handled = false;
-        for listener in listeners {
-            let _ = listener.call(&JsValue::undefined(), &[], &mut self.context);
-            handled = true;
+        // Bubble up the DOM tree.
+        let mut current = node.clone();
+        loop {
+            let parent = {
+                let b = current.borrow();
+                match &*b {
+                    Node::Element(el) => {
+                        // Walk the registry to find the parent.
+                        // This is a O(N) fallback — replace with parent pointers in Phase 5+.
+                        self.find_parent(&current)
+                    }
+                    _ => None,
+                }
+            };
+            let Some(parent_node) = parent else { break };
+            if let Some(parent_id) = self.registry.node_id(&parent_node) {
+                let parent_listeners = self.registry.get_listeners(parent_id, event_type);
+                for listener in parent_listeners {
+                    let _ = listener.call(
+                        &JsValue::undefined(),
+                        &[event.clone().into()],
+                        &mut self.context,
+                    );
+                    handled = true;
+                }
+            }
+            current = parent_node;
         }
+
         self.context.run_jobs();
         self.drain_microtasks();
         handled
+    }
+
+    /// Build a real Event JsObject with target, type, preventDefault, stopPropagation.
+    fn build_event_object(&mut self, event_type: &str, target: &NodePtr) -> JsObject {
+        let event = JsObject::with_null_proto();
+        let target_id = self.registry.node_id(target).unwrap_or(0);
+
+        let _ = event.set(js_string!("type"), js_string!(event_type), false, &mut self.context);
+        let _ = event.set(js_string!("bubbles"), JsValue::from(true), false, &mut self.context);
+        let _ = event.set(js_string!("cancelable"), JsValue::from(true), false, &mut self.context);
+        let _ = event.set(js_string!("defaultPrevented"), JsValue::from(false), false, &mut self.context);
+        let _ = event.set(js_string!("isTrusted"), JsValue::from(true), false, &mut self.context);
+        let _ = event.set(js_string!("timeStamp"), JsValue::from(0.0), false, &mut self.context);
+
+        // target and currentTarget — the DOM node's JS object if available.
+        if let Some(target_node) = self.registry.lookup(target_id) {
+            if let Some(js_target) = self.registry.nodes.borrow().get(&target_id) {
+                // We can't easily get the JS object here without a full mirror;
+                // set the node id as a proxy for now.
+                let _ = event.set(js_string!("_targetId"), JsValue::from(target_id), false, &mut self.context);
+            }
+        }
+
+        // preventDefault — sets defaultPrevented.
+        let ev_clone = event.clone();
+        let prevent_fn = NativeFunction::from_copy_closure_with_captures(
+            |_this, _args, ev: &JsObject, ctx| {
+                let _ = ev.set(js_string!("defaultPrevented"), JsValue::from(true), false, ctx);
+                Ok(JsValue::undefined())
+            },
+            ev_clone,
+        );
+        let _ = event.set(
+            js_string!("preventDefault"),
+            NativeFunction::to_js_function(prevent_fn, &mut self.context),
+            false,
+            &mut self.context,
+        );
+
+        // stopPropagation — noop for now (bubbling is simple, no stop yet).
+        let stop_fn = NativeFunction::from_fn_ptr(|_, _, _| Ok(JsValue::undefined()));
+        let _ = event.set(
+            js_string!("stopPropagation"),
+            NativeFunction::to_js_function(stop_fn, &mut self.context),
+            false,
+            &mut self.context,
+        );
+        let stop_imm_fn = NativeFunction::from_fn_ptr(|_, _, _| Ok(JsValue::undefined()));
+        let _ = event.set(
+            js_string!("stopImmediatePropagation"),
+            NativeFunction::to_js_function(stop_imm_fn, &mut self.context),
+            false,
+            &mut self.context,
+        );
+
+        event
+    }
+
+    /// Walk the registered nodes to find the parent of `node`.
+    /// This is O(N) — acceptable until parent pointers land in Phase 5+.
+    fn find_parent(&self, node: &NodePtr) -> Option<NodePtr> {
+        let nodes = self.registry.nodes.borrow();
+        for candidate in nodes.values() {
+            let borrow = candidate.borrow();
+            let children = match &*borrow {
+                Node::Document { children, .. } => children.as_slice(),
+                Node::Element(el) => el.children.as_slice(),
+                Node::Text(_) => continue,
+            };
+            if children.iter().any(|child| Rc::ptr_eq(child, node)) {
+                return Some(candidate.clone());
+            }
+        }
+        None
+    }
+
+    /// Fire the DOMContentLoaded event on the document.
+    pub fn fire_dom_content_loaded(&mut self) {
+        let doc_node = self.document.clone();
+        let event = self.build_event_object("DOMContentLoaded", &doc_node);
+
+        // Fire document-level listeners.
+        let doc_id = self.registry.node_id(&doc_node);
+        if let Some(id) = doc_id {
+            let listeners = self.registry.get_listeners(id, "DOMContentLoaded");
+            for listener in listeners {
+                let _ = listener.call(
+                    &JsValue::undefined(),
+                    &[event.clone().into()],
+                    &mut self.context,
+                );
+            }
+        }
+
+        // Also fire window-level DOMContentLoaded listeners.
+        let script = "if (typeof window._domContentLoadedListeners !== 'undefined') { \
+            window._domContentLoadedListeners.forEach(function(fn) { try { fn(); } catch(e) {} }); \
+        }";
+        let _ = self.context.eval(Source::from_bytes(script));
+        self.context.run_jobs();
+        self.drain_microtasks();
     }
 
     pub fn execute(&mut self, script: &str) -> JsResult<JsValue> {

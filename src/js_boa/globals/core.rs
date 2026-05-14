@@ -80,4 +80,43 @@ pub(in crate::js_boa) fn install_window_core(context: &mut Context, global_obj: 
         .property(js_string!("pixelDepth"), 24, Attribute::all())
         .build();
     let _ = context.register_global_property(js_string!("screen"), screen, Attribute::all());
+
+    // __aurora_fetch_sync__ — native fetch backed by reqwest::blocking.
+    // Called by the JS fetch() polyfill in network.rs.
+    let fetch_native = NativeFunction::from_fn_ptr(|_this, args, ctx| {
+        let url = args
+            .get(0)
+            .and_then(|v| v.as_string())
+            .map(|s| s.to_std_string_lossy())
+            .unwrap_or_default();
+
+        let result = JsObject::with_null_proto();
+
+        match crate::fetch::http::fetch_string(&url) {
+            Ok(body) => {
+                let _ = result.set(js_string!("ok"), JsValue::from(true), false, ctx);
+                let _ = result.set(js_string!("status"), JsValue::from(200), false, ctx);
+                let _ = result.set(js_string!("body"), js_string!(body.as_str()), false, ctx);
+            }
+            Err(e) => {
+                let _ = result.set(js_string!("ok"), JsValue::from(false), false, ctx);
+                let _ = result.set(js_string!("status"), JsValue::from(0), false, ctx);
+                let _ = result.set(js_string!("body"), js_string!(""), false, ctx);
+                let _ = result.set(
+                    js_string!("error"),
+                    js_string!(e.to_string().as_str()),
+                    false,
+                    ctx,
+                );
+            }
+        }
+
+        Ok(JsValue::from(result))
+    });
+    let _ = global_obj.set(
+        js_string!("__aurora_fetch_sync__"),
+        NativeFunction::to_js_function(fetch_native, context),
+        false,
+        context,
+    );
 }

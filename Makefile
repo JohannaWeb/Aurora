@@ -56,5 +56,11 @@ all-renders:
 	$(MAKE) screenshot FIXTURE=dynamic-reflow SCREENSHOT=$(SCREENSHOT_ROOT)/dynamic-reflow.png VIEWPORT_WIDTH=900 VIEWPORT_HEIGHT=620
 	$(MAKE) screenshot FIXTURE=raf-reflow SCREENSHOT=$(SCREENSHOT_ROOT)/raf-reflow.png VIEWPORT_WIDTH=900 VIEWPORT_HEIGHT=620
 
+update-snapshots:
+	UPDATE_SNAPSHOTS=1 cargo test --test visual_regression
+
+check-snapshots:
+	cargo test --test visual_regression
+
 check-line-cap:
 	@find src -name '*.rs' -exec wc -l {} + | awk '$$1 > 200 && $$2 != "total" { print $$1, $$2; bad=1 } END { if (bad) { print "FAIL: files above 200-line cap"; exit 1 } else { print "OK: all src files within 200-line cap" } }'

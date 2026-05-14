@@ -4,15 +4,10 @@
 
 mod api;
 mod capability;
-mod chunked;
 mod data_url;
 mod errors;
-mod headers;
-mod http;
-mod redirects;
+pub mod http;
 mod resolve;
-mod tls;
-mod url;
 
 #[cfg(test)]
 mod tests;

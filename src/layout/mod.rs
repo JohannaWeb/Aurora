@@ -2,6 +2,7 @@
 
 mod block;
 mod r#box;
+pub mod document;
 mod constants;
 mod constraints;
 mod construct;
@@ -12,8 +13,10 @@ mod image;
 mod inline;
 mod inline_sequence;
 mod inline_text;
+mod parley_text;
 mod rect;
 mod taffy_adapter;
+mod taffy_layout;
 mod text_metrics;
 mod tree;
 

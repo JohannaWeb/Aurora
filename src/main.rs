@@ -8,6 +8,7 @@ mod html;
 mod js_boa;
 mod layout;
 mod paint;
+pub mod render;
 mod runner;
 mod style;
 mod window;

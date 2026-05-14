@@ -36,9 +36,37 @@ pub(super) fn install_xhr_and_fetch(context: &mut Context) {
         globalThis.XMLHttpRequest.LOADING = 3;
         globalThis.XMLHttpRequest.DONE = 4;
 
-        // fetch returns a Promise that rejects — callers using .catch survive.
-        globalThis.fetch = function(url) {
-            return Promise.reject(new Error("Aurora: network fetch disabled in JS runtime"));
+        // fetch — backed by Aurora's reqwest HTTP client (Phase 7).
+        // Returns a Promise that resolves with a Response or rejects on error.
+        globalThis.fetch = function(url, options) {
+            var method = (options && options.method) ? options.method.toUpperCase() : 'GET';
+            var body = (options && options.body) ? options.body : null;
+            try {
+                var result = globalThis.__aurora_fetch_sync__(String(url), method);
+                if (result.ok) {
+                    var responseText = result.body;
+                    var status = result.status;
+                    return Promise.resolve({
+                        ok: status >= 200 && status < 300,
+                        status: status,
+                        statusText: String(status),
+                        url: String(url),
+                        headers: new Headers(),
+                        text: function() { return Promise.resolve(responseText); },
+                        json: function() {
+                            try { return Promise.resolve(JSON.parse(responseText)); }
+                            catch(e) { return Promise.reject(e); }
+                        },
+                        arrayBuffer: function() { return Promise.resolve(new ArrayBuffer(0)); },
+                        blob: function() { return Promise.resolve({ text: function() { return Promise.resolve(responseText); } }); },
+                        clone: function() { return this; }
+                    });
+                } else {
+                    return Promise.reject(new Error("HTTP " + result.status));
+                }
+            } catch(e) {
+                return Promise.reject(e);
+            }
         };
 
         // Headers, Request, Response, URL(SearchParams), Blob, FormData, File, FileReader — minimal stubs.

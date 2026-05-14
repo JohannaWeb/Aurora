@@ -34,8 +34,17 @@ impl LayoutTree {
     }
 
     pub fn from_style_tree_with_viewport(style_tree: &StyleTree, viewport: ViewportSize) -> Self {
-        let root = LayoutBox::layout_root(style_tree.root(), viewport)
-            .expect("style tree root must produce a viewport");
+        let root = super::taffy_layout::compute_taffy_layout(
+            style_tree,
+            viewport.width,
+            viewport.height,
+        );
+        Self { root }
+    }
+
+    /// Create a LayoutTree from a pre-computed root LayoutBox.
+    /// Used by LayoutDocument for incremental reflow.
+    pub fn from_root(root: LayoutBox) -> Self {
         Self { root }
     }
 
