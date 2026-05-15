@@ -12,9 +12,9 @@ Aurora is not Servo, Chromium, WebKit, or a wrapper around an existing browser. 
 
 ![Mockup](https://github.com/user-attachments/assets/7c9210f4-d161-4404-946d-36869cecd1f2)
 
-## Rendering Test for Misc Glyphs
+## Rendering Test 
 
-![Glyphs](https://github.com/user-attachments/assets/66462680-4dad-4e26-b449-e1a06e2bb200)
+<img width="1443" height="1071" alt="image" src="https://github.com/user-attachments/assets/78d0e1b5-d0ca-4588-8772-8ded2d3a93c2" />
 
 ## Current Scope
 
