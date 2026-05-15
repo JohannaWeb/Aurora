@@ -128,25 +128,28 @@ impl BoaRuntime {
             },
             ev_clone,
         );
+        let prevent_js_fn = NativeFunction::to_js_function(prevent_fn, self.context.realm());
         let _ = event.set(
             js_string!("preventDefault"),
-            NativeFunction::to_js_function(prevent_fn, &mut self.context),
+            prevent_js_fn,
             false,
             &mut self.context,
         );
 
         // stopPropagation — noop for now (bubbling is simple, no stop yet).
         let stop_fn = NativeFunction::from_fn_ptr(|_, _, _| Ok(JsValue::undefined()));
+        let stop_js_fn = NativeFunction::to_js_function(stop_fn, self.context.realm());
         let _ = event.set(
             js_string!("stopPropagation"),
-            NativeFunction::to_js_function(stop_fn, &mut self.context),
+            stop_js_fn,
             false,
             &mut self.context,
         );
         let stop_imm_fn = NativeFunction::from_fn_ptr(|_, _, _| Ok(JsValue::undefined()));
+        let stop_imm_js_fn = NativeFunction::to_js_function(stop_imm_fn, self.context.realm());
         let _ = event.set(
             js_string!("stopImmediatePropagation"),
-            NativeFunction::to_js_function(stop_imm_fn, &mut self.context),
+            stop_imm_js_fn,
             false,
             &mut self.context,
         );

@@ -8,6 +8,7 @@ mod data_url;
 mod errors;
 pub mod http;
 mod resolve;
+mod url;
 
 #[cfg(test)]
 mod tests;

@@ -34,11 +34,8 @@ impl LayoutTree {
     }
 
     pub fn from_style_tree_with_viewport(style_tree: &StyleTree, viewport: ViewportSize) -> Self {
-        let root = super::taffy_layout::compute_taffy_layout(
-            style_tree,
-            viewport.width,
-            viewport.height,
-        );
+        let root = LayoutBox::layout_root(style_tree.root(), viewport)
+            .expect("layout root must produce a box");
         Self { root }
     }
 

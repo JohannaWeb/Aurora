@@ -1,3 +1,4 @@
+
 use super::FetchError;
 
 pub(super) fn decode(url: &str) -> Result<Vec<u8>, FetchError> {

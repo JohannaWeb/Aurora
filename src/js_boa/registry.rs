@@ -70,14 +70,17 @@ impl NodeRegistry {
     }
 
     pub(super) fn register(&self, node: NodePtr) -> u32 {
+        let key = Rc::as_ptr(&node) as usize;
+        // If this node was already registered, return its existing ID so that
+        // event listeners stored under the original ID remain reachable.
+        if let Some(&existing) = self.reverse_nodes.borrow().get(&key) {
+            return existing;
+        }
         let mut next_id = self.next_id.borrow_mut();
         let id = *next_id;
         *next_id += 1;
-        let key = Rc::as_ptr(&node) as usize;
+        drop(next_id);
         self.nodes.borrow_mut().insert(id, node);
-        // Also register the reverse mapping for O(1) dispatch lookup.
-        // We store the raw pointer as a key. This is safe because we only use
-        // it for equality comparison, and nodes are not moved while registered.
         self.reverse_nodes.borrow_mut().insert(key, id);
         id
     }

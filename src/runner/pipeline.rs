@@ -72,8 +72,8 @@ fn load_html(input_url: Option<&str>, identity: &Identity) -> String {
 
 fn viewport_size() -> ViewportSize {
     ViewportSize {
-        width: env_f32("AURORA_VIEWPORT_WIDTH").unwrap_or(1200.0),
-        height: env_f32("AURORA_VIEWPORT_HEIGHT").unwrap_or(900.0),
+        width: env_f32("AURORA_VIEWPORT_WIDTH").unwrap_or(1440.0),
+        height: env_f32("AURORA_VIEWPORT_HEIGHT").unwrap_or(1024.0),
     }
 }
 

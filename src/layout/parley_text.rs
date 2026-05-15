@@ -1,11 +1,9 @@
-use parley::fontconfig::FontContext;
-use parley::layout::{Alignment, Layout};
-use parley::style::{FontStack, StyleProperty};
+use parley::FontContext;
 
 use crate::css::StyleMap;
 
 use super::{LayoutBox, LayoutKind, Rect};
-use crate::css::{EdgeSizes, Margin, TextAlign, WhiteSpace};
+use crate::css::{EdgeSizes, Margin, WhiteSpace};
 
 /// Create a FontContext for text layout.
 /// In Phase 5 (reflow), this should be stored on the document and reused.
@@ -136,7 +134,7 @@ fn layout_text_with_word_wrap(
             boxes.push(LayoutBox {
                 node: node.clone(),
                 kind: LayoutKind::Text {
-                    text: current_line,
+                    text: current_line.clone(),
                 },
                 rect: Rect {
                     x,
@@ -164,28 +162,28 @@ fn estimate_text_width(text: &str, font_size: f32) -> f32 {
     (text.len() as f32) * (font_size * 0.5)
 }
 
-/// TODO: Full Parley integration for Phase 4:
-///
-/// 1. **FontContext lifecycle**: Move from per-call to per-document (Phase 5)
-/// 2. **Parley Layout API**: Replace word-wrap with actual line-breaking via Parley
-///    - Use `parley::layout::Layout::builder()`
-///    - Set font properties: family, size, weight, style
-///    - Set line width constraint
-///    - Call `layout.layout()` to get positioned runs
-/// 3. **Glyph measurement**: Use Parley's glyph measurement instead of `estimate_text_width`
-/// 4. **Text shaping**: Parley uses rustybuzz under the hood (already integrated)
-/// 5. **Multi-script support**: Parley handles BiDi, CJK, combining marks automatically
-/// 6. **Line breaking**: Support hanging punctuation, hyphenation, discretionary breaks
-/// 7. **Text styling**: Apply color, weight, decoration from StyleMap
-/// 8. **Validation**: Test with fixtures (CJK, RTL Arabic, Devanagari, etc.)
-///
-/// Current implementation uses a simple word-wrap fallback that works but lacks:
-/// - Proper glyph-level metrics
-/// - BiDi text support
-/// - Hyphenation
-/// - OpenType features
-///
-/// The skeleton above shows where Parley calls will go. Fill them in by:
-/// - Reading Parley's docs: https://github.com/linebender/parley
-/// - Reference: Blitz's inline.rs integration
-/// - Validate each text feature with a test case
+// TODO: Full Parley integration for Phase 4:
+//
+// 1. **FontContext lifecycle**: Move from per-call to per-document (Phase 5)
+// 2. **Parley Layout API**: Replace word-wrap with actual line-breaking via Parley
+//    - Use `parley::layout::Layout::builder()`
+//    - Set font properties: family, size, weight, style
+//    - Set line width constraint
+//    - Call `layout.layout()` to get positioned runs
+// 3. **Glyph measurement**: Use Parley's glyph measurement instead of `estimate_text_width`
+// 4. **Text shaping**: Parley uses rustybuzz under the hood (already integrated)
+// 5. **Multi-script support**: Parley handles BiDi, CJK, combining marks automatically
+// 6. **Line breaking**: Support hanging punctuation, hyphenation, discretionary breaks
+// 7. **Text styling**: Apply color, weight, decoration from StyleMap
+// 8. **Validation**: Test with fixtures (CJK, RTL Arabic, Devanagari, etc.)
+//
+// Current implementation uses a simple word-wrap fallback that works but lacks:
+// - Proper glyph-level metrics
+// - BiDi text support
+// - Hyphenation
+// - OpenType features
+//
+// The skeleton above shows where Parley calls will go. Fill them in by:
+// - Reading Parley's docs: https://github.com/linebender/parley
+// - Reference: Blitz's inline.rs integration
+// - Validate each text feature with a test case

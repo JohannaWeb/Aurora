@@ -149,14 +149,27 @@ fn renderer_for_surface<'a>(
 
 fn paint_content_layer(app: &AuroraApp, scene: &mut Scene, width: u32, height: u32) {
     let content_top = BROWSER_CHROME_HEIGHT as f64;
+    // Clip to the area below the chrome; use IDENTITY so the clip rect is in screen coords.
     scene.push_layer(
         Fill::NonZero,
         vello::peniko::BlendMode::default(),
         1.0,
-        Affine::translate((0.0, content_top - app.scroll_y)),
+        Affine::IDENTITY,
         &vello::kurbo::Rect::new(0.0, content_top, width as f64, height as f64),
     );
-    GpuPainter::paint(app.input.layout.borrow().root(), scene, &app.input.images);
+    // Paint into a sub-scene, then append it with the scroll+chrome offset applied.
+    // scene.append is the correct way to transform content in vello — push_layer's
+    // transform only applies to the clip shape, not to draw calls inside the layer.
+    let mut content_scene = Scene::new();
+    GpuPainter::paint(
+        app.input.layout.borrow().root(),
+        &mut content_scene,
+        &app.input.images,
+    );
+    scene.append(
+        &content_scene,
+        Some(Affine::translate((0.0, content_top - app.scroll_y))),
+    );
     scene.pop_layer();
 }
 
@@ -166,13 +179,18 @@ fn paint_scrollbar_layer(app: &AuroraApp, scene: &mut Scene, width: u32, height:
         Fill::NonZero,
         vello::peniko::BlendMode::default(),
         1.0,
-        Affine::translate((0.0, content_top)),
+        Affine::IDENTITY,
         &vello::kurbo::Rect::new(0.0, content_top, width as f64, height as f64),
     );
+    let mut scrollbar_scene = Scene::new();
     GpuPainter::paint_scrollbars(
         app.input.layout.borrow().root(),
-        scene,
+        &mut scrollbar_scene,
         (height as f32 - BROWSER_CHROME_HEIGHT).max(1.0),
+    );
+    scene.append(
+        &scrollbar_scene,
+        Some(Affine::translate((0.0, content_top))),
     );
     scene.pop_layer();
 }

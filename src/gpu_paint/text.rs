@@ -5,7 +5,7 @@ use vello::Scene;
 
 use super::color::parse_color;
 
-pub(super) fn paint_text_label(
+pub(crate) fn paint_text_label(
     scene: &mut Scene,
     text: &str,
     x: f64,

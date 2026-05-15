@@ -95,14 +95,20 @@ impl<'a> RenderBackend for VelloBackend<'a> {
         opacity: f32,
     ) {
         // Encode the RGBA pixel buffer as a Vello image and blit it.
-        use vello::peniko::{Blob, ImageFormat};
-        let blob = Blob::new(std::sync::Arc::new(pixels.to_vec()));
-        let image = vello::peniko::Image::new(blob, ImageFormat::Rgba8, img_width, img_height);
+        use peniko::{Blob, ImageAlphaType, ImageBrush, ImageData, ImageFormat};
+        let img_data = ImageData {
+            data: Blob::from(pixels.to_vec()),
+            format: ImageFormat::Rgba8,
+            alpha_type: ImageAlphaType::Alpha,
+            width: img_width,
+            height: img_height,
+        };
+        let image = ImageBrush::new(img_data);
         let scale_x = bounds.width as f64 / img_width as f64;
         let scale_y = bounds.height as f64 / img_height as f64;
         let transform = Affine::translate((bounds.x as f64, bounds.y as f64))
             * Affine::scale_non_uniform(scale_x, scale_y);
-        self.scene.draw_image(&image, transform);
+        self.scene.draw_image(image.as_ref(), transform);
     }
 
     fn draw_image_placeholder(&mut self, bounds: Bounds, opacity: f32) {

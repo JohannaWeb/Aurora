@@ -90,7 +90,7 @@ fn paint_layout_box(
             if let Some(img_data) = images.get(src) {
                 backend.draw_image(
                     bounds,
-                    &img_data.pixels,
+                    img_data.data.data(),
                     img_data.width,
                     img_data.height,
                     opacity,

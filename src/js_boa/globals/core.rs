@@ -87,7 +87,7 @@ pub(in crate::js_boa) fn install_window_core(context: &mut Context, global_obj: 
         let url = args
             .get(0)
             .and_then(|v| v.as_string())
-            .map(|s| s.to_std_string_lossy())
+            .map(|s| s.to_std_string().unwrap_or_default())
             .unwrap_or_default();
 
         let result = JsObject::with_null_proto();
@@ -113,9 +113,10 @@ pub(in crate::js_boa) fn install_window_core(context: &mut Context, global_obj: 
 
         Ok(JsValue::from(result))
     });
+    let fetch_js_fn = NativeFunction::to_js_function(fetch_native, context.realm());
     let _ = global_obj.set(
         js_string!("__aurora_fetch_sync__"),
-        NativeFunction::to_js_function(fetch_native, context),
+        fetch_js_fn,
         false,
         context,
     );
