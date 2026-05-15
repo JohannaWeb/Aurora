@@ -39,6 +39,7 @@ pub(crate) fn run_browser(cli: CliOptions, identity: Identity) {
             stylesheet_rc.clone(),
             viewport_rc.clone(),
         );
+        runtime.fire_dom_content_loaded();
         runtime.clear_dirty_bits();
     }
 

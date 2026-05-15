@@ -1,14 +1,11 @@
 //! Layout: turn a styled DOM tree into positioned boxes.
 
-mod block;
 mod r#box;
 pub mod document;
 mod constants;
 mod constraints;
-mod construct;
 mod control;
 mod display;
-mod flex;
 mod image;
 mod inline;
 mod inline_sequence;

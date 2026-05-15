@@ -1,33 +1,67 @@
-use rustybuzz::{shape, UnicodeBuffer};
+use parley::style::{FontStack, StyleProperty};
+use parley::{FontContext, LayoutContext};
+use std::cell::RefCell;
 
 use super::glyph::{PositionedGlyph, TextRun};
-use super::resources::get_font_face;
 
+thread_local! {
+    static FONT_CTX: RefCell<FontContext> = RefCell::new(FontContext::default());
+}
+
+/// Shape a text string using Parley (which uses HarfBuzz/rustybuzz internally).
+/// Returns a TextRun with per-glyph positions for the renderer.
 pub fn layout_text_run(text: &str, font_size: f32) -> TextRun {
-    let face = get_font_face();
-    let mut buffer = UnicodeBuffer::new();
-    buffer.push_str(text);
-
-    let glyph_buffer = shape(face, &[], buffer);
-    let infos = glyph_buffer.glyph_infos();
-    let positions = glyph_buffer.glyph_positions();
-    let mut glyphs = Vec::new();
-    let mut cursor_x = 0.0;
-    let scale = font_size / face.units_per_em() as f32;
-    let text_chars: Vec<char> = text.chars().collect();
-
-    for (i, (_info, pos)) in infos.iter().zip(positions.iter()).enumerate() {
-        let ch = text_chars.get(i).copied().unwrap_or(' ');
-        glyphs.push(PositionedGlyph {
-            ch,
-            x: cursor_x + (pos.x_offset as f32 * scale),
-            y_offset: pos.y_offset as f32 * scale,
-        });
-        cursor_x += pos.x_advance as f32 * scale;
+    if text.is_empty() {
+        return TextRun {
+            glyphs: Vec::new(),
+            width: 0.0,
+        };
     }
 
-    TextRun {
-        glyphs,
-        width: cursor_x,
-    }
+    FONT_CTX.with(|font_cx| {
+        let mut font_cx = font_cx.borrow_mut();
+        let mut layout_cx: LayoutContext<peniko::Color> = LayoutContext::new();
+        let mut builder = layout_cx.ranged_builder(&mut font_cx, text, 1.0);
+        builder.push_default(&StyleProperty::FontSize(font_size));
+        builder.push_default(&StyleProperty::FontStack(FontStack::Source("system-ui")));
+
+        let mut layout = builder.build(text);
+        layout.break_all_lines(None);
+
+        let mut glyphs = Vec::new();
+        let mut total_width = 0.0_f32;
+        let text_chars: Vec<char> = text.chars().collect();
+
+        for line in layout.lines() {
+            for item in line.items() {
+                use parley::layout::PositionedLayoutItem;
+                if let PositionedLayoutItem::GlyphRun(run) = item {
+                    let mut run_x = run.offset();
+                    for glyph in run.glyphs() {
+                        // Map glyph cluster back to char.
+                        // This is a best-effort mapping for the atlas renderer.
+                        // Full cluster support requires a glyph-ID based renderer.
+                        let ch = text_chars
+                            .get(glyph.text_index as usize)
+                            .copied()
+                            .unwrap_or(' ');
+
+                        glyphs.push(PositionedGlyph {
+                            ch,
+                            x: run_x,
+                            y_offset: 0.0,
+                        });
+
+                        run_x += glyph.advance;
+                        total_width = total_width.max(run_x);
+                    }
+                }
+            }
+        }
+
+        TextRun {
+            glyphs,
+            width: total_width,
+        }
+    })
 }

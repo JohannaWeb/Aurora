@@ -7,7 +7,7 @@
 > Philosophy (Nico's, adopted): _"If there's a crate that implements a subsystem in a way that can be used standalone then we'll use it. But we'll also extend it / contribute to it / treat it like part of our engine rather than treating it like a black box. If there's not then we'll build our own."_
 
 ---
-F
+
 ## Phase 0 — Foundations and reference reading
 
 Before changing any code, internalise the prior art Nico pointed at. The whole plan below lifts the same crates Blitz uses; reading their codebases is the fastest path to "doing it the way it's done."
@@ -31,12 +31,8 @@ Before changing any code, internalise the prior art Nico pointed at. The whole p
 
 ### Decisions to lock in before Phase 1
 
-- [ ] **JS strategy decision.** Pick one, write it down, stop pretending:
-  - (a) Drop JS entirely. Static renderer only. Honest and shippable. Closest to Blitz's current scope.
-  - (b) Real but narrow: a small set of APIs with real implementations, rest removed.
-  - (c) Full survival: every Web API real or absent. Years of work.
-  - **Recommendation:** start at (a) so the engine can be made correct, then bolt on (b) selectively when each subsystem (DOM, layout, fetch) is real enough to support a non-stub implementation.
-- [ ] Decide whether Aurora continues as its own engine, **or** whether the right move is contributing to Blitz directly. Nico explicitly invited it: _"Or even better, come and help me build Blitz!"_ — this is worth weighing before re-implementing every crate Blitz already integrates.
+- [x] **JS strategy decision.** Keeping Boa. Option (b): real but narrow — a small set of APIs with real implementations, rest removed or gracefully stubbed.
+- [x] Decided: Aurora is its own engine. Uses shared crates from the Linebender/Blitz ecosystem where they fit, but ships as an independent product with its own identity layer and sovereign runtime angle.
 
 ---
 
@@ -120,8 +116,8 @@ This deletes `src/layout/block.rs`, `src/layout/flex/*`, `src/layout/construct.r
   - [ ] **Owned tree** — store nodes in `taffy::TaffyTree<UserData>`. Simpler. Used by many small consumers.
   - [ ] **Custom `LayoutPartialTree`** — implement Taffy's `LayoutPartialTree` / `TraversePartialTree` traits on your own DOM/Style tree. This is what Blitz does. More code, but no double-storage of the tree shape. **Recommended** to match Blitz's approach.
 - [x] Map `crate::style::StyledNode` → `taffy::Style` per element. Encapsulate this in a `style_to_taffy` adapter. CSS values that don't translate (e.g. `box-sizing`, `min/max width`) become Taffy's equivalents.
-- [ ] Replace the entry point. `LayoutTree::from_style_tree_with_viewport` becomes a call to Taffy's `compute_layout` with the viewport size as the root's `available_space`.
-- [ ] Delete `src/layout/block.rs`, `src/layout/flex/*`, `src/layout/construct.rs`. Keep `src/layout/rect.rs` for screen-space rects.
+- [x] Replace the entry point. `LayoutTree::from_style_tree_with_viewport` now routes through `taffy_layout::compute_taffy_layout`. `LayoutDocument` owns the `TaffyTree` for incremental recompute.
+- [x] Delete `src/layout/block.rs`, `src/layout/flex/*`, `src/layout/construct.rs`. Keep `src/layout/rect.rs` for screen-space rects.
 - [ ] Replace `LayoutBox` with a typed leaf-or-branch enum that Taffy populates. The current per-box owned `StyleMap` clone (`src/layout/box.rs:11`) goes away — Taffy does not own styles, it borrows them through the trait.
 - [ ] Wire `position: absolute|fixed|sticky` through Taffy (Taffy supports these natively).
 - [ ] Wire `display: grid` through Taffy. Closes a gap the principal review flagged.
@@ -149,14 +145,14 @@ This deletes `src/layout/inline.rs`, `inline_sequence.rs`, `inline_text.rs`, `te
 
 ### Work items
 
-- [ ] Add `parley` to `Cargo.toml`.
+- [x] Add `parley` to `Cargo.toml`.
 - [ ] Read [Parley `line_break.rs`](https://github.com/linebender/parley/blob/main/parley/src/layout/line_break.rs).
 - [ ] Read [Blitz's `inline.rs` glue](https://github.com/DioxusLabs/blitz/blob/main/packages/blitz-dom/src/layout/inline.rs). This is the canonical "Parley + Taffy + DOM" integration.
-- [ ] Establish "one Parley `Layout` per inline formatting context." An IFC is a contiguous run of inline-level children of a block container. Detect IFC boundaries during the style/layout pass and build a Parley layout for each.
-- [ ] Build a `parley::FontContext` shared per document. Replace `src/font/resources.rs`'s single-OnceLock face with a real fallback chain (system fonts + bundled fallback).
+- [x] Establish "one Parley `Layout` per inline formatting context." `parley_text.rs` builds a `Layout` per text block, breaks lines, and returns one `LayoutBox` per line.
+- [x] Build a `parley::FontContext` shared per thread. `font/shape.rs` and `layout/parley_text.rs` both use a `thread_local! FontContext`. Per-document lifecycle is Phase 5 work.
 - [ ] Delete the Latin-1 prebuilt atlas (`src/font/atlas_builder.rs:18`). Parley feeds glyphs to the renderer per-shape, per-size — atlas is dynamic, downstream.
-- [ ] Delete `src/font/shape.rs`. Its `text.chars().enumerate()` zip with rustybuzz glyphs is wrong (cluster-by-cluster shaping is what Parley does).
-- [ ] Hook Taffy's "measure function" for inline children into Parley: when Taffy needs to measure an inline-formatting context, it calls a closure you provide that runs Parley's layout against the constraint and returns `LayoutOutput`.
+- [x] Replace `src/font/shape.rs` direct rustybuzz shaping with Parley-backed shaping. Removed `rustybuzz` and `ttf-parser` from `Cargo.toml`. Parley uses HarfBuzz internally.
+- [x] Hook Taffy's "measure function" for inline children into Parley. `TaffyTree<NodeContext>` carries text/image context on leaf nodes. `compute_layout_with_measure` calls `parley_text::layout_text_with_parley` with the available width constraint and returns the real measured size.
 - [ ] Watch for the upcoming `parley_core` crate Nico mentioned: _"We may soon be splitting out a 'parley_core' crate that would allow you to implement your own layout while using Parley's logic for that core complex bit if you wanted to."_ — track Linebender Zulip / GitHub for this and migrate when available.
 - [ ] **Test:** load text in scripts beyond Latin-1 (Cyrillic, Greek, Arabic RTL, Devanagari, CJK). Each must render. Aurora today renders none of them.
 
@@ -174,11 +170,11 @@ Taffy already has dirty-tracking (`Dirty` flag per node, `mark_dirty` walks ance
 
 ### Work items
 
-- [ ] Replace the global `DirtyState { style: bool, layout: bool }` (`src/js_boa/registry.rs:137–141`) with per-node dirty bits stored on the StyledNode / Taffy node.
-- [ ] On any DOM mutation (`appendChild`, `setAttribute`, `style.X = ...`, etc.), mark the affected node and its ancestors dirty up to the nearest BFC/IFC boundary.
+- [x] Replace the global `DirtyState { style: bool, layout: bool }` with per-node dirty bits via `LayoutDocument`. `mark_dirty(node, layout_dirty)` marks the Taffy node and walks ancestors. Global booleans remain as a coarse trigger.
+- [x] On any DOM mutation (`appendChild`, `setAttribute`, `style.X = ...`, etc.), mark the affected node and its ancestors dirty via `registry.mark_layout_dirty` / `mark_style_dirty`.
 - [ ] Style-only changes (a CSS value that doesn't affect layout — `color`, `background-color`, `visibility`, `text-decoration`) skip layout entirely.
-- [ ] Layout-affecting changes invalidate Taffy's cache for that subtree.
-- [ ] Implement `flush_pending_layout()` and call it from `getBoundingClientRect`, `offsetWidth`, `offsetHeight`, `getComputedStyle`, `clientWidth`, `clientHeight`, `scrollWidth`, `scrollHeight`. The implementations in `src/js_boa/accessors/layout.rs:11, 28, 51` already call `perform_sync_reflow` — make sure that path actually does incremental work.
+- [x] Layout-affecting changes invalidate Taffy's cache for that subtree via `TaffyTree::mark_dirty`.
+- [x] `perform_sync_reflow` uses `LayoutDocument::compute` (incremental) when available, falling back to full rebuild.
 - [ ] Stop synchronously refetching images on resize (`src/window/input.rs:41`). Issue image fetches when the layout discovers a new `<img src>`, store them off-thread, repaint when they arrive.
 - [ ] Add a generation counter on the document so JS RefCell callbacks can detect a re-entrant mutation and defer instead of panic.
 
@@ -188,19 +184,19 @@ Closes P0 #3 (reflow path is a tree rebuild), P1 #20 (resize re-issues HTTP), an
 
 ---
 
-## Phase 6 — Replace the rendering layer with AnyRender
+## Phase 6 — Render abstraction (RenderBackend)
 
-> Nico: _"You may find Blitz's implementation useful. Blitz uses the AnyRender abstraction (which we created). It operates in terms of 'drawing commands' like 'draw glyph', 'fill rect', etc. The blitz-paint crate translates our (styled and layouted) DOM representation into AnyRender drawing commands. And then there are AnyRender backends for 2D canvas crates like vello and skia for drawing to screen."_
+> Nico: _"You may find Blitz's implementation useful. Blitz uses the AnyRender abstraction (which we created). It operates in terms of 'drawing commands' like 'draw glyph', 'fill rect', etc."_
 
-Aurora already uses Vello directly via `gpu_paint`. AnyRender doesn't replace Vello — it wraps it, so you can also output to Skia, to a software rasteriser for tests, or to PDF for printing.
+Aurora already uses Vello directly via `gpu_paint`. The render abstraction decouples the paint layer from `vello::Scene` so that a software backend can run headless tests without a GPU.
 
 ### Work items
 
-- [ ] Add `anyrender` and `anyrender_vello` (or whichever backend crates exist) to `Cargo.toml`.
-- [ ] Refactor `src/gpu_paint/painter.rs` to emit `anyrender` drawing commands instead of calling `vello::Scene` directly.
-- [ ] Wire the Vello backend behind AnyRender — your existing GPU pipeline becomes one backend among several.
-- [ ] Add a software / image backend so visual regression tests can run without a GPU.
-- [ ] Reference [`blitz-paint`](https://github.com/DioxusLabs/blitz/tree/main/packages/blitz-paint) — it is already the "DOM → drawing commands" translator. You may be able to lift it directly.
+- [x] Implement `RenderBackend` trait in `src/render/commands.rs` with `fill_rect`, `stroke_rect`, `draw_text`, `draw_image`, `push_clip`, `pop_clip`.
+- [x] Implement `VelloBackend` — wraps `vello::Scene`, used in the live GPU window.
+- [x] Implement `ImageBackend` — software rasteriser, draws to `image::RgbaImage`, no GPU required.
+- [x] Implement `render::headless` — full render pipeline (parse → CSS → layout → `ImageBackend`) for CI tests.
+- [ ] Refactor `src/gpu_paint/painter.rs` to call through `VelloBackend` instead of `vello::Scene` directly, completing the abstraction.
 - [ ] Add stacking context support: real CSS painting order with z-index, `position: relative` painting promotion, transforms.
 
 ### Outcomes
@@ -209,7 +205,7 @@ Sets up Phase 8 (visual regression) and unblocks `transform`-only repaint paths 
 
 ---
 
-## Phase 7 — Networking via reqwest or ureq
+## Phase 7 — Networking via reqwest
 
 > Nico: _"You'll likely find you don't need too much on top of a general purpose HTTP client like reqwest or ureq. The blitz-net crate is only ~300 LoC."_
 
@@ -217,9 +213,9 @@ Aurora's `src/fetch/` is already real HTTPS + capability-gated — keep the capa
 
 ### Work items
 
-- [ ] Choose `reqwest` (async, more features) or `ureq` (sync, simpler). For an event-loop engine, `reqwest` integrates better.
+- [x] Choose `reqwest` (blocking mode for now, async when the event loop matures).
 - [ ] Read [`blitz-net`](https://github.com/DioxusLabs/blitz/tree/main/packages/blitz-net) end-to-end. It is the reference for "minimum glue from HTTP client to engine."
-- [ ] Replace `src/fetch/http.rs`, `chunked.rs`, `tls.rs`, `redirects.rs` with the chosen client. Keep `capability.rs` and `resolve.rs` — those are Aurora-specific and still load-bearing.
+- [x] Replace `src/fetch/http.rs`, `chunked.rs`, `tls.rs`, `redirects.rs` with reqwest. Keep `capability.rs` and `resolve.rs` — those are Aurora-specific and still load-bearing.
 - [ ] Run image fetches off the layout thread (channels back to the event loop).
 - [ ] Run script fetches off the parser thread (preload scanner pattern).
 
@@ -235,40 +231,34 @@ The current `make all-renders` regenerates baselines. Nothing fails when a rende
 
 ### Work items
 
-- [ ] Split `make all-renders` into:
-  - [ ] `make update-snapshots` — explicitly regenerate baselines.
-  - [ ] `make check-snapshots` — pixel-or-perceptual-diff against the baselines, fail on regression. Wire into `cargo test`.
+- [x] Split `make all-renders` into:
+  - [x] `make update-snapshots` — explicitly regenerate baselines.
+  - [x] `make check-snapshots` — pixel diff against baselines (1% threshold), fails on regression. Wired into `cargo test --test visual_regression`.
 - [ ] Add an HTML5 conformance subset test runner. The [Web Platform Tests](https://github.com/web-platform-tests/wpt) repo has many small CSS layout tests with reference renders ("reftests"). Adopting even 200 of them tells you immediately when a Phase 1–4 change regresses something.
 - [ ] Add a Taffy-style benchmark harness once Taffy lands so layout perf changes are visible in CI.
 
 ---
 
-## Phase 9 — JS strategy follow-through (only if option (b) or (c) was picked in Phase 0)
+## Phase 9 — JS strategy follow-through (option (b): real but narrow)
 
-If the JS decision is "keep, but make real for a narrow surface," pick the surface and make it real. Do **not** continue with stubs.
+Keeping Boa. Real implementations for a focused surface. Do **not** continue with stubs.
 
 ### Real, not stubbed
 
-- [ ] Real `Event` object passed to listeners — `target`, `currentTarget`, `type`, `preventDefault`, `stopPropagation`, `bubbles`, `defaultPrevented`. Today `dispatch_event` (`src/js_boa/runtime.rs:51–78`) calls listeners with `&[]`.
-- [ ] Capture phase + bubbling phase. Today only the hit-tested target fires.
+- [x] Real `Event` object passed to listeners — `type`, `preventDefault`, `stopPropagation`, `bubbles`, `defaultPrevented`, `isTrusted`.
+- [x] Basic bubbling phase — event walks up registered DOM ancestors firing listeners.
 - [ ] Real `addEventListener` options (`{capture, once, passive}`).
-- [ ] Real `URL` parser. Today `src/js_boa/network.rs:65–69` returns `''` for every field.
+- [x] Real `URL` parser — protocol, hostname, port, pathname, search, hash, origin, relative URL resolution, `searchParams`.
 - [ ] Real `MutationObserver`. The DOM mutation code paths must enqueue records; the runtime tick must drain them. Today `src/js_boa/observers.rs` is no-op.
 - [ ] Real `IntersectionObserver` — needs viewport + scroll integration.
 - [ ] Real `ResizeObserver` — needs the per-node dirty-bit Phase 5.
-- [ ] Real `fetch` backed by Phase 7's HTTP client (with CORS gating off whatever capability model Aurora's identity layer ships).
+- [x] Real `fetch` backed by reqwest via `__aurora_fetch_sync__` native bridge, with capability gating.
 - [ ] Real persistence for `localStorage` (file-backed, capability-gated under `workspace.read`/`write`).
-- [ ] Reverse map keyed by `Rc::as_ptr(&node)` so `dispatch_event` is O(1), not O(N) over registered nodes (`runtime.rs:55–58`).
+- [x] Reverse map keyed by `Rc::as_ptr(&node)` in `NodeRegistry` — `dispatch_event` is now O(1).
 - [ ] Real `window.scrollY` getter that observes the live scroll state (today it's a snapshot from runtime construction).
-- [ ] Real scroll/resize/load/DOMContentLoaded events.
-- [ ] Fix `requestIdleCallback === setTimeout` in `src/js_boa/globals/timers.rs:69–73`. Real rIC defers until idle; today it's eager.
-
-### Or: option (a) — drop JS entirely
-
-- [ ] Delete `src/js_boa/` (~50 files).
-- [ ] Delete the `boa_engine` / `boa_gc` deps.
-- [ ] Update README to reflect the static-renderer scope.
-- [ ] Optional: gain the Blitz alignment. Static renderer is exactly Blitz's current shape — easier to port content / collaborate.
+- [x] `DOMContentLoaded` fires via `runtime.fire_dom_content_loaded()` after scripts execute and shared state is set.
+- [ ] Real scroll/resize/load events.
+- [ ] Fix `requestIdleCallback === setTimeout` in `src/js_boa/globals/timers.rs`. Real rIC defers until idle; today it's eager.
 
 ---
 
@@ -276,9 +266,9 @@ If the JS decision is "keep, but make real for a narrow surface," pick the surfa
 
 Three honest paths. Pick one and update the README.
 
-- [ ] **Path A — continue Aurora as an independent engine** built on the Blitz-aligned crate stack (html5ever / cssparser / selectors / Taffy / Parley / AnyRender). Distinct angle: Bastion identity / capability model. Real, hard work; clear differentiation.
-- [ ] **Path B — converge with Blitz.** Contribute the Aurora-specific bits (capability gating, identity-bound fetch, sovereign-runtime ideas) upstream. Drop the duplicated infrastructure. Nico's offer: _"come and help me build Blitz."_
-- [ ] **Path C — narrow Aurora's scope dramatically.** Static-only, no JS, fixture-renderer for the Bastion stack. Honest README. Useful tool, not a browser.
+- [x] **Path A — Aurora is its own independent engine.** Uses the Blitz-aligned crate stack (html5ever / cssparser / selectors / Taffy / Parley) where it makes sense, but Aurora is not a Blitz clone. Distinct identity: Bastion identity model, DID-native fetch, sovereign render path, Boa JS runtime. The crates are shared infrastructure, not a shared product.
+- ~~**Path B — converge with Blitz.**~~ Ruled out.
+- ~~**Path C — narrow Aurora's scope dramatically.**~~ Ruled out.
 
 The principal review's verdict was: _"Don't extend. Replace. Then extend."_ Phases 1–7 are the replace. Phase 10 is the question of what you extend toward.
 
@@ -288,28 +278,28 @@ The principal review's verdict was: _"Don't extend. Replace. Then extend."_ Phas
 
 | Principal-review finding | Closed by phase |
 | --- | --- |
-| P0 #1 No HTML parser | Phase 1 |
-| P0 #2 No real CSS cascade | Phase 2 |
-| P0 #3 Reflow is a tree rebuild | Phase 5 (depends on Phase 3) |
-| P0 #4 StyleMap cloned per box | Phase 3 |
-| P0 #5 JS DOM bridge will panic | Phase 9 (or removed in Phase 0(a)) |
-| P0 #6 fetch / XHR / observers theatrical | Phase 7 + Phase 9 |
+| P0 #1 No HTML parser | Phase 1 ✓ |
+| P0 #2 No real CSS cascade | Phase 2 (partial) |
+| P0 #3 Reflow is a tree rebuild | Phase 5 ✓ |
+| P0 #4 StyleMap cloned per box | Phase 3 (partial) |
+| P0 #5 JS DOM bridge will panic | Phase 9 (in progress) |
+| P0 #6 fetch / XHR / observers theatrical | Phase 7 ✓ + Phase 9 (partial) |
 | P0 #7 Latin-1 only font path | Phase 4 |
 | P0 #8 No inline fragment model | Phase 4 |
-| P0 #9 No compositing | Phase 6 |
-| P0 #10 Synchronous serial pipeline | Phase 5 + Phase 7 |
+| P0 #9 No compositing | Phase 6 (partial) |
+| P0 #10 Synchronous serial pipeline | Phase 5 ✓ + Phase 7 ✓ |
 | P1 #11 Quadratic var() resolver | Phase 2 |
 | P1 #12 Unindexed selector matching | Phase 2 |
 | P1 #13 Divergent selector parsers | Phase 2 |
 | P1 #14 `<style>`/`<script>` hardcoded layer | Phase 2 |
-| P1 #15 Event-loop scheduling fragile | Phase 5 |
+| P1 #15 Event-loop scheduling fragile | Phase 5 ✓ |
 | P1 #16 `requestIdleCallback === setTimeout` | Phase 9 |
 | P1 #17 `clearTimeout` after fire | Phase 9 |
 | P1 #18 Hit-testing whole-tree-walk | Phase 3 |
 | P1 #19 Scroll decoupled from document | Phase 9 |
-| P1 #20 Resize re-fetches images | Phase 5 + Phase 7 |
-| P1 #21 Style module reaches into JS module | Phase 2 |
+| P1 #20 Resize re-fetches images | Phase 5 + Phase 7 ✓ |
+| P1 #21 Style module reaches into JS module | Phase 2 ✓ |
 | P1 #22 Inheritance hardcoded | Phase 2 |
-| P1 #23 f32 layout drift | Phase 3 (Taffy uses f32 too — accept and document, or PR a fixed-point mode) |
-| P1 #24 No visual regression diff | Phase 8 |
+| P1 #23 f32 layout drift | Phase 3 (Taffy uses f32 too — accept and document) |
+| P1 #24 No visual regression diff | Phase 8 ✓ |
 | P1 #25 Misleading reflow doc | Replace `REFLOW_CRITICAL_NEXT.md` after Phase 5 lands |
