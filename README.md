@@ -4,17 +4,15 @@ A from-scratch Rust browser engine with GPU rendering, HTTPS fetch, and an embed
 
 Aurora is not Servo, Chromium, WebKit, or a wrapper around an existing browser. It is an experimental browser engine written in Rust as part of the broader Bastion sovereign stack.
 
-## Actual Render
+## Rendering Test 
 
-![Actual render](https://github.com/user-attachments/assets/647ddace-cbdc-4ed9-9e5b-bf45a2dad9fa)
+<img width="1443" height="1071" alt="image" src="https://github.com/user-attachments/assets/78d0e1b5-d0ca-4588-8772-8ded2d3a93c2" />
 
 ## Mockup
 
 ![Mockup](https://github.com/user-attachments/assets/7c9210f4-d161-4404-946d-36869cecd1f2)
 
-## Rendering Test 
 
-<img width="1443" height="1071" alt="image" src="https://github.com/user-attachments/assets/78d0e1b5-d0ca-4588-8772-8ded2d3a93c2" />
 
 ## Current Scope
 
