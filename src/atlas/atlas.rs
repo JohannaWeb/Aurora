@@ -72,7 +72,7 @@ impl GlyphAtlas {
         self.glyphs.get(&ch).copied()
     }
 
-    /// Get reference to all glyphs.
+    #[allow(dead_code)]
     pub fn glyphs(&self) -> &HashMap<char, GlyphMetrics> {
         &self.glyphs
     }

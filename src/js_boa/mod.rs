@@ -1,4 +1,5 @@
 //! Boa JavaScript runtime with an expanded DOM/BOM bridge.
+#![allow(dead_code, unused_imports, unused_variables)]
 
 use crate::dom::{ElementNode, Node, NodePtr};
 

@@ -7,7 +7,29 @@
 > Philosophy (Nico's, adopted): _"If there's a crate that implements a subsystem in a way that can be used standalone then we'll use it. But we'll also extend it / contribute to it / treat it like part of our engine rather than treating it like a black box. If there's not then we'll build our own."_
 
 ---
-F
+
+## Current status (May 2026)
+
+**Strategic direction — decided:** Aurora continues as an **independent engine** (Phase 10, Path A). Bastion identity / capability-gated fetch is the differentiator; Blitz crates are reference and dependencies, not a merge target.
+
+**JS — decided:** Option **(b)** — Boa with a real DOM bridge; APIs are real or absent, not theatrical stubs long-term. Foundation is in place (`src/js_boa/`, ~50 modules); Phase 9 is polish and spec completeness.
+
+| Phase | Status | Notes |
+| --- | --- | --- |
+| 0 | Ongoing | Reference reading optional; decisions locked |
+| 1 | **Done** | html5ever + TreeSink |
+| 2 | **In progress** | cssparser in; selectors crate not wired to DOM |
+| 3 | **In progress** | Taffy handles block/flex/grid + margin/padding/border/sizing; legacy only for inline, replaced elements, margin collapse |
+| 4 | **Started** | `parley` dep + `parley_text.rs` scaffold; not wired into layout |
+| 5 | **Not started** | Global `DirtyState`, full tree rebuild on reflow |
+| 6 | **Not started** | Direct Vello / `gpu_paint` |
+| 7 | **Mostly done** | reqwest + capabilities; off-thread fetches remain |
+| 8 | **Partial** | `visual_regression` + snapshot make targets; no WPT yet |
+| 9 | **Foundation done** | Boa/DOM/timers/rAF; events/observers/API polish open |
+| 10 | **Decided** | Path A — independent Aurora |
+
+---
+
 ## Phase 0 — Foundations and reference reading
 
 Before changing any code, internalise the prior art Nico pointed at. The whole plan below lifts the same crates Blitz uses; reading their codebases is the fastest path to "doing it the way it's done."
@@ -29,22 +51,20 @@ Before changing any code, internalise the prior art Nico pointed at. The whole p
 - [ ] Join the [Linebender Zulip](https://xi.zulipchat.com). Vello and Parley live there. _"A great place to learn about the nitty-gritty details of those things."_
 - [ ] Read Parley's [`line_break.rs`](https://github.com/linebender/parley/blob/main/parley/src/layout/line_break.rs) once. Hard but understandable; the itemisation/text-analysis/shaping layer beneath it is harder.
 
-### Decisions to lock in before Phase 1
+### Decisions — locked in
 
-- [ ] **JS strategy decision.** Pick one, write it down, stop pretending:
-  - (a) Drop JS entirely. Static renderer only. Honest and shippable. Closest to Blitz's current scope.
-  - (b) Real but narrow: a small set of APIs with real implementations, rest removed.
-  - (c) Full survival: every Web API real or absent. Years of work.
-  - **Recommendation:** start at (a) so the engine can be made correct, then bolt on (b) selectively when each subsystem (DOM, layout, fetch) is real enough to support a non-stub implementation.
-- [ ] Decide whether Aurora continues as its own engine, **or** whether the right move is contributing to Blitz directly. Nico explicitly invited it: _"Or even better, come and help me build Blitz!"_ — this is worth weighing before re-implementing every crate Blitz already integrates.
+- [x] **JS strategy: option (b).** Boa 0.19 + real DOM bindings (`src/js_boa/`). Grow the API surface deliberately; no theatrical stubs long-term. Not (a) static-only, not (c) full Web-platform survival yet.
+- [x] **Engine direction: Path A (see Phase 10).** Aurora stays its own engine. Use Blitz/Taffy/Parley/html5ever as crates and reference code; do not converge into Blitz upstream.
 
 ---
 
-## Phase 1 — Replace the HTML parser with `html5ever`
+## Phase 1 — Replace the HTML parser with `html5ever` ✅
 
 > Nico: _"For parsing you should definitely look into html5ever. It has a tokenizer and a 'tree builder' (that fixes up the tree according the rules of the html5ever algorithm, and it pushes parsed content into a user-defined tree structure!"_
 
-This deletes `src/html/` (~5 files, ~400 LoC of fragile state machine) and replaces it with a spec-compliant parser that already handles foster parenting, formatting elements, foreign content, RAWTEXT/RCDATA, DOCTYPE quirks mode, error recovery, and template/iframe content.
+**Status: complete.** `src/html/` is `parser.rs` + `mod.rs` + tests on html5ever `TreeSink`.
+
+This deleted the hand-rolled tokenizer/state machine and replaced it with a spec-compliant parser that handles foster parenting, formatting elements, foreign content, RAWTEXT/RCDATA, DOCTYPE quirks mode, error recovery, and template/iframe content.
 
 ### Work items
 
@@ -68,7 +88,9 @@ Eliminates P0 #1 from the principal review. Closes the "DOCTYPE silently dropped
 > _"The selectors crate parses selectors, and can also resolve selectors against a user-defined tree."_
 > _"Several people have built full style systems (of varying complexity) on top of these crates."_
 
-This deletes `src/css/` selector parsing, `src/css/stylesheet.rs` rule splitter, the variable resolver, and the inline-style parser. It replaces them with [`cssparser`](https://crates.io/crates/cssparser) + [`selectors`](https://crates.io/crates/selectors), and a real cascade.
+**Status: ~half done.** cssparser-driven stylesheet + cascade improvements landed; `selectors::Element` bridge and indexed matching still open. Custom `src/css/selector.rs` and `js_boa/selectors/` coexist.
+
+This deletes `src/css/` hand-rolled selector parsing, the `split('}')` rule splitter, and the inline-style-in-JS direction. Target: [`cssparser`](https://crates.io/crates/cssparser) + [`selectors`](https://crates.io/crates/selectors) for both cascade and `querySelector*`.
 
 ### Choose your reference style system
 
@@ -108,9 +130,17 @@ Closes P0 #2 of the review. Closes P1 #11 (quadratic `var()`), P1 #12 (unindexed
 
 This deletes `src/layout/block.rs`, `src/layout/flex/*`, `src/layout/construct.rs`, `src/layout/constraints.rs`, `src/layout/box.rs` (rect-only retained), and replaces them with Taffy. CSS Grid, which Aurora has not started, lands for free.
 
+**Status:** `layout/engine.rs` routes each layout pass to Taffy or legacy. Taffy now covers margin, padding, border, explicit width/height, min/max, and `vh`/`vw` (content-box → border-box expansion in `taffy_adapter`). Legacy remains for inline layout, replaced elements (img/input/…), and margin collapse between block siblings. Legacy `block.rs`, `flex/*`, `construct.rs` still present.
+
 ### Work items
 
 - [x] Add `taffy` to `Cargo.toml`.
+- [x] Wire layout entry point (`tree.rs` → `engine.rs` → Taffy or legacy).
+- [x] Fix Taffy tree build for document nodes, `display: none`, and skipped children in conversion.
+- [x] Viewport-aware `style_to_taffy_with_viewport` (`vh`/`vw` units resolve correctly).
+- [x] Content-box sizing: expand authored width/height/min/max for Taffy border-box layout.
+- [x] Text intrinsic sizing via `font::measure_text` (no stretch-to-fill parent).
+- [x] `BLOCK_VERTICAL_PADDING` slack for content-driven block height (matches legacy).
 - [ ] Read [Taffy's `LayoutInput` / `LayoutOutput`](https://github.com/DioxusLabs/taffy/blob/main/src/tree/layout.rs). _"I'd also encourage you to look at the LayoutInput and LayoutOutput types that form a key part of the interface that all of the layout algorithms conform to."_
 - [ ] Read each algorithm's entry function in turn:
   - [ ] [Flexbox](https://github.com/DioxusLabs/taffy/blob/main/src/compute/flexbox.rs#L166)
@@ -147,9 +177,11 @@ Closes P0 #4 (StyleMap-cloned-into-every-box), P0 #8 (no fragment-based inline �
 
 This deletes `src/layout/inline.rs`, `inline_sequence.rs`, `inline_text.rs`, `text_metrics.rs`, and most of `src/font/`. Parley owns shaping, line breaking, BiDi, font fallback, glyph clusters — all the things Aurora currently does wrong.
 
+**Status:** `parley` is in `Cargo.toml`; `parley_text.rs` is a partial scaffold (`layout_text_with_parley` is not called from the layout entry path). Legacy inline stack + rustybuzz path still drives production layout.
+
 ### Work items
 
-- [ ] Add `parley` to `Cargo.toml`.
+- [x] Add `parley` to `Cargo.toml`.
 - [ ] Read [Parley `line_break.rs`](https://github.com/linebender/parley/blob/main/parley/src/layout/line_break.rs).
 - [ ] Read [Blitz's `inline.rs` glue](https://github.com/DioxusLabs/blitz/blob/main/packages/blitz-dom/src/layout/inline.rs). This is the canonical "Parley + Taffy + DOM" integration.
 - [ ] Establish "one Parley `Layout` per inline formatting context." An IFC is a contiguous run of inline-level children of a block container. Detect IFC boundaries during the style/layout pass and build a Parley layout for each.
@@ -215,11 +247,13 @@ Sets up Phase 8 (visual regression) and unblocks `transform`-only repaint paths 
 
 Aurora's `src/fetch/` is already real HTTPS + capability-gated — keep the capability layer, replace the bespoke HTTP transport.
 
+**Status:** Hand-rolled `chunked.rs`, `tls.rs`, `redirects.rs` are gone. `src/fetch/http.rs` is thin reqwest blocking + rustls; `capability.rs`, `resolve.rs`, `data_url.rs` retained. Compression (`gzip`, `deflate`, `brotli`) enabled on reqwest.
+
 ### Work items
 
-- [ ] Choose `reqwest` (async, more features) or `ureq` (sync, simpler). For an event-loop engine, `reqwest` integrates better.
+- [x] Choose **`reqwest`** (blocking + rustls; `default-features = false`).
 - [ ] Read [`blitz-net`](https://github.com/DioxusLabs/blitz/tree/main/packages/blitz-net) end-to-end. It is the reference for "minimum glue from HTTP client to engine."
-- [ ] Replace `src/fetch/http.rs`, `chunked.rs`, `tls.rs`, `redirects.rs` with the chosen client. Keep `capability.rs` and `resolve.rs` — those are Aurora-specific and still load-bearing.
+- [x] Replace bespoke HTTP transport with reqwest. `src/fetch/` is now: `api.rs`, `capability.rs`, `data_url.rs`, `errors.rs`, `http.rs`, `resolve.rs`, `url.rs`.
 - [ ] Run image fetches off the layout thread (channels back to the event loop).
 - [ ] Run script fetches off the parser thread (preload scanner pattern).
 
@@ -231,26 +265,37 @@ Closes the synchronous-fetch-on-main-thread issues throughout the principal revi
 
 ## Phase 8 — Testing and CI: visual regression that actually gates
 
-The current `make all-renders` regenerates baselines. Nothing fails when a render changes.
+`tests/visual_regression.rs` pixel-diffs fixtures against `tests/screenshots/*.png` (1% threshold, per-channel tolerance 8). `make all-renders` still regenerates PNGs for manual fixtures; gating is via the test harness.
 
 ### Work items
 
-- [ ] Split `make all-renders` into:
-  - [ ] `make update-snapshots` — explicitly regenerate baselines.
-  - [ ] `make check-snapshots` — pixel-or-perceptual-diff against the baselines, fail on regression. Wire into `cargo test`.
+- [x] `make update-snapshots` — `UPDATE_SNAPSHOTS=1 cargo test --test visual_regression`.
+- [x] `make check-snapshots` — `cargo test --test visual_regression` (fails on regression).
+- [x] `make all-renders` — retained for regenerating fixture PNGs (google-homepage, demo, reflow fixtures, etc.).
 - [ ] Add an HTML5 conformance subset test runner. The [Web Platform Tests](https://github.com/web-platform-tests/wpt) repo has many small CSS layout tests with reference renders ("reftests"). Adopting even 200 of them tells you immediately when a Phase 1–4 change regresses something.
-- [ ] Add a Taffy-style benchmark harness once Taffy lands so layout perf changes are visible in CI.
+- [ ] Add a Taffy-style benchmark harness once Taffy is the layout entry point so perf changes are visible in CI.
 
 ---
 
-## Phase 9 — JS strategy follow-through (only if option (b) or (c) was picked in Phase 0)
+## Phase 9 — JS strategy follow-through (option (b))
 
-If the JS decision is "keep, but make real for a narrow surface," pick the surface and make it real. Do **not** continue with stubs.
+Foundation is shipped; remaining work is spec completeness and removing stubs. Do **not** add new theatrical APIs.
 
-### Real, not stubbed
+### Foundation in place (done)
 
-- [ ] Real `Event` object passed to listeners — `target`, `currentTarget`, `type`, `preventDefault`, `stopPropagation`, `bubbles`, `defaultPrevented`. Today `dispatch_event` (`src/js_boa/runtime.rs:51–78`) calls listeners with `&[]`.
-- [ ] Capture phase + bubbling phase. Today only the hit-tested target fires.
+- [x] Boa 0.19 runtime (`BoaRuntime`, `NodeRegistry`, `execute`, script load from DOM).
+- [x] DOM constructors and accessors (`createElement`, `appendChild`, `setAttribute`, style properties, layout accessors).
+- [x] Globals: `window`, `document`, `navigator`, `location` (partial).
+- [x] Timers: `setTimeout`, `setInterval`, `clearTimeout`, `clearInterval`.
+- [x] `requestAnimationFrame` + drain in window event loop (`window/app.rs`).
+- [x] XHR / fetch polyfills on capability-gated `crate::fetch` (`js_boa/network.rs`).
+- [x] Dirty-bit reflow path + `perform_sync_reflow` from layout accessors (`registry.rs`, `accessors/layout.rs`).
+- [x] `querySelector` / `querySelectorAll` (custom selector path in `js_boa/selectors/` — unify in Phase 2).
+
+### Real, not stubbed (remaining)
+
+- [ ] Complete `Event` objects — `type`, `bubbles`, `preventDefault`, `defaultPrevented` exist; **`target` / `currentTarget` still proxy via `_targetId`**, not real DOM nodes (`runtime.rs:102–119`).
+- [ ] Capture phase (bubbling exists but parent walk is O(N); no capture listeners).
 - [ ] Real `addEventListener` options (`{capture, once, passive}`).
 - [ ] Real `URL` parser. Today `src/js_boa/network.rs:65–69` returns `''` for every field.
 - [ ] Real `MutationObserver`. The DOM mutation code paths must enqueue records; the runtime tick must drain them. Today `src/js_boa/observers.rs` is no-op.
@@ -263,24 +308,21 @@ If the JS decision is "keep, but make real for a narrow surface," pick the surfa
 - [ ] Real scroll/resize/load/DOMContentLoaded events.
 - [ ] Fix `requestIdleCallback === setTimeout` in `src/js_boa/globals/timers.rs:69–73`. Real rIC defers until idle; today it's eager.
 
-### Or: option (a) — drop JS entirely
+### Declined: option (a) — drop JS
 
-- [ ] Delete `src/js_boa/` (~50 files).
-- [ ] Delete the `boa_engine` / `boa_gc` deps.
-- [ ] Update README to reflect the static-renderer scope.
-- [ ] Optional: gain the Blitz alignment. Static renderer is exactly Blitz's current shape — easier to port content / collaborate.
+Not pursuing. Aurora is a browser with JS, not a static renderer.
 
 ---
 
-## Phase 10 — Decide where Aurora goes
+## Phase 10 — Strategic direction (**decided**)
 
-Three honest paths. Pick one and update the README.
+**Path A — Aurora stays independent.** Built on the Blitz-*aligned* crate stack (html5ever, cssparser, selectors, Taffy, Parley, eventually AnyRender) but as its own engine under the Bastion umbrella. Differentiation: Opus identity, capability-gated fetch, sovereign-runtime integration.
 
-- [ ] **Path A — continue Aurora as an independent engine** built on the Blitz-aligned crate stack (html5ever / cssparser / selectors / Taffy / Parley / AnyRender). Distinct angle: Bastion identity / capability model. Real, hard work; clear differentiation.
-- [ ] **Path B — converge with Blitz.** Contribute the Aurora-specific bits (capability gating, identity-bound fetch, sovereign-runtime ideas) upstream. Drop the duplicated infrastructure. Nico's offer: _"come and help me build Blitz."_
-- [ ] **Path C — narrow Aurora's scope dramatically.** Static-only, no JS, fixture-renderer for the Bastion stack. Honest README. Useful tool, not a browser.
+- [x] **Path A — independent Aurora engine** (this document, README, and repo all assume this).
+- [ ] ~~Path B — converge with Blitz~~ — declined. Use Blitz as reference; contribute upstream only opportunistically, not as a merge strategy.
+- [ ] ~~Path C — static-only~~ — declined. JS via Boa is core.
 
-The principal review's verdict was: _"Don't extend. Replace. Then extend."_ Phases 1–7 are the replace. Phase 10 is the question of what you extend toward.
+The principal review's verdict was: _"Don't extend. Replace. Then extend."_ Phases 1–7 are the replace. **Extend toward:** a capable standalone browser with Bastion capabilities, not Blitz parity or static-only scope.
 
 ---
 
@@ -311,5 +353,5 @@ The principal review's verdict was: _"Don't extend. Replace. Then extend."_ Phas
 | P1 #21 Style module reaches into JS module | Phase 2 |
 | P1 #22 Inheritance hardcoded | Phase 2 |
 | P1 #23 f32 layout drift | Phase 3 (Taffy uses f32 too — accept and document, or PR a fixed-point mode) |
-| P1 #24 No visual regression diff | Phase 8 |
+| P1 #24 No visual regression diff | Phase 8 (partial — `visual_regression` test; WPT open) |
 | P1 #25 Misleading reflow doc | Replace `REFLOW_CRITICAL_NEXT.md` after Phase 5 lands |

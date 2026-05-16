@@ -1,8 +1,9 @@
+#![allow(dead_code, unused_imports)]
+
 use std::collections::HashMap;
 use std::rc::Rc;
 use taffy::prelude::*;
 
-use crate::css::Stylesheet;
 use crate::dom::NodePtr;
 use crate::style::StyleTree;
 

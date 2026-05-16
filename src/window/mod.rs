@@ -1,4 +1,5 @@
 //! Window and screenshot rendering.
+#![allow(dead_code, unused_imports, unused_variables)]
 
 mod app;
 mod app_handler;

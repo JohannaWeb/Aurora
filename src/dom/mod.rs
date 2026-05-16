@@ -4,6 +4,5 @@
 
 mod display;
 mod node;
-mod ops;
 
 pub use node::{DocumentMode, ElementNode, Node, NodePtr};

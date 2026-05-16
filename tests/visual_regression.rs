@@ -3,7 +3,7 @@
 //! Run:  cargo test --test visual_regression
 //! Update baselines: UPDATE_SNAPSHOTS=1 cargo test --test visual_regression
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use image::RgbaImage;
 
 /// Max allowed pixel diff ratio before a test fails (1%).

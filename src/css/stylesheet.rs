@@ -92,6 +92,7 @@ impl Stylesheet {
         styles
     }
 
+    #[allow(dead_code)]
     pub(crate) fn inline_styles(&self, declarations: &[Declaration]) -> StyleMap {
         let mut styles = StyleMap::default();
         for declaration in declarations {

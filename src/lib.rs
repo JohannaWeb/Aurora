@@ -2,7 +2,7 @@
 
 pub mod render;
 
-// Re-export modules needed by integration tests.
+// Re-export modules needed by integration tests and the shared runner pipeline.
 pub(crate) mod atlas;
 pub(crate) mod css;
 pub(crate) mod dom;
@@ -12,9 +12,8 @@ pub(crate) mod gpu_paint;
 pub(crate) mod html;
 pub(crate) mod js_boa;
 pub(crate) mod layout;
-pub(crate) mod paint;
 pub(crate) mod runner;
 pub(crate) mod style;
 pub(crate) mod window;
 
-pub(crate) use runner::{load_images, ImageCache};
+pub(crate) use runner::{ImageCache, load_images};
