@@ -13,6 +13,3 @@ pub fn get_atlas_texture() -> (&'static [u8], u32, u32) {
     (&atlas.texture, atlas.width, atlas.height)
 }
 
-pub fn get_glyph(_ch: char) -> &'static [u8; 8] {
-    &[0; 8]
-}

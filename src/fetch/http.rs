@@ -2,7 +2,7 @@
 //! Replaces the hand-rolled TLS + chunked + redirect stack.
 
 use reqwest::blocking::Client;
-use reqwest::header::{ACCEPT, ACCEPT_ENCODING, USER_AGENT};
+use reqwest::header::{ACCEPT, USER_AGENT};
 
 use super::FetchError;
 
@@ -24,7 +24,6 @@ pub fn fetch_bytes(url: &str) -> Result<Vec<u8>, FetchError> {
         .get(url)
         .header(USER_AGENT, USER_AGENT_STR)
         .header(ACCEPT, "text/html, text/css, */*")
-        .header(ACCEPT_ENCODING, "gzip, identity")
         .send()
         .map_err(|e| FetchError::Network(e.to_string()))?;
 

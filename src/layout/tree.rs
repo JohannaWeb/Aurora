@@ -1,6 +1,7 @@
 use crate::style::StyleTree;
 
 use super::constants::{DEFAULT_VIEWPORT_HEIGHT, DEFAULT_VIEWPORT_WIDTH};
+use super::engine::layout_root_from_style_tree;
 use super::LayoutBox;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -34,8 +35,7 @@ impl LayoutTree {
     }
 
     pub fn from_style_tree_with_viewport(style_tree: &StyleTree, viewport: ViewportSize) -> Self {
-        let root = LayoutBox::layout_root(style_tree.root(), viewport)
-            .expect("layout root must produce a box");
+        let root = layout_root_from_style_tree(style_tree, viewport);
         Self { root }
     }
 

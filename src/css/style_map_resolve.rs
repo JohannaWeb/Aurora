@@ -3,6 +3,7 @@ use std::collections::BTreeMap;
 use super::length::parse_length_value;
 use super::StyleMap;
 
+#[allow(dead_code)]
 impl StyleMap {
     pub fn width_resolved(
         &self,
@@ -98,6 +99,7 @@ impl StyleMap {
             .map(|lv| lv.to_px(parent_font_size, parent_font_size, root_font_size, 0.0, 0.0))
     }
 
+    #[allow(dead_code)]
     pub fn font_weight(&self) -> &str {
         self.get("font-weight").unwrap_or("normal")
     }

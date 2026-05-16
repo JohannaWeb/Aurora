@@ -41,6 +41,7 @@ pub(in crate::layout) enum LayoutKind {
 }
 
 impl LayoutBox {
+    #[allow(dead_code)]
     pub fn node(&self) -> Option<crate::dom::NodePtr> {
         self.node.clone()
     }
@@ -73,6 +74,7 @@ impl LayoutBox {
         }
     }
 
+    #[allow(dead_code)]
     pub fn padding_rect(&self) -> Rect {
         Rect {
             x: self.rect.x + self.border.left,
@@ -90,6 +92,7 @@ impl LayoutBox {
         &self.children
     }
 
+    #[allow(dead_code)]
     pub fn tag_name(&self) -> Option<&str> {
         match &self.kind {
             LayoutKind::Block { tag_name }
@@ -111,6 +114,7 @@ impl LayoutBox {
         matches!(self.kind, LayoutKind::Viewport)
     }
 
+    #[allow(dead_code)]
     pub fn image_alt(&self) -> Option<&str> {
         match &self.kind {
             LayoutKind::Image { alt, .. } => alt.as_deref(),
@@ -129,6 +133,7 @@ impl LayoutBox {
         matches!(self.kind, LayoutKind::Image { .. })
     }
 
+    #[allow(dead_code)]
     pub fn is_control(&self) -> bool {
         matches!(self.kind, LayoutKind::Control { .. })
     }

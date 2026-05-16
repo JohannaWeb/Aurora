@@ -1,25 +1,38 @@
-use crate::css::{AlignItems, DisplayMode, FlexDirection, JustifyContent, MarginValue, StyleMap};
+use crate::css::{
+    parse_length_value, AlignItems, BoxSizing, DisplayMode, FlexDirection, JustifyContent,
+    LengthValue, MarginValue, StyleMap,
+};
 use taffy::prelude::{
     AlignContent as TaffyAlignContent, AlignItems as TaffyAlignItems, Dimension,
     Display as TaffyDisplay, FlexDirection as TaffyFlexDirection, FlexWrap, LengthPercentage,
     LengthPercentageAuto, Position, Rect as TaffyRect, Size as TaffySize, Style as TaffyStyle,
 };
 
+use super::ViewportSize;
+
 pub fn style_to_taffy(styles: &StyleMap) -> TaffyStyle {
+    style_to_taffy_with_viewport(styles, ViewportSize {
+        width: 800.0,
+        height: 600.0,
+    })
+}
+
+pub fn style_to_taffy_with_viewport(styles: &StyleMap, viewport: ViewportSize) -> TaffyStyle {
+    let font_size = styles.font_size_px().unwrap_or(16.0);
     let mut taffy = TaffyStyle::default();
     taffy.display = taffy_display(styles.display_mode());
     taffy.position = taffy_position(styles.get("position"));
     taffy.size = TaffySize {
-        width: dimension(styles.get("width")),
-        height: dimension(styles.get("height")),
+        width: box_dimension(styles.get("width"), styles, viewport, font_size, true),
+        height: box_dimension(styles.get("height"), styles, viewport, font_size, false),
     };
     taffy.min_size = TaffySize {
-        width: dimension(styles.get("min-width")),
-        height: dimension(styles.get("min-height")),
+        width: box_dimension(styles.get("min-width"), styles, viewport, font_size, true),
+        height: box_dimension(styles.get("min-height"), styles, viewport, font_size, false),
     };
     taffy.max_size = TaffySize {
-        width: max_dimension(styles.get("max-width")),
-        height: max_dimension(styles.get("max-height")),
+        width: box_max_dimension(styles.get("max-width"), styles, viewport, font_size, true),
+        height: box_max_dimension(styles.get("max-height"), styles, viewport, font_size, false),
     };
     taffy.margin = taffy_margin(styles);
     taffy.padding = edge_lengths(styles.padding());
@@ -98,21 +111,61 @@ fn margin_value(value: MarginValue) -> LengthPercentageAuto {
     }
 }
 
-fn dimension(value: Option<&str>) -> Dimension {
+fn box_dimension(
+    value: Option<&str>,
+    styles: &StyleMap,
+    viewport: ViewportSize,
+    font_size: f32,
+    horizontal: bool,
+) -> Dimension {
+    let dim = dimension(value, viewport, font_size);
+    expand_for_content_box(dim, styles, horizontal)
+}
+
+fn box_max_dimension(
+    value: Option<&str>,
+    styles: &StyleMap,
+    viewport: ViewportSize,
+    font_size: f32,
+    horizontal: bool,
+) -> Dimension {
+    let dim = max_dimension(value, viewport, font_size);
+    expand_for_content_box(dim, styles, horizontal)
+}
+
+/// Aurora's default is `content-box`: authored width/height are content sizes; Taffy expects border-box.
+fn expand_for_content_box(dim: Dimension, styles: &StyleMap, horizontal: bool) -> Dimension {
+    if styles.box_sizing() != BoxSizing::ContentBox {
+        return dim;
+    }
+    let Dimension::Length(len) = dim else {
+        return dim;
+    };
+    let border = styles.border_width();
+    let padding = styles.padding();
+    let extra = if horizontal {
+        border.horizontal() + padding.horizontal()
+    } else {
+        border.vertical() + padding.vertical()
+    };
+    Dimension::Length(len + extra)
+}
+
+fn dimension(value: Option<&str>, viewport: ViewportSize, font_size: f32) -> Dimension {
     match value {
         Some("auto") | None => Dimension::Auto,
-        Some(value) => length_dimension(value).unwrap_or(Dimension::Auto),
+        Some(value) => length_dimension(value, viewport, font_size).unwrap_or(Dimension::Auto),
     }
 }
 
-fn max_dimension(value: Option<&str>) -> Dimension {
+fn max_dimension(value: Option<&str>, viewport: ViewportSize, font_size: f32) -> Dimension {
     match value {
         Some("none") | None => Dimension::Auto,
-        Some(value) => length_dimension(value).unwrap_or(Dimension::Auto),
+        Some(value) => length_dimension(value, viewport, font_size).unwrap_or(Dimension::Auto),
     }
 }
 
-fn length_dimension(value: &str) -> Option<Dimension> {
+fn length_dimension(value: &str, viewport: ViewportSize, font_size: f32) -> Option<Dimension> {
     let value = value.trim();
     if value == "0" {
         return Some(Dimension::Length(0.0));
@@ -127,7 +180,15 @@ fn length_dimension(value: &str) -> Option<Dimension> {
             .ok()
             .map(|value| Dimension::Percent(value / 100.0));
     }
-    None
+    parse_length_value(value).map(|length: LengthValue| {
+        Dimension::Length(length.to_px(
+            viewport.width,
+            font_size,
+            font_size,
+            viewport.width,
+            viewport.height,
+        ))
+    })
 }
 
 fn length_percentage(value: Option<&str>) -> Option<LengthPercentage> {

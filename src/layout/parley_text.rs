@@ -1,3 +1,5 @@
+#![allow(dead_code, unused_imports)]
+
 use parley::FontContext;
 
 use crate::css::StyleMap;

@@ -2,6 +2,7 @@ use std::fmt::{self, Display, Formatter};
 
 /// Error types that can occur during fetching.
 #[derive(Debug)]
+#[allow(dead_code)]
 pub enum FetchError {
     /// Unknown URL scheme.
     UnsupportedScheme(String),

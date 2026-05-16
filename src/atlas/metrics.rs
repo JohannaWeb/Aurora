@@ -3,6 +3,7 @@
 /// RUST FUNDAMENTAL: `Clone` and `Copy` allow easy duplication of this small
 /// stack-allocated type. `Debug` enables `{:?}` formatting.
 #[derive(Clone, Copy, Debug)]
+#[allow(dead_code)]
 pub struct GlyphMetrics {
     /// X coordinate of glyph in atlas texture (pixels from left).
     pub x: u32,

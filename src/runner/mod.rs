@@ -1,3 +1,5 @@
+#![allow(dead_code, unused_imports)]
+
 mod cli;
 mod fixtures;
 mod images;

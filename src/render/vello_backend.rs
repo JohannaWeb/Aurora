@@ -5,7 +5,6 @@ use vello::kurbo::{Affine, Rect as KRect};
 use vello::Scene;
 
 use super::commands::{BorderEdge, Bounds, RenderBackend, Rgba};
-use crate::font;
 
 pub struct VelloBackend<'a> {
     scene: &'a mut Scene,
@@ -92,7 +91,7 @@ impl<'a> RenderBackend for VelloBackend<'a> {
         pixels: &[u8],
         img_width: u32,
         img_height: u32,
-        opacity: f32,
+        _opacity: f32,
     ) {
         // Encode the RGBA pixel buffer as a Vello image and blit it.
         use peniko::{Blob, ImageAlphaType, ImageBrush, ImageData, ImageFormat};
