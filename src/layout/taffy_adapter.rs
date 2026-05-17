@@ -59,7 +59,7 @@ pub fn style_to_taffy_with_viewport(styles: &StyleMap, viewport: ViewportSize) -
         AlignItems::Center => TaffyAlignItems::Center,
         AlignItems::FlexEnd => TaffyAlignItems::FlexEnd,
     });
-    let gap = length_percentage(styles.get("gap")).unwrap_or(LengthPercentage::Length(0.0));
+    let gap = length_percentage(styles.get("gap")).unwrap_or(LengthPercentage::length(0.0));
     let column_gap = length_percentage(styles.get("column-gap")).unwrap_or(gap);
     let row_gap = length_percentage(styles.get("row-gap")).unwrap_or(gap);
     taffy.gap = TaffySize {
@@ -97,17 +97,17 @@ fn taffy_margin(styles: &StyleMap) -> TaffyRect<LengthPercentageAuto> {
 
 fn edge_lengths(edge: crate::css::EdgeSizes) -> TaffyRect<LengthPercentage> {
     TaffyRect {
-        left: LengthPercentage::Length(edge.left),
-        right: LengthPercentage::Length(edge.right),
-        top: LengthPercentage::Length(edge.top),
-        bottom: LengthPercentage::Length(edge.bottom),
+        left: LengthPercentage::length(edge.left),
+        right: LengthPercentage::length(edge.right),
+        top: LengthPercentage::length(edge.top),
+        bottom: LengthPercentage::length(edge.bottom),
     }
 }
 
 fn margin_value(value: MarginValue) -> LengthPercentageAuto {
     match value {
-        MarginValue::Px(px) => LengthPercentageAuto::Length(px),
-        MarginValue::Auto => LengthPercentageAuto::Auto,
+        MarginValue::Px(px) => LengthPercentageAuto::length(px),
+        MarginValue::Auto => LengthPercentageAuto::auto(),
     }
 }
 
@@ -138,9 +138,10 @@ fn expand_for_content_box(dim: Dimension, styles: &StyleMap, horizontal: bool) -
     if styles.box_sizing() != BoxSizing::ContentBox {
         return dim;
     }
-    let Dimension::Length(len) = dim else {
-        return dim;
-    };
+    if dim.is_auto() || dim.tag() != 1 {
+        return dim; // not a plain length — auto or percent, leave as-is
+    }
+    let len = dim.value();
     let border = styles.border_width();
     let padding = styles.padding();
     let extra = if horizontal {
@@ -148,40 +149,40 @@ fn expand_for_content_box(dim: Dimension, styles: &StyleMap, horizontal: bool) -
     } else {
         border.vertical() + padding.vertical()
     };
-    Dimension::Length(len + extra)
+    Dimension::length(len + extra)
 }
 
 fn dimension(value: Option<&str>, viewport: ViewportSize, font_size: f32) -> Dimension {
     match value {
-        Some("auto") | None => Dimension::Auto,
-        Some(value) => length_dimension(value, viewport, font_size).unwrap_or(Dimension::Auto),
+        Some("auto") | None => Dimension::auto(),
+        Some(value) => length_dimension(value, viewport, font_size).unwrap_or(Dimension::auto()),
     }
 }
 
 fn max_dimension(value: Option<&str>, viewport: ViewportSize, font_size: f32) -> Dimension {
     match value {
-        Some("none") | None => Dimension::Auto,
-        Some(value) => length_dimension(value, viewport, font_size).unwrap_or(Dimension::Auto),
+        Some("none") | None => Dimension::auto(),
+        Some(value) => length_dimension(value, viewport, font_size).unwrap_or(Dimension::auto()),
     }
 }
 
 fn length_dimension(value: &str, viewport: ViewportSize, font_size: f32) -> Option<Dimension> {
     let value = value.trim();
     if value == "0" {
-        return Some(Dimension::Length(0.0));
+        return Some(Dimension::length(0.0));
     }
     if let Some(px) = value.strip_suffix("px") {
-        return px.trim().parse::<f32>().ok().map(Dimension::Length);
+        return px.trim().parse::<f32>().ok().map(Dimension::length);
     }
     if let Some(percent) = value.strip_suffix('%') {
         return percent
             .trim()
             .parse::<f32>()
             .ok()
-            .map(|value| Dimension::Percent(value / 100.0));
+            .map(|value| Dimension::percent(value / 100.0));
     }
     parse_length_value(value).map(|length: LengthValue| {
-        Dimension::Length(length.to_px(
+        Dimension::length(length.to_px(
             viewport.width,
             font_size,
             font_size,
@@ -194,17 +195,17 @@ fn length_dimension(value: &str, viewport: ViewportSize, font_size: f32) -> Opti
 fn length_percentage(value: Option<&str>) -> Option<LengthPercentage> {
     let value = value?.trim();
     if value == "0" {
-        return Some(LengthPercentage::Length(0.0));
+        return Some(LengthPercentage::length(0.0));
     }
     if let Some(px) = value.strip_suffix("px") {
-        return px.trim().parse::<f32>().ok().map(LengthPercentage::Length);
+        return px.trim().parse::<f32>().ok().map(LengthPercentage::length);
     }
     if let Some(percent) = value.strip_suffix('%') {
         return percent
             .trim()
             .parse::<f32>()
             .ok()
-            .map(|value| LengthPercentage::Percent(value / 100.0));
+            .map(|value| LengthPercentage::percent(value / 100.0));
     }
     None
 }
@@ -229,8 +230,8 @@ mod tests {
         let taffy = style_to_taffy(&styles);
 
         assert_eq!(taffy.display, TaffyDisplay::Grid);
-        assert_eq!(taffy.size.width, Dimension::Percent(0.5));
-        assert_eq!(taffy.size.height, Dimension::Length(24.0));
-        assert_eq!(taffy.margin.left, LengthPercentageAuto::Auto);
+        assert_eq!(taffy.size.width, Dimension::percent(0.5));
+        assert_eq!(taffy.size.height, Dimension::length(24.0));
+        assert_eq!(taffy.margin.left, LengthPercentageAuto::auto());
     }
 }

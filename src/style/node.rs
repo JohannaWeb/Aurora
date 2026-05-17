@@ -141,37 +141,26 @@ fn apply_inherited_element_styles(styles: &mut StyleMap, inherited: &InheritedSt
     apply_if_missing(styles, "color", &inherited.color);
     apply_if_missing(styles, "font-size", &inherited.font_size);
     apply_if_missing(styles, "font-weight", &inherited.font_weight);
+    apply_if_missing(styles, "font-style", &inherited.font_style);
+    apply_if_missing(styles, "font-family", &inherited.font_family);
     apply_if_missing(styles, "line-height", &inherited.line_height);
-    apply_if_missing(styles, "visibility", &inherited.visibility);
+    apply_if_missing(styles, "text-align", &inherited.text_align);
     apply_if_missing(styles, "text-decoration", &inherited.text_decoration);
+    apply_if_missing(styles, "visibility", &inherited.visibility);
     apply_if_missing(styles, "white-space", &inherited.white_space);
 }
 
 fn apply_inherited_text_styles(styles: &mut StyleMap, inherited: &InheritedStyles) {
-    if let Some(color) = &inherited.color {
-        styles.set("color", color);
-    }
-    if let Some(font_size) = &inherited.font_size {
-        styles.set("font-size", font_size);
-    }
-    if let Some(font_weight) = &inherited.font_weight {
-        styles.set("font-weight", font_weight);
-    }
-    if let Some(line_height) = &inherited.line_height {
-        styles.set("line-height", line_height);
-    }
-    if let Some(visibility) = &inherited.visibility {
-        styles.set("visibility", visibility);
-    }
-    if let Some(text_decoration) = &inherited.text_decoration {
-        styles.set("text-decoration", text_decoration);
-    }
-    if let Some(font_style) = &inherited.font_style {
-        styles.set("font-style", font_style);
-    }
-    if let Some(white_space) = &inherited.white_space {
-        styles.set("white-space", white_space);
-    }
+    if let Some(v) = &inherited.color { styles.set("color", v); }
+    if let Some(v) = &inherited.font_size { styles.set("font-size", v); }
+    if let Some(v) = &inherited.font_weight { styles.set("font-weight", v); }
+    if let Some(v) = &inherited.font_style { styles.set("font-style", v); }
+    if let Some(v) = &inherited.font_family { styles.set("font-family", v); }
+    if let Some(v) = &inherited.line_height { styles.set("line-height", v); }
+    if let Some(v) = &inherited.text_align { styles.set("text-align", v); }
+    if let Some(v) = &inherited.text_decoration { styles.set("text-decoration", v); }
+    if let Some(v) = &inherited.visibility { styles.set("visibility", v); }
+    if let Some(v) = &inherited.white_space { styles.set("white-space", v); }
 }
 
 fn inherited_from_styles(styles: &StyleMap) -> InheritedStyles {
@@ -179,10 +168,12 @@ fn inherited_from_styles(styles: &StyleMap) -> InheritedStyles {
         color: styles.get("color").map(ToOwned::to_owned),
         font_size: styles.get("font-size").map(ToOwned::to_owned),
         font_weight: styles.get("font-weight").map(ToOwned::to_owned),
-        line_height: styles.get("line-height").map(ToOwned::to_owned),
-        visibility: styles.get("visibility").map(ToOwned::to_owned),
-        text_decoration: styles.get("text-decoration").map(ToOwned::to_owned),
         font_style: styles.get("font-style").map(ToOwned::to_owned),
+        font_family: styles.get("font-family").map(ToOwned::to_owned),
+        line_height: styles.get("line-height").map(ToOwned::to_owned),
+        text_align: styles.get("text-align").map(ToOwned::to_owned),
+        text_decoration: styles.get("text-decoration").map(ToOwned::to_owned),
+        visibility: styles.get("visibility").map(ToOwned::to_owned),
         white_space: styles.get("white-space").map(ToOwned::to_owned),
     }
 }

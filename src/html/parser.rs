@@ -115,6 +115,7 @@ impl AuroraTreeSink {
 impl TreeSink for AuroraTreeSink {
     type Handle = HtmlHandle;
     type Output = NodePtr;
+    type ElemName<'a> = ExpandedName<'a>;
 
     fn finish(self) -> Self::Output {
         if let Node::Document { mode, .. } = &mut *self.document.node.borrow_mut() {
@@ -124,9 +125,9 @@ impl TreeSink for AuroraTreeSink {
         self.document.node
     }
 
-    fn parse_error(&mut self, _msg: std::borrow::Cow<'static, str>) {}
+    fn parse_error(&self, _msg: std::borrow::Cow<'static, str>) {}
 
-    fn get_document(&mut self) -> Self::Handle {
+    fn get_document(&self) -> Self::Handle {
         self.document.clone()
     }
 
@@ -139,7 +140,7 @@ impl TreeSink for AuroraTreeSink {
     }
 
     fn create_element(
-        &mut self,
+        &self,
         name: QualName,
         attrs: Vec<Attribute>,
         _flags: ElementFlags,
@@ -162,25 +163,25 @@ impl TreeSink for AuroraTreeSink {
         }
     }
 
-    fn create_comment(&mut self, _text: StrTendril) -> Self::Handle {
+    fn create_comment(&self, _text: StrTendril) -> Self::Handle {
         HtmlHandle {
             node: Node::text(""),
             name: None,
         }
     }
 
-    fn create_pi(&mut self, _target: StrTendril, _data: StrTendril) -> Self::Handle {
+    fn create_pi(&self, _target: StrTendril, _data: StrTendril) -> Self::Handle {
         HtmlHandle {
             node: Node::text(""),
             name: None,
         }
     }
 
-    fn append(&mut self, parent: &Self::Handle, child: NodeOrText<Self::Handle>) {
+    fn append(&self, parent: &Self::Handle, child: NodeOrText<Self::Handle>) {
         self.append_node_or_text(&parent.node, child);
     }
 
-    fn append_before_sibling(&mut self, sibling: &Self::Handle, child: NodeOrText<Self::Handle>) {
+    fn append_before_sibling(&self, sibling: &Self::Handle, child: NodeOrText<Self::Handle>) {
         match child {
             NodeOrText::AppendNode(node) => self.append_before(&sibling.node, node.node),
             NodeOrText::AppendText(text) => {
@@ -190,7 +191,7 @@ impl TreeSink for AuroraTreeSink {
     }
 
     fn append_based_on_parent_node(
-        &mut self,
+        &self,
         element: &Self::Handle,
         prev_element: &Self::Handle,
         child: NodeOrText<Self::Handle>,
@@ -208,14 +209,14 @@ impl TreeSink for AuroraTreeSink {
     }
 
     fn append_doctype_to_document(
-        &mut self,
+        &self,
         _name: StrTendril,
         _public_id: StrTendril,
         _system_id: StrTendril,
     ) {
     }
 
-    fn get_template_contents(&mut self, target: &Self::Handle) -> Self::Handle {
+    fn get_template_contents(&self, target: &Self::Handle) -> Self::Handle {
         let node = self
             .template_contents
             .borrow()
@@ -229,7 +230,7 @@ impl TreeSink for AuroraTreeSink {
         Rc::ptr_eq(&x.node, &y.node)
     }
 
-    fn set_quirks_mode(&mut self, mode: QuirksMode) {
+    fn set_quirks_mode(&self, mode: QuirksMode) {
         *self.mode.borrow_mut() = match mode {
             QuirksMode::NoQuirks => DocumentMode::NoQuirks,
             QuirksMode::Quirks => DocumentMode::Quirks,
@@ -237,7 +238,7 @@ impl TreeSink for AuroraTreeSink {
         };
     }
 
-    fn add_attrs_if_missing(&mut self, target: &Self::Handle, attrs: Vec<Attribute>) {
+    fn add_attrs_if_missing(&self, target: &Self::Handle, attrs: Vec<Attribute>) {
         let Node::Element(element) = &mut *target.node.borrow_mut() else {
             return;
         };
@@ -249,11 +250,11 @@ impl TreeSink for AuroraTreeSink {
         }
     }
 
-    fn remove_from_parent(&mut self, target: &Self::Handle) {
+    fn remove_from_parent(&self, target: &Self::Handle) {
         self.remove_child_from_parent(&target.node);
     }
 
-    fn reparent_children(&mut self, node: &Self::Handle, new_parent: &Self::Handle) {
+    fn reparent_children(&self, node: &Self::Handle, new_parent: &Self::Handle) {
         let children = match &mut *node.node.borrow_mut() {
             Node::Document { children, .. } => std::mem::take(children),
             Node::Element(element) => std::mem::take(&mut element.children),
@@ -264,7 +265,7 @@ impl TreeSink for AuroraTreeSink {
         }
     }
 
-    fn mark_script_already_started(&mut self, _node: &Self::Handle) {}
+    fn mark_script_already_started(&self, _node: &Self::Handle) {}
 }
 
 fn node_key(node: &NodePtr) -> usize {

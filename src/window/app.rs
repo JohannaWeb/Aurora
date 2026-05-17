@@ -84,10 +84,10 @@ impl AuroraApp {
             self.input.base_url.as_deref().unwrap_or("aurora://local"),
         );
 
-        let surface_texture = surface
-            .surface
-            .get_current_texture()
-            .expect("failed to get surface texture");
+        let surface_texture = match surface.surface.get_current_texture() {
+            wgpu::CurrentSurfaceTexture::Success(t) | wgpu::CurrentSurfaceTexture::Suboptimal(t) => t,
+            _ => return, // timeout / occluded / outdated / lost — skip frame
+        };
         let render_params = vello::RenderParams {
             base_color: Color::WHITE,
             antialiasing_method: vello::AaConfig::Msaa16,

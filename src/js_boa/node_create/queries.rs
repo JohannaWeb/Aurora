@@ -64,7 +64,7 @@ pub(in crate::js_boa) fn install_query_methods(
         NativeFunction::from_copy_closure_with_captures(
             |_this, args, cap: &NodeCapture, _ctx| {
                 let sel = js_string_of(args.get(0).unwrap_or(&JsValue::undefined()));
-                Ok(JsValue::from(selector_matches(&cap.node, &sel)))
+                Ok(JsValue::from(selector_matches(&cap.node, &sel, &cap.document)))
             },
             cap.clone(),
         ),
@@ -77,7 +77,7 @@ pub(in crate::js_boa) fn install_query_methods(
                 let sel = js_string_of(args.get(0).unwrap_or(&JsValue::undefined()));
                 let mut current = Some(cap.node.clone());
                 while let Some(n) = current {
-                    if selector_matches(&n, &sel) {
+                    if selector_matches(&n, &sel, &cap.document) {
                         return Ok(create_js_node(n, &cap.registry, &cap.document, ctx));
                     }
                     current = find_parent(&cap.document, &n);
