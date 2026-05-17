@@ -17,7 +17,10 @@ mod variables;
 #[cfg(test)]
 mod tests;
 
-pub use ast::{Declaration, ElementData, Rule, Selector, SimpleSelector, Specificity};
+pub use ast::{
+    AttrOp, AttrSel, Combinator, Declaration, ElementData, PseudoClass, Rule, Selector,
+    SelectorPart, SimpleSelector, Specificity,
+};
 pub use inline_style::parse_style_text;
 #[allow(unused_imports)]
 pub use length::{parse_length_value, LengthValue};

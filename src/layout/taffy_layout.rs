@@ -132,8 +132,8 @@ fn build_taffy_tree(
     if let Node::Text(text) = &*node_borrow {
         let font_size = font_size_from_styles(styled_node.styles());
         let line_height = line_height_from_styles(styled_node.styles());
-        taffy_style.size.width = Dimension::Auto;
-        taffy_style.size.height = Dimension::Auto;
+        taffy_style.size.width = Dimension::auto();
+        taffy_style.size.height = Dimension::auto();
         taffy_style.align_self = Some(AlignSelf::FlexStart);
         let ctx = TextContext {
             text: text.clone(),

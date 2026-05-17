@@ -22,15 +22,49 @@ impl Stylesheet {
 
     pub fn user_agent_stylesheet() -> Self {
         Self::parse(
-            "a, abbr, b, bdo, big, br, cite, code, dfn, em, i, img, input, kbd, label, map, object, output, q, samp, select, small, span, strong, sub, sup, textarea, time, tt, var { display: inline; } \
-             b, strong { font-weight: bold; color: accent; } \
-             i, em { font-style: italic; color: rust; } \
-             h1 { font-size: 32px; font-weight: bold; text-align: center; color: coal; } \
-             h2 { font-size: 24px; font-weight: bold; color: ink; } \
-             h3 { font-size: 18px; font-weight: bold; color: ink; } \
-             li { display: block; margin: 4px 0; } \
-             div, section, article { display: block; } \
-             head, style, script, link, meta, title, noscript, template { display: none; }",
+            // Block-level elements
+            "html, body, div, p, section, article, aside, nav, header, footer, main, \
+             figure, figcaption, blockquote, form, fieldset, details, summary, dialog { display: block; } \
+             h1, h2, h3, h4, h5, h6 { display: block; font-weight: bold; } \
+             h1 { font-size: 2em; margin-top: 0.67em; margin-bottom: 0.67em; } \
+             h2 { font-size: 1.5em; margin-top: 0.83em; margin-bottom: 0.83em; } \
+             h3 { font-size: 1.17em; margin-top: 1em; margin-bottom: 1em; } \
+             h4 { font-size: 1em; margin-top: 1.33em; margin-bottom: 1.33em; } \
+             h5 { font-size: 0.83em; margin-top: 1.67em; margin-bottom: 1.67em; } \
+             h6 { font-size: 0.67em; margin-top: 2.33em; margin-bottom: 2.33em; } \
+             ul, ol { display: block; padding-left: 40px; margin-top: 1em; margin-bottom: 1em; } \
+             li { display: list-item; } \
+             dl { display: block; } \
+             dt { display: block; font-weight: bold; } \
+             dd { display: block; margin-left: 40px; } \
+             pre { display: block; white-space: pre; font-family: monospace; \
+                   margin-top: 1em; margin-bottom: 1em; } \
+             hr { display: block; margin-top: 0.5em; margin-bottom: 0.5em; } \
+             table { display: table; } \
+             tr { display: table-row; } \
+             td, th { display: table-cell; } \
+             thead, tbody, tfoot { display: table-row-group; } \
+             col { display: table-column; } \
+             colgroup { display: table-column-group; } \
+             caption { display: table-caption; } \
+             th { font-weight: bold; } \
+             \
+             head, style, script, link, meta, title, noscript, template { display: none; } \
+             \
+             a, abbr, acronym, b, bdo, big, br, button, cite, code, dfn, em, i, img, \
+             input, kbd, label, map, object, q, s, samp, select, small, span, strong, \
+             sub, sup, textarea, time, tt, u, var { display: inline; } \
+             \
+             b, strong { font-weight: bold; } \
+             i, em, cite, dfn, var { font-style: italic; } \
+             small { font-size: 0.8em; } \
+             code, kbd, samp, tt { font-family: monospace; } \
+             \
+             a { color: #0000ee; text-decoration: underline; } \
+             a:visited { color: #551a8b; } \
+             \
+             :link { color: #0000ee; } \
+             ",
         )
     }
 
@@ -243,6 +277,7 @@ impl<'i> cssparser::DeclarationParser<'i> for AuroraDeclarationParser<'_, '_> {
         &mut self,
         name: cssparser::CowRcStr<'i>,
         input: &mut Parser<'i, 't>,
+        _state: &cssparser::ParserState,
     ) -> Result<Self::Declaration, cssparser::ParseError<'i, Self::Error>> {
         let name = name.to_ascii_lowercase();
         let mut value = input

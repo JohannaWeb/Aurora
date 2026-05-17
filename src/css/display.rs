@@ -1,6 +1,6 @@
 use std::fmt::{self, Display, Formatter};
 
-use super::{Selector, SimpleSelector, StyleMap, Stylesheet};
+use super::{Combinator, Selector, SelectorPart, SimpleSelector, StyleMap, Stylesheet};
 
 impl Display for Stylesheet {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
@@ -32,24 +32,38 @@ impl Display for Selector {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         for (index, part) in self.parts.iter().enumerate() {
             if index > 0 {
-                write!(f, " ")?;
+                match part.combinator {
+                    Combinator::Descendant => write!(f, " ")?,
+                    Combinator::Child => write!(f, " > ")?,
+                    Combinator::Adjacent => write!(f, " + ")?,
+                    Combinator::Sibling => write!(f, " ~ ")?,
+                }
             }
-            write!(f, "{part}")?;
+            write!(f, "{}", part.simple)?;
         }
         Ok(())
     }
 }
 
+impl Display for SelectorPart {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.simple)
+    }
+}
+
 impl Display for SimpleSelector {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        if let Some(tag_name) = &self.tag_name {
-            write!(f, "{tag_name}")?;
+        if let Some(tag) = &self.tag_name {
+            write!(f, "{tag}")?;
         }
         if let Some(id) = &self.id {
             write!(f, "#{id}")?;
         }
         for cn in &self.class_names {
             write!(f, ".{cn}")?;
+        }
+        for attr in &self.attributes {
+            write!(f, "[{}]", attr.name)?;
         }
         Ok(())
     }

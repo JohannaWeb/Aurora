@@ -93,7 +93,7 @@ impl BoaRuntime {
             current = parent_node;
         }
 
-        self.context.run_jobs();
+        let _ = self.context.run_jobs();
         self.drain_microtasks();
         handled
     }
@@ -198,13 +198,13 @@ impl BoaRuntime {
             window._domContentLoadedListeners.forEach(function(fn) { try { fn(); } catch(e) {} }); \
         }";
         let _ = self.context.eval(Source::from_bytes(script));
-        self.context.run_jobs();
+        let _ = self.context.run_jobs();
         self.drain_microtasks();
     }
 
     pub fn execute(&mut self, script: &str) -> JsResult<JsValue> {
         let result = self.context.eval(Source::from_bytes(script));
-        self.context.run_jobs();
+        let _ = self.context.run_jobs();
         self.drain_microtasks();
         result
     }
@@ -234,7 +234,7 @@ impl BoaRuntime {
                 .call(&JsValue::undefined(), &[], &mut self.context);
             fired = true;
         }
-        self.context.run_jobs();
+        let _ = self.context.run_jobs();
         let ran_microtasks = self.drain_microtasks();
         (fired || ran_microtasks) && self.registry.take_needs_reflow()
     }
@@ -258,7 +258,7 @@ impl BoaRuntime {
                 &mut self.context,
             );
         }
-        self.context.run_jobs();
+        let _ = self.context.run_jobs();
         self.drain_microtasks();
         self.registry.take_needs_reflow()
     }
@@ -319,7 +319,7 @@ impl BoaRuntime {
             for callback in callbacks {
                 let _ = callback.call(&JsValue::undefined(), &[], &mut self.context);
             }
-            self.context.run_jobs();
+            let _ = self.context.run_jobs();
         }
         ran_microtasks
     }

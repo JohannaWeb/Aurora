@@ -33,9 +33,9 @@ pub(super) fn install_accessor(
         .global_object()
         .get(js_string!("Object"), context)
         .ok()
-        .and_then(|o| o.as_object().cloned())
+        .and_then(|o| o.as_object())
         .and_then(|o| o.get(js_string!("defineProperty"), context).ok())
-        .and_then(|v| v.as_callable().cloned());
+        .and_then(|v| v.as_callable());
 
     if let Some(define) = define {
         let _ = define.call(
