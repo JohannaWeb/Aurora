@@ -38,25 +38,25 @@ pub(super) struct WindowCapture {
 unsafe impl Trace for WindowCapture {
     unsafe fn trace(&self, tracer: &mut Tracer) {
         for entry in self.timers.borrow().iter() {
-            Trace::trace(entry, tracer);
+            unsafe { Trace::trace(entry, tracer) };
         }
         for entry in self.animation_frames.borrow().iter() {
-            Trace::trace(entry, tracer);
+            unsafe { Trace::trace(entry, tracer) };
         }
         for callback in self.microtasks.borrow().iter() {
-            Trace::trace(callback, tracer);
+            unsafe { Trace::trace(callback, tracer) };
         }
     }
 
     unsafe fn trace_non_roots(&self) {
         for entry in self.timers.borrow().iter() {
-            Trace::trace_non_roots(entry);
+            unsafe { Trace::trace_non_roots(entry) };
         }
         for entry in self.animation_frames.borrow().iter() {
-            Trace::trace_non_roots(entry);
+            unsafe { Trace::trace_non_roots(entry) };
         }
         for callback in self.microtasks.borrow().iter() {
-            Trace::trace_non_roots(callback);
+            unsafe { Trace::trace_non_roots(callback) };
         }
     }
 

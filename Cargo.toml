@@ -2,7 +2,7 @@
 [package]
 name = "aurora"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 
 [dependencies]
 rustls = { version = "0.23", features = ["ring"] } # still needed for install_crypto_provider()
