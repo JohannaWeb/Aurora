@@ -7,7 +7,7 @@ use crate::style::StyleTree;
 
 use super::taffy_adapter::style_to_taffy_with_viewport;
 use super::text_metrics::{font_size_from_styles, line_height_from_styles};
-use super::{Layout Box, LayoutKind, Rect, ViewportSize};
+use super::{LayoutBox, LayoutKind, Rect, ViewportSize};
 
 struct TextContext {
     text: String,

@@ -16,4 +16,4 @@ pub(crate) mod runner;
 pub(crate) mod style;
 pub(crate) mod window;
 
-pub(crate) use runner::{ImageCache, load_images};
+pub(crate) use runner::{ImageCache, SvgCache, load_images, load_svgs};
