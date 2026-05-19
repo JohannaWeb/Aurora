@@ -12,8 +12,8 @@ pub(super) struct NodeRegistry {
     pub(super) viewport: Rc<RefCell<Option<Rc<RefCell<crate::layout::ViewportSize>>>>>,
     pub(super) document: Rc<RefCell<Option<NodePtr>>>,
     pub(super) listeners: Rc<RefCell<BTreeMap<u32, BTreeMap<String, Vec<JsObject>>>>>,
-    /// Per-node invalidation via Taffy's dirty-bit API.
-    pub(super) layout_document: Rc<RefCell<Option<crate::layout::document::LayoutDocument>>>,
+    /// Shared incremental layout document. Same Rc as WindowInput.layout_doc.
+    pub(super) layout_document: Rc<RefCell<Option<Rc<RefCell<crate::layout::document::LayoutDocument>>>>>,
 }
 
 unsafe impl Trace for NodeRegistry {
@@ -97,8 +97,8 @@ impl NodeRegistry {
 
     pub(super) fn mark_style_dirty(&self, node: &NodePtr) {
         self.dirty.borrow_mut().style = true;
-        if let Some(ld) = self.layout_document.borrow_mut().as_mut() {
-            ld.mark_dirty(node, false);
+        if let Some(ld) = self.layout_document.borrow().as_ref() {
+            ld.borrow_mut().mark_dirty(node, false);
         }
     }
 
@@ -107,8 +107,8 @@ impl NodeRegistry {
         dirty.style = true;
         dirty.layout = true;
         drop(dirty);
-        if let Some(ld) = self.layout_document.borrow_mut().as_mut() {
-            ld.mark_dirty(node, true);
+        if let Some(ld) = self.layout_document.borrow().as_ref() {
+            ld.borrow_mut().mark_dirty(node, true);
         }
     }
 
@@ -156,8 +156,8 @@ impl NodeRegistry {
             let style_tree = crate::style::StyleTree::from_dom(document, &stylesheet.borrow());
 
             // Use LayoutDocument (incremental) if available, else full rebuild.
-            let new_layout = if let Some(ld) = self.layout_document.borrow_mut().as_mut() {
-                let root = ld.compute(&style_tree);
+            let new_layout = if let Some(ld) = self.layout_document.borrow().as_ref() {
+                let root = ld.borrow_mut().compute(&style_tree);
                 crate::layout::LayoutTree::from_root(root)
             } else {
                 crate::layout::LayoutTree::from_style_tree_with_viewport(

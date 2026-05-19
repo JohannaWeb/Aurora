@@ -32,6 +32,9 @@ pub(crate) fn run_browser(cli: CliOptions, identity: Identity) {
     let stylesheet_rc = Rc::new(RefCell::new(stylesheet));
     let viewport_rc = Rc::new(RefCell::new(viewport));
     let layout_rc = Rc::new(RefCell::new(layout));
+    let layout_doc_rc = Rc::new(RefCell::new(
+        crate::layout::document::LayoutDocument::new(content_viewport),
+    ));
 
     if let Some(runtime) = runtime.as_mut() {
         runtime.set_shared_state(
@@ -39,6 +42,7 @@ pub(crate) fn run_browser(cli: CliOptions, identity: Identity) {
             stylesheet_rc.clone(),
             viewport_rc.clone(),
         );
+        runtime.set_layout_document(layout_doc_rc.clone());
         runtime.clear_dirty_bits();
     }
 
@@ -52,6 +56,7 @@ pub(crate) fn run_browser(cli: CliOptions, identity: Identity) {
         identity,
         viewport_rc,
         layout_rc,
+        layout_doc_rc,
         image_cache,
         runtime,
     );
@@ -153,6 +158,7 @@ fn maybe_open_window(
     identity: Identity,
     viewport: Rc<RefCell<ViewportSize>>,
     layout: Rc<RefCell<LayoutTree>>,
+    layout_doc: Rc<RefCell<crate::layout::document::LayoutDocument>>,
     images: crate::ImageCache,
     runtime: Option<crate::js_boa::BoaRuntime>,
 ) {
@@ -170,6 +176,7 @@ fn maybe_open_window(
             layout,
             images,
             runtime,
+            layout_doc,
         };
         if let Err(error) = crate::window::open(window_input) {
             eprintln!("Window disabled: {error}");
