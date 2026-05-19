@@ -17,6 +17,7 @@ pub struct WindowInput {
     pub viewport: Rc<RefCell<ViewportSize>>,
     pub layout: Rc<RefCell<LayoutTree>>,
     pub images: ImageCache,
+    pub svgs: crate::SvgCache,
     pub runtime: Option<BoaRuntime>,
     /// Shared incremental layout document — also wired into the JS registry
     /// so DOM mutations can mark nodes dirty directly.
@@ -49,10 +50,8 @@ impl WindowInput {
         *self.layout.borrow_mut() = LayoutTree::from_root(root);
 
         // Only reload images when layout changes (not on every style-only reflow).
-        self.images = crate::load_images(
-            self.layout.borrow().root(),
-            self.base_url.as_deref(),
-            &self.identity,
-        );
+        let layout_borrow = self.layout.borrow();
+        self.images = crate::load_images(layout_borrow.root(), self.base_url.as_deref(), &self.identity);
+        self.svgs = crate::load_svgs(layout_borrow.root(), self.base_url.as_deref(), &self.identity);
     }
 }

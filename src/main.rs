@@ -12,7 +12,7 @@ mod runner;
 mod style;
 mod window;
 
-pub(crate) use runner::{load_images, ImageCache};
+pub(crate) use runner::{load_images, load_svgs, ImageCache, SvgCache};
 
 fn main() {
     println!("Aurora: Starting up...");
