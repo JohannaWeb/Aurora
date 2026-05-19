@@ -5,6 +5,7 @@ mod element;
 mod image;
 mod painter;
 mod scrollbar;
+pub mod svg;
 pub(crate) mod text;
 
 pub use painter::GpuPainter;

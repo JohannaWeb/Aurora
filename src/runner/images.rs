@@ -3,6 +3,7 @@ use opus::domain::Identity;
 use std::collections::HashMap;
 
 pub type ImageCache = HashMap<String, peniko::ImageData>;
+pub type SvgCache = HashMap<String, usvg::Tree>;
 
 pub(crate) fn load_images(
     root: &LayoutBox,
@@ -14,10 +15,35 @@ pub(crate) fn load_images(
 
     let mut cache = ImageCache::new();
     for url in urls {
-        load_image(&url, identity, &mut cache);
+        if !is_svg_url(&url) {
+            load_image(&url, identity, &mut cache);
+        }
     }
 
     cache
+}
+
+pub(crate) fn load_svgs(
+    root: &LayoutBox,
+    base_url: Option<&str>,
+    identity: &Identity,
+) -> SvgCache {
+    let mut urls = Vec::new();
+    collect_image_srcs(root, base_url, &mut urls);
+
+    let mut cache = SvgCache::new();
+    for url in urls {
+        if is_svg_url(&url) {
+            load_svg(&url, identity, &mut cache);
+        }
+    }
+
+    cache
+}
+
+fn is_svg_url(url: &str) -> bool {
+    let lower = url.to_lowercase();
+    lower.ends_with(".svg") || lower.ends_with(".svgz") || lower.contains("image/svg")
 }
 
 fn collect_image_srcs(node: &LayoutBox, base_url: Option<&str>, out: &mut Vec<String>) {
@@ -46,6 +72,19 @@ fn load_image(url: &str, identity: &Identity, cache: &mut ImageCache) {
             Err(e) => eprintln!("Aurora: failed to decode image {url}: {e}"),
         },
         Err(e) => eprintln!("Aurora: failed to fetch image {url}: {e}"),
+    }
+}
+
+fn load_svg(url: &str, identity: &Identity, cache: &mut SvgCache) {
+    match crate::fetch::fetch_bytes(url, identity) {
+        Ok(bytes) => {
+            if let Some(tree) = crate::gpu_paint::svg::parse_svg_bytes(&bytes) {
+                cache.insert(url.to_string(), tree);
+            } else {
+                eprintln!("Aurora: failed to parse SVG {url}");
+            }
+        }
+        Err(e) => eprintln!("Aurora: failed to fetch SVG {url}: {e}"),
     }
 }
 

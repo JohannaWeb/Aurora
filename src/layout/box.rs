@@ -133,6 +133,13 @@ impl LayoutBox {
         matches!(self.kind, LayoutKind::Image { .. })
     }
 
+    pub fn is_svg_element(&self) -> bool {
+        match &self.kind {
+            LayoutKind::Block { tag_name } => tag_name.eq_ignore_ascii_case("svg"),
+            _ => false,
+        }
+    }
+
     #[allow(dead_code)]
     pub fn is_control(&self) -> bool {
         matches!(self.kind, LayoutKind::Control { .. })
