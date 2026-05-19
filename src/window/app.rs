@@ -165,6 +165,7 @@ fn paint_content_layer(app: &AuroraApp, scene: &mut Scene, width: u32, height: u
         app.input.layout.borrow().root(),
         &mut content_scene,
         &app.input.images,
+        &app.input.svgs,
     );
     scene.append(
         &content_scene,

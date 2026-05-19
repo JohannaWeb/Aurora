@@ -27,3 +27,5 @@ selectors = "0.38.0"
 taffy = "0.10.1"
 parley = "0.7"
 reqwest = { version = "0.12", features = ["blocking", "rustls-tls", "gzip", "deflate", "brotli"], default-features = false }
+usvg = "0.47.0"
+vello_svg = "0.9.0"

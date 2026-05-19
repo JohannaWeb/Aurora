@@ -1,6 +1,7 @@
 use crate::css::Stylesheet;
 use crate::dom::NodePtr;
 use crate::js_boa::BoaRuntime;
+use crate::layout::document::LayoutDocument;
 use crate::layout::{LayoutTree, ViewportSize};
 use crate::style::StyleTree;
 use crate::ImageCache;
@@ -16,7 +17,11 @@ pub struct WindowInput {
     pub viewport: Rc<RefCell<ViewportSize>>,
     pub layout: Rc<RefCell<LayoutTree>>,
     pub images: ImageCache,
+    pub svgs: crate::SvgCache,
     pub runtime: Option<BoaRuntime>,
+    /// Shared incremental layout document — also wired into the JS registry
+    /// so DOM mutations can mark nodes dirty directly.
+    pub layout_doc: Rc<RefCell<LayoutDocument>>,
 }
 
 impl WindowInput {
@@ -25,18 +30,28 @@ impl WindowInput {
             return;
         }
 
-        let mut viewport = self.viewport.borrow_mut();
-        *viewport = ViewportSize {
-            width: width as f32,
-            height: height as f32,
-        };
         let content_viewport = ViewportSize {
             width: width as f32,
             height: ((height as f32) - crate::window::BROWSER_CHROME_HEIGHT).max(1.0),
         };
+
+        *self.viewport.borrow_mut() = ViewportSize {
+            width: width as f32,
+            height: height as f32,
+        };
+
+        // Update viewport so Taffy recomputes at the new size.
+        self.layout_doc.borrow_mut().set_viewport(content_viewport);
+
         let style_tree = StyleTree::from_dom(&self.dom, &self.stylesheet.borrow());
-        let mut layout = self.layout.borrow_mut();
-        *layout = LayoutTree::from_style_tree_with_viewport(&style_tree, content_viewport);
-        self.images = crate::load_images(layout.root(), self.base_url.as_deref(), &self.identity);
+
+        // Incremental compute — Taffy skips clean subtrees.
+        let root = self.layout_doc.borrow_mut().compute(&style_tree);
+        *self.layout.borrow_mut() = LayoutTree::from_root(root);
+
+        // Only reload images when layout changes (not on every style-only reflow).
+        let layout_borrow = self.layout.borrow();
+        self.images = crate::load_images(layout_borrow.root(), self.base_url.as_deref(), &self.identity);
+        self.svgs = crate::load_svgs(layout_borrow.root(), self.base_url.as_deref(), &self.identity);
     }
 }

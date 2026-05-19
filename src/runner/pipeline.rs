@@ -1,6 +1,6 @@
 use super::cli::{env_f32, CliOptions};
 use super::fixtures::demo_html;
-use super::images::load_images;
+use super::images::{load_images, load_svgs};
 use super::scripts::extract_scripts;
 use crate::css::Stylesheet;
 use crate::html::Parser;
@@ -28,10 +28,14 @@ pub(crate) fn run_browser(cli: CliOptions, identity: Identity) {
     };
     let layout = LayoutTree::from_style_tree_with_viewport(&style_tree, content_viewport);
     let image_cache = load_images(layout.root(), base_url.as_deref(), &identity);
+    let svg_cache = load_svgs(layout.root(), base_url.as_deref(), &identity);
 
     let stylesheet_rc = Rc::new(RefCell::new(stylesheet));
     let viewport_rc = Rc::new(RefCell::new(viewport));
     let layout_rc = Rc::new(RefCell::new(layout));
+    let layout_doc_rc = Rc::new(RefCell::new(
+        crate::layout::document::LayoutDocument::new(content_viewport),
+    ));
 
     if let Some(runtime) = runtime.as_mut() {
         runtime.set_shared_state(
@@ -39,6 +43,7 @@ pub(crate) fn run_browser(cli: CliOptions, identity: Identity) {
             stylesheet_rc.clone(),
             viewport_rc.clone(),
         );
+        runtime.set_layout_document(layout_doc_rc.clone());
         runtime.clear_dirty_bits();
     }
 
@@ -52,7 +57,9 @@ pub(crate) fn run_browser(cli: CliOptions, identity: Identity) {
         identity,
         viewport_rc,
         layout_rc,
+        layout_doc_rc,
         image_cache,
+        svg_cache,
         runtime,
     );
 }
@@ -153,7 +160,9 @@ fn maybe_open_window(
     identity: Identity,
     viewport: Rc<RefCell<ViewportSize>>,
     layout: Rc<RefCell<LayoutTree>>,
+    layout_doc: Rc<RefCell<crate::layout::document::LayoutDocument>>,
     images: crate::ImageCache,
+    svgs: crate::SvgCache,
     runtime: Option<crate::js_boa::BoaRuntime>,
 ) {
     let has_screenshot = env::var("AURORA_SCREENSHOT").is_ok();
@@ -169,7 +178,9 @@ fn maybe_open_window(
             viewport,
             layout,
             images,
+            svgs,
             runtime,
+            layout_doc,
         };
         if let Err(error) = crate::window::open(window_input) {
             eprintln!("Window disabled: {error}");
