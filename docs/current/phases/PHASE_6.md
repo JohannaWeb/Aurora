@@ -1,13 +1,13 @@
 # Phase 6 — Rendering Layer (AnyRender)
 
-**Status: Not started**
+**Status: In Progress**
 
-Confirmed in code: `src/gpu_paint/painter.rs` calls `vello::Scene` directly throughout. No `anyrender` in `Cargo.toml`.
+**Progress Update:** `RenderBackend` trait and `Px` unit safety established in `src/render/commands.rs`. Refactoring of `GpuPainter` to implement this abstraction is the next step.
 
 ## Work items
 
 - [ ] Add `anyrender` and `anyrender_vello` to `Cargo.toml` (check current crate name — may have changed)
-- [ ] Refactor `src/gpu_paint/painter.rs` to emit `anyrender` drawing commands instead of calling `vello::Scene` directly
+- [ ] Refactor `src/gpu_paint/painter.rs` to implement `RenderBackend` and emit drawing commands
 - [ ] Wire the Vello backend behind AnyRender — existing GPU pipeline becomes one backend among several
 - [ ] Reference [`blitz-paint`](https://github.com/DioxusLabs/blitz/tree/main/packages/blitz-paint) as the canonical DOM → drawing commands translator
 - [ ] Add stacking context support: real CSS painting order, `z-index`, `position: relative` painting promotion, transforms

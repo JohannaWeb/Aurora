@@ -17,6 +17,8 @@ impl StyleTree {
                 &[],
                 InheritedStyles::default(),
                 &[],
+                &[],
+                0,
             ),
         }
     }

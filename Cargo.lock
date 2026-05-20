@@ -204,6 +204,7 @@ dependencies = [
  "parley",
  "peniko",
  "pollster",
+ "precomputed-hash",
  "reqwest",
  "rustls",
  "rustybuzz",

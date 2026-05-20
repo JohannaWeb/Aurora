@@ -1,5 +1,12 @@
 //! Drawing command types and the RenderBackend trait.
 
+/// A newtype for pixel values to prevent unit confusion and layout drift.
+#[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Default)]
+pub struct Px(pub f32);
+
+impl From<f32> for Px { fn from(f: f32) -> Self { Px(f) } }
+impl From<Px> for f32 { fn from(p: Px) -> Self { p.0 } }
+
 /// An RGBA color, each channel 0–255.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Rgba {
@@ -26,38 +33,38 @@ impl Rgba {
 /// Axis-aligned rectangle in screen space (pixels).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Bounds {
-    pub x: f32,
-    pub y: f32,
-    pub width: f32,
-    pub height: f32,
+    pub x: Px,
+    pub y: Px,
+    pub width: Px,
+    pub height: Px,
 }
 
 impl Bounds {
-    pub fn new(x: f32, y: f32, width: f32, height: f32) -> Self {
+    pub fn new(x: Px, y: Px, width: Px, height: Px) -> Self {
         Self { x, y, width, height }
     }
 
-    pub fn right(&self) -> f32 {
-        self.x + self.width
+    pub fn right(&self) -> Px {
+        Px(self.x.0 + self.width.0)
     }
 
-    pub fn bottom(&self) -> f32 {
-        self.y + self.height
+    pub fn bottom(&self) -> Px {
+        Px(self.y.0 + self.height.0)
     }
 }
 
 /// Border edges, one width per side (pixels).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct BorderEdge {
-    pub top: f32,
-    pub right: f32,
-    pub bottom: f32,
-    pub left: f32,
+    pub top: Px,
+    pub right: Px,
+    pub bottom: Px,
+    pub left: Px,
 }
 
 impl BorderEdge {
     pub fn zero() -> Self {
-        Self { top: 0.0, right: 0.0, bottom: 0.0, left: 0.0 }
+        Self { top: Px(0.0), right: Px(0.0), bottom: Px(0.0), left: Px(0.0) }
     }
 }
 
@@ -74,9 +81,9 @@ pub trait RenderBackend {
     fn draw_text(
         &mut self,
         text: &str,
-        x: f32,
-        y: f32,
-        font_size: f32,
+        x: Px,
+        y: Px,
+        font_size: Px,
         color: Rgba,
         opacity: f32,
     );
@@ -111,9 +118,9 @@ pub enum DrawCommand {
     },
     DrawText {
         text: String,
-        x: f32,
-        y: f32,
-        font_size: f32,
+        x: Px,
+        y: Px,
+        font_size: Px,
         color: Rgba,
         opacity: f32,
     },

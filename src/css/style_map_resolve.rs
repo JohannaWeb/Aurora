@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 
+use super::calc::{eval_calc, CalcContext};
 use super::length::parse_length_value;
 use super::StyleMap;
 
@@ -16,15 +17,14 @@ impl StyleMap {
         if raw == "auto" {
             return None;
         }
-        parse_length_value(raw).map(|lv| {
-            lv.to_px(
-                available_width,
-                font_size,
-                root_font_size,
-                viewport_width,
-                0.0,
-            )
-        })
+        let ctx = CalcContext {
+            available: available_width,
+            font_size,
+            root_font_size,
+            viewport_width,
+            viewport_height: 0.0,
+        };
+        resolve_length(raw, &ctx)
     }
 
     pub fn height_resolved(
@@ -35,18 +35,17 @@ impl StyleMap {
         viewport_height: f32,
     ) -> Option<f32> {
         let raw = self.get("height")?;
-        if raw == "auto" || raw.contains("calc(") {
+        if raw == "auto" {
             return None;
         }
-        parse_length_value(raw).map(|lv| {
-            lv.to_px(
-                available_height,
-                font_size,
-                root_font_size,
-                0.0,
-                viewport_height,
-            )
-        })
+        let ctx = CalcContext {
+            available: available_height,
+            font_size,
+            root_font_size,
+            viewport_width: 0.0,
+            viewport_height,
+        };
+        resolve_length(raw, &ctx)
     }
 
     pub fn min_height_resolved(
@@ -57,18 +56,17 @@ impl StyleMap {
         viewport_height: f32,
     ) -> Option<f32> {
         let raw = self.get("min-height")?;
-        if raw == "auto" || raw.contains("calc(") {
+        if raw == "auto" {
             return None;
         }
-        parse_length_value(raw).map(|lv| {
-            lv.to_px(
-                available_height,
-                font_size,
-                root_font_size,
-                0.0,
-                viewport_height,
-            )
-        })
+        let ctx = CalcContext {
+            available: available_height,
+            font_size,
+            root_font_size,
+            viewport_width: 0.0,
+            viewport_height,
+        };
+        resolve_length(raw, &ctx)
     }
 
     pub fn max_height_resolved(
@@ -79,24 +77,29 @@ impl StyleMap {
         viewport_height: f32,
     ) -> Option<f32> {
         let raw = self.get("max-height")?;
-        if raw == "none" || raw.contains("calc(") {
+        if raw == "none" {
             return None;
         }
-        parse_length_value(raw).map(|lv| {
-            lv.to_px(
-                available_height,
-                font_size,
-                root_font_size,
-                0.0,
-                viewport_height,
-            )
-        })
+        let ctx = CalcContext {
+            available: available_height,
+            font_size,
+            root_font_size,
+            viewport_width: 0.0,
+            viewport_height,
+        };
+        resolve_length(raw, &ctx)
     }
 
     pub fn font_size_resolved(&self, parent_font_size: f32, root_font_size: f32) -> Option<f32> {
         let raw = self.get("font-size")?;
-        parse_length_value(raw)
-            .map(|lv| lv.to_px(parent_font_size, parent_font_size, root_font_size, 0.0, 0.0))
+        let ctx = CalcContext {
+            available: parent_font_size,
+            font_size: parent_font_size,
+            root_font_size,
+            viewport_width: 0.0,
+            viewport_height: 0.0,
+        };
+        resolve_length(raw, &ctx)
     }
 
     #[allow(dead_code)]
@@ -156,28 +159,46 @@ impl StyleMap {
         }
 
         let mut result = String::new();
-        let mut last_end = 0;
-        while let Some(start) = value[last_end..].find("var(") {
-            let start = last_end + start;
-            result.push_str(&value[last_end..start]);
-            let content_start = start + 4;
-            let Some(end_offset) = value[content_start..].find(')') else {
-                break;
-            };
-            let end = content_start + end_offset;
-            let var_expr = value[content_start..end].trim();
-            let var_name = var_expr
-                .split_once(',')
-                .map(|(name, _)| name.trim())
-                .unwrap_or(var_expr);
-            if let Some(val) = self.lookup_variable(var_name, ancestors) {
-                result.push_str(&val);
+        let mut i = 0;
+
+        while i < value.len() {
+            if value[i..].starts_with("var(") {
+                let content_start = i + 4;
+                // Find matching `)` at depth 0.
+                let (end, inner) = find_matching_close(value, content_start);
+                // Split name and fallback at the first `,` at depth 0 in inner.
+                let (var_name, fallback) = split_var_args(inner);
+                let var_name = var_name.trim();
+
+                if let Some(val) = self.lookup_variable(var_name, ancestors) {
+                    // Resolved — recursively handle any var() inside the resolved value.
+                    if val.contains("var(") {
+                        if let Some(resolved) = self.resolve_single_value(&val, ancestors) {
+                            result.push_str(&resolved);
+                        } else {
+                            result.push_str(&val);
+                        }
+                    } else {
+                        result.push_str(&val);
+                    }
+                } else if let Some(fb) = fallback {
+                    // Variable not found — use fallback, which may itself contain var().
+                    if let Some(resolved) = self.resolve_single_value(fb.trim(), ancestors) {
+                        result.push_str(&resolved);
+                    } else {
+                        result.push_str(fb.trim());
+                    }
+                } else {
+                    // No fallback — leave the var() as-is.
+                    result.push_str(&value[i..=end]);
+                }
+                i = end + 1;
             } else {
-                result.push_str(&value[start..end + 1]);
+                let ch = value[i..].chars().next().unwrap_or('\0');
+                result.push(ch);
+                i += ch.len_utf8();
             }
-            last_end = end + 1;
         }
-        result.push_str(&value[last_end..]);
         Some(result)
     }
 
@@ -192,4 +213,50 @@ impl StyleMap {
         }
         None
     }
+}
+
+/// Find the closing `)` for a block starting at `start` (after the opening `(` was consumed).
+/// Returns `(byte_index_of_close, &str_of_inner)`.
+fn find_matching_close(s: &str, start: usize) -> (usize, &str) {
+    let mut depth = 1usize;
+    let mut i = start;
+    for ch in s[start..].chars() {
+        match ch {
+            '(' => depth += 1,
+            ')' => {
+                depth -= 1;
+                if depth == 0 {
+                    return (i, &s[start..i]);
+                }
+            }
+            _ => {}
+        }
+        i += ch.len_utf8();
+    }
+    (s.len().saturating_sub(1), &s[start..])
+}
+
+/// Split `--var-name, fallback` at the first `,` at paren depth 0.
+fn split_var_args(s: &str) -> (&str, Option<&str>) {
+    let mut depth = 0usize;
+    for (i, ch) in s.char_indices() {
+        match ch {
+            '(' => depth += 1,
+            ')' => depth -= 1,
+            ',' if depth == 0 => return (&s[..i], Some(&s[i + 1..])),
+            _ => {}
+        }
+    }
+    (s, None)
+}
+
+/// Resolve a raw CSS length string to px, handling `calc()`, `min()`, `max()`, `clamp()`.
+fn resolve_length(raw: &str, ctx: &CalcContext) -> Option<f32> {
+    let raw = raw.trim();
+    if raw.starts_with("calc(") || raw.starts_with("min(") || raw.starts_with("max(") || raw.starts_with("clamp(") {
+        // eval_calc handles all math functions via eval_factor
+        return eval_calc(raw, ctx);
+    }
+    parse_length_value(raw)
+        .map(|lv| lv.to_px(ctx.available, ctx.font_size, ctx.root_font_size, ctx.viewport_width, ctx.viewport_height))
 }
