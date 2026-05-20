@@ -24,6 +24,7 @@ html5ever = "0.39.0"
 markup5ever = "0.39.0"
 cssparser = "0.37.0"
 selectors = "0.38.0"
+precomputed-hash = "0.1"
 taffy = "0.10.1"
 parley = "0.7"
 reqwest = { version = "0.12", features = ["blocking", "rustls-tls", "gzip", "deflate", "brotli"], default-features = false }

@@ -69,7 +69,7 @@ fn paint_layout_box(
     images: &crate::ImageCache,
     parent_opacity: f32,
 ) {
-    use crate::render::commands::{BorderEdge, Bounds, RenderBackend, Rgba};
+    use crate::render::commands::{BorderEdge, Bounds, Px, RenderBackend, Rgba};
 
     let styles = layout_box.styles();
     let opacity = parent_opacity * styles.opacity();
@@ -78,7 +78,7 @@ fn paint_layout_box(
     }
 
     let rect = layout_box.rect();
-    let bounds = Bounds::new(rect.x, rect.y, rect.width, rect.height);
+    let bounds = Bounds::new(Px(rect.x), Px(rect.y), Px(rect.width), Px(rect.height));
 
     // Paint background.
     if !layout_box.is_viewport() && !layout_box.text().is_some() {
@@ -91,10 +91,10 @@ fn paint_layout_box(
         // Paint border.
         let bw = styles.border_width();
         let border_edge = BorderEdge {
-            top: bw.top,
-            right: bw.right,
-            bottom: bw.bottom,
-            left: bw.left,
+            top: Px(bw.top),
+            right: Px(bw.right),
+            bottom: Px(bw.bottom),
+            left: Px(bw.left),
         };
         if let Some(bc) = styles.border_color() {
             if let Some(color) = parse_color_str(bc) {
@@ -129,7 +129,7 @@ fn paint_layout_box(
         let color_str = styles.get("color").unwrap_or("black");
         let color = parse_color_str(color_str).unwrap_or(Rgba::BLACK);
         let font_size = styles.font_size_px().unwrap_or(16.0);
-        backend.draw_text(text, rect.x, rect.y, font_size, color, opacity);
+        backend.draw_text(text, Px(rect.x), Px(rect.y), Px(font_size), color, opacity);
         return;
     }
 

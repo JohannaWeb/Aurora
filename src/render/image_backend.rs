@@ -3,7 +3,7 @@
 
 use image::{ImageBuffer, Rgba as ImgRgba, RgbaImage};
 
-use super::commands::{BorderEdge, Bounds, RenderBackend, Rgba};
+use super::commands::{BorderEdge, Bounds, Px, RenderBackend, Rgba};
 
 pub struct ImageBackend {
     pub image: RgbaImage,
@@ -23,7 +23,6 @@ impl ImageBackend {
         self.image.height()
     }
 
-    /// Save the rendered image to a PNG file.
     pub fn save(&self, path: &str) -> Result<(), image::ImageError> {
         self.image.save(path)
     }
@@ -52,10 +51,10 @@ impl RenderBackend for ImageBackend {
             return;
         }
         let (w, h) = self.image.dimensions();
-        let x0 = bounds.x.max(0.0) as u32;
-        let y0 = bounds.y.max(0.0) as u32;
-        let x1 = bounds.right().min(w as f32) as u32;
-        let y1 = bounds.bottom().min(h as f32) as u32;
+        let x0 = bounds.x.0.max(0.0) as u32;
+        let y0 = bounds.y.0.max(0.0) as u32;
+        let x1 = bounds.right().0.min(w as f32) as u32;
+        let y1 = bounds.bottom().0.min(h as f32) as u32;
 
         for py in y0..y1 {
             for px in x0..x1 {
@@ -73,31 +72,21 @@ impl RenderBackend for ImageBackend {
         let x1 = bounds.right();
         let y1 = bounds.bottom();
 
-        // Top
-        if border.top > 0.0 {
+        if border.top.0 > 0.0 {
+            self.fill_rect(Bounds::new(x0, y0, bounds.width, border.top), color, opacity);
+        }
+        if border.bottom.0 > 0.0 {
             self.fill_rect(
-                Bounds::new(x0, y0, bounds.width, border.top),
+                Bounds::new(x0, Px(y1.0 - border.bottom.0), bounds.width, border.bottom),
                 color, opacity,
             );
         }
-        // Bottom
-        if border.bottom > 0.0 {
-            self.fill_rect(
-                Bounds::new(x0, y1 - border.bottom, bounds.width, border.bottom),
-                color, opacity,
-            );
+        if border.left.0 > 0.0 {
+            self.fill_rect(Bounds::new(x0, y0, border.left, bounds.height), color, opacity);
         }
-        // Left
-        if border.left > 0.0 {
+        if border.right.0 > 0.0 {
             self.fill_rect(
-                Bounds::new(x0, y0, border.left, bounds.height),
-                color, opacity,
-            );
-        }
-        // Right
-        if border.right > 0.0 {
-            self.fill_rect(
-                Bounds::new(x1 - border.right, y0, border.right, bounds.height),
+                Bounds::new(Px(x1.0 - border.right.0), y0, border.right, bounds.height),
                 color, opacity,
             );
         }
@@ -106,16 +95,19 @@ impl RenderBackend for ImageBackend {
     fn draw_text(
         &mut self,
         text: &str,
-        x: f32,
-        y: f32,
-        font_size: f32,
+        x: Px,
+        y: Px,
+        font_size: Px,
         color: Rgba,
         opacity: f32,
     ) {
         if opacity < 0.01 || text.is_empty() {
             return;
         }
-        // Use Aurora's existing glyph atlas for software rendering.
+        let x = x.0;
+        let y = y.0;
+        let font_size = font_size.0;
+
         let text_run = crate::font::layout_text_run(text, font_size);
         let baseline_y = y + font_size * 0.75;
 
@@ -155,9 +147,7 @@ impl RenderBackend for ImageBackend {
                     let py = (gy.round() as i32 + dy as i32) as u32;
                     if px < img_w && py < img_h {
                         let glyph_color = Rgba::new(
-                            color.r,
-                            color.g,
-                            color.b,
+                            color.r, color.g, color.b,
                             ((alpha as f32 / 255.0) * color.a as f32).round() as u8,
                         );
                         self.blend_pixel(px, py, glyph_color, opacity);
@@ -179,13 +169,15 @@ impl RenderBackend for ImageBackend {
             return;
         }
         let (w, h) = self.image.dimensions();
-        let scale_x = img_width as f32 / bounds.width;
-        let scale_y = img_height as f32 / bounds.height;
+        let bw = bounds.width.0 as u32;
+        let bh = bounds.height.0 as u32;
+        let scale_x = img_width as f32 / bounds.width.0;
+        let scale_y = img_height as f32 / bounds.height.0;
 
-        for dy in 0..bounds.height as u32 {
-            for dx in 0..bounds.width as u32 {
-                let dst_x = bounds.x as u32 + dx;
-                let dst_y = bounds.y as u32 + dy;
+        for dy in 0..bh {
+            for dx in 0..bw {
+                let dst_x = bounds.x.0 as u32 + dx;
+                let dst_y = bounds.y.0 as u32 + dy;
                 if dst_x >= w || dst_y >= h {
                     continue;
                 }
@@ -204,16 +196,12 @@ impl RenderBackend for ImageBackend {
         self.fill_rect(bounds, Rgba::new(220, 235, 250, 255), opacity);
         self.stroke_rect(
             bounds,
-            BorderEdge { top: 1.0, right: 1.0, bottom: 1.0, left: 1.0 },
+            BorderEdge { top: Px(1.0), right: Px(1.0), bottom: Px(1.0), left: Px(1.0) },
             Rgba::new(100, 150, 200, 255),
             opacity,
         );
     }
 
-    fn push_clip(&mut self, _bounds: Bounds) {
-        // Software clipping: TODO implement clip stack.
-        // For now, no-op — content outside bounds will still render.
-    }
-
+    fn push_clip(&mut self, _bounds: Bounds) {}
     fn pop_clip(&mut self) {}
 }

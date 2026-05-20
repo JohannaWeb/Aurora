@@ -10,4 +10,18 @@ pub(super) struct InheritedStyles {
     pub(super) text_decoration: Option<String>,
     pub(super) visibility: Option<String>,
     pub(super) white_space: Option<String>,
+    // Additional inherited properties
+    pub(super) cursor: Option<String>,
+    pub(super) direction: Option<String>,
+    pub(super) letter_spacing: Option<String>,
+    pub(super) word_spacing: Option<String>,
+    pub(super) text_transform: Option<String>,
+    pub(super) text_indent: Option<String>,
+    pub(super) list_style_type: Option<String>,
+    pub(super) list_style_position: Option<String>,
+    pub(super) border_collapse: Option<String>,
+    pub(super) border_spacing: Option<String>,
+    pub(super) caption_side: Option<String>,
+    pub(super) empty_cells: Option<String>,
+    pub(super) quotes: Option<String>,
 }

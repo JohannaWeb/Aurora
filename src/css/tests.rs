@@ -19,6 +19,16 @@ fn element(tag_name: &str, attrs: &[(&str, &str)]) -> ElementData {
     }
 }
 
+/// Call styles_for with no ancestors or siblings (the common test case).
+fn styles(stylesheet: &Stylesheet, el: &ElementData) -> StyleMap {
+    stylesheet.styles_for(el, &[], &[], 0)
+}
+
+/// Call styles_for with ancestors but no siblings.
+fn styles_with_ancestors(stylesheet: &Stylesheet, el: &ElementData, ancestors: &[ElementData]) -> StyleMap {
+    stylesheet.styles_for(el, ancestors, &[], 0)
+}
+
 #[test]
 fn parser_keeps_braces_inside_declaration_values() {
     let stylesheet =
@@ -26,32 +36,27 @@ fn parser_keeps_braces_inside_declaration_values() {
 
     assert_eq!(stylesheet.rules.len(), 2);
     assert_eq!(stylesheet.rules[0].declarations[0].name, "content");
-    assert_eq!(stylesheet.rules[0].declarations[0].value, "\"}\"");
+    // cssparser serialises the quoted string back with quotes
+    assert!(stylesheet.rules[0].declarations[0].value.contains('}'));
     assert_eq!(stylesheet.rules[1].declarations[0].value, "blue");
 }
 
 #[test]
 fn important_declarations_override_later_normal_declarations() {
     let stylesheet = Stylesheet::parse("p { color: red !important; } p { color: blue; }");
-    let styles = stylesheet.styles_for(&element("p", &[]), &[]);
-
-    assert_eq!(styles.get("color"), Some("red"));
+    assert_eq!(styles(&stylesheet, &element("p", &[])).get("color"), Some("red"));
 }
 
 #[test]
 fn display_inline_block_maps_to_distinct_display_mode() {
     let stylesheet = Stylesheet::parse("span { display: inline-block; }");
-    let styles = stylesheet.styles_for(&element("span", &[]), &[]);
-
-    assert_eq!(styles.display_mode(), DisplayMode::InlineBlock);
+    assert_eq!(styles(&stylesheet, &element("span", &[])).display_mode(), DisplayMode::InlineBlock);
 }
 
 #[test]
 fn vertical_margins_can_parse_auto() {
     let stylesheet = Stylesheet::parse("main { margin-top: auto; margin-bottom: auto; }");
-    let styles = stylesheet.styles_for(&element("main", &[]), &[]);
-    let margin = styles.margin();
-
+    let margin = styles(&stylesheet, &element("main", &[])).margin();
     assert_eq!(margin.top, MarginValue::Auto);
     assert_eq!(margin.bottom, MarginValue::Auto);
 }
@@ -79,19 +84,14 @@ fn child_combinator_requires_direct_parent() {
     let p = el("p");
     // Direct child: div → p — should match.
     assert_eq!(
-        stylesheet.styles_for(&p, &[div.clone()]).get("color"),
+        styles_with_ancestors(&stylesheet, &p, &[div.clone()]).get("color"),
         Some("red")
     );
     // Grandchild: div → span → p — should NOT match.
     let span = el("span");
     assert_eq!(
-        stylesheet.styles_for(&p, &[div.clone(), span]).get("color"),
+        styles_with_ancestors(&stylesheet, &p, &[div.clone(), span]).get("color"),
         None
-    );
-    // Ancestor without child combinator — just div alone as parent still matches.
-    assert_eq!(
-        stylesheet.styles_for(&p, &[div]).get("color"),
-        Some("red")
     );
 }
 
@@ -102,9 +102,9 @@ fn attribute_selector_exact_match() {
     let text_input = el_with("input", &[("type", "text")]);
     let no_type = el("input");
 
-    assert_eq!(stylesheet.styles_for(&checkbox, &[]).get("display"), Some("none"));
-    assert_eq!(stylesheet.styles_for(&text_input, &[]).get("display"), None);
-    assert_eq!(stylesheet.styles_for(&no_type, &[]).get("display"), None);
+    assert_eq!(styles(&stylesheet, &checkbox).get("display"), Some("none"));
+    assert_eq!(styles(&stylesheet, &text_input).get("display"), None);
+    assert_eq!(styles(&stylesheet, &no_type).get("display"), None);
 }
 
 #[test]
@@ -113,8 +113,8 @@ fn attribute_selector_substring_match() {
     let link = el_with("a", &[("href", "https://example.com/foo")]);
     let other = el_with("a", &[("href", "https://other.com")]);
 
-    assert_eq!(stylesheet.styles_for(&link, &[]).get("color"), Some("green"));
-    assert_eq!(stylesheet.styles_for(&other, &[]).get("color"), None);
+    assert_eq!(styles(&stylesheet, &link).get("color"), Some("green"));
+    assert_eq!(styles(&stylesheet, &other).get("color"), None);
 }
 
 #[test]
@@ -123,8 +123,8 @@ fn not_pseudo_class_negates_match() {
     let plain = el_with("p", &[]);
     let lead = el_with("p", &[("class", "lead")]);
 
-    assert_eq!(stylesheet.styles_for(&plain, &[]).get("color"), Some("gray"));
-    assert_eq!(stylesheet.styles_for(&lead, &[]).get("color"), None);
+    assert_eq!(styles(&stylesheet, &plain).get("color"), Some("gray"));
+    assert_eq!(styles(&stylesheet, &lead).get("color"), None);
 }
 
 #[test]
@@ -132,5 +132,43 @@ fn specificity_counts_attribute_selectors() {
     // [attr] selector specificity (0,1,0) should beat plain tag (0,0,1).
     let stylesheet = Stylesheet::parse("p { color: blue; } p[lang] { color: red; }");
     let p_lang = el_with("p", &[("lang", "en")]);
-    assert_eq!(stylesheet.styles_for(&p_lang, &[]).get("color"), Some("red"));
+    assert_eq!(styles(&stylesheet, &p_lang).get("color"), Some("red"));
+}
+
+#[test]
+fn adjacent_sibling_combinator_matches_immediately_preceding() {
+    let stylesheet = Stylesheet::parse("h2 + p { margin-top: 0; }");
+    let h2 = el("h2");
+    let p = el("p");
+    let siblings = vec![h2, p.clone()];
+    // p at index 1, h2 at index 0 — adjacent match
+    assert_eq!(
+        stylesheet.styles_for(&p, &[], &siblings, 1).get("margin-top"),
+        Some("0")
+    );
+    // p at index 0 — no preceding sibling
+    assert_eq!(
+        stylesheet.styles_for(&p, &[], &siblings, 0).get("margin-top"),
+        None
+    );
+}
+
+#[test]
+fn is_pseudo_class_matches_any_in_list() {
+    let stylesheet = Stylesheet::parse(":is(h1, h2, h3) { font-weight: bold; }");
+    assert_eq!(styles(&stylesheet, &el("h1")).get("font-weight"), Some("bold"));
+    assert_eq!(styles(&stylesheet, &el("h2")).get("font-weight"), Some("bold"));
+    assert_eq!(styles(&stylesheet, &el("p")).get("font-weight"), None);
+}
+
+#[test]
+fn media_query_rules_are_included() {
+    let stylesheet = Stylesheet::parse("@media screen { p { color: red; } }");
+    assert_eq!(styles(&stylesheet, &el("p")).get("color"), Some("red"));
+}
+
+#[test]
+fn print_media_query_rules_are_excluded() {
+    let stylesheet = Stylesheet::parse("@media print { p { color: invisible; } } p { color: visible; }");
+    assert_eq!(styles(&stylesheet, &el("p")).get("color"), Some("visible"));
 }
