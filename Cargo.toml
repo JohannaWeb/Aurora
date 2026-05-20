@@ -28,4 +28,4 @@ taffy = "0.10.1"
 parley = "0.7"
 reqwest = { version = "0.12", features = ["blocking", "rustls-tls", "gzip", "deflate", "brotli"], default-features = false }
 usvg = "0.47.0"
-vello_svg = "0.9.0"
+# vello_svg removed: v0.9.0 links against vello 0.7 + usvg 0.46, incompatible with our vello 0.9 + usvg 0.47

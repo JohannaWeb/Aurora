@@ -9,32 +9,24 @@ use crate::style::StyleTree;
 use image::RgbaImage;
 use opus::domain::{Capability, Identity, IdentityKind};
 
+/// Fetch a URL and render it to an RGBA image using the software backend.
+pub fn render_url_to_image(url: &str, width: u32, height: u32) -> RgbaImage {
+    let identity = headless_identity();
+    let html = match crate::fetch::fetch_html(url, &identity) {
+        Ok(html) => html,
+        Err(e) => {
+            eprintln!("render_url_to_image: failed to fetch {url}: {e}");
+            return RgbaImage::new(width, height);
+        }
+    };
+    render_to_image_with_base(&html, Some(url), &identity, width, height)
+}
+
 /// Render an HTML string to an RGBA image at the given viewport size.
 /// Used by visual regression tests.
 pub fn render_to_image(html: &str, width: u32, height: u32) -> RgbaImage {
     let identity = headless_identity();
-    let viewport = ViewportSize {
-        width: width as f32,
-        height: height as f32,
-    };
-
-    // Parse HTML.
-    let dom = Parser::new(html).parse_document();
-
-    // Build stylesheet and layout.
-    let mut stylesheet = Stylesheet::from_dom(&dom, None, &identity);
-    stylesheet.merge(Stylesheet::user_agent_stylesheet());
-    let style_tree = StyleTree::from_dom(&dom, &stylesheet);
-    let layout = LayoutTree::from_style_tree_with_viewport(&style_tree, viewport);
-
-    // Load images (file:// only in headless).
-    let images = crate::runner::load_images(layout.root(), None, &identity);
-
-    // Paint using the software ImageBackend.
-    let mut backend = ImageBackend::new(width, height);
-    paint_layout_box(layout.root(), &mut backend, &images, 1.0);
-
-    backend.image
+    render_to_image_with_base(html, None, &identity, width, height)
 }
 
 /// Render an HTML fixture file to an RGBA image.
@@ -42,6 +34,33 @@ pub fn render_fixture_to_image(fixture_html_path: &str, width: u32, height: u32)
     let html = std::fs::read_to_string(fixture_html_path)
         .unwrap_or_else(|_| panic!("Failed to read fixture: {}", fixture_html_path));
     render_to_image(&html, width, height)
+}
+
+fn render_to_image_with_base(
+    html: &str,
+    base_url: Option<&str>,
+    identity: &Identity,
+    width: u32,
+    height: u32,
+) -> RgbaImage {
+    let viewport = ViewportSize {
+        width: width as f32,
+        height: height as f32,
+    };
+
+    let dom = Parser::new(html).parse_document();
+
+    let mut stylesheet = Stylesheet::from_dom(&dom, base_url, identity);
+    stylesheet.merge(Stylesheet::user_agent_stylesheet());
+    let style_tree = StyleTree::from_dom(&dom, &stylesheet);
+    let layout = LayoutTree::from_style_tree_with_viewport(&style_tree, viewport);
+
+    let images = crate::runner::load_images(layout.root(), base_url, identity);
+
+    let mut backend = ImageBackend::new(width, height);
+    paint_layout_box(layout.root(), &mut backend, &images, 1.0);
+
+    backend.image
 }
 
 fn paint_layout_box(
@@ -161,6 +180,6 @@ fn headless_identity() -> Identity {
         "did:headless:test",
         "Headless",
         IdentityKind::Agent,
-        [Capability::ReadWorkspace],
+        [Capability::ReadWorkspace, Capability::NetworkAccess],
     )
 }

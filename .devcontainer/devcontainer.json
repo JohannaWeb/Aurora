@@ -1,0 +1,29 @@
+{
+  "name": "Aurora",
+  "image": "mcr.microsoft.com/devcontainers/rust:1-bookworm",
+  "onCreateCommand": "sudo apt-get update && sudo apt-get install -y --no-install-recommends libwayland-dev libx11-dev libx11-xcb-dev libxcb1-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev libxkbcommon-dev pkg-config && sudo rm -rf /var/lib/apt/lists/*",
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "rust-lang.rust-analyzer",
+        "tamasfe.even-better-toml",
+        "vadimcn.vscode-lldb",
+        "fill-labs.dependi",
+        "anthropics.claude-code",
+        "google.geminicodeassist",
+        "GitHub.copilot",
+        "openai.codex"
+      ],
+      "settings": {
+        "editor.fontFamily": "'Cascadia Code', monospace",
+        "editor.fontSize": 16,
+        "editor.fontLigatures": true,
+        "rust-analyzer.cargo.buildScripts.enable": true,
+        "rust-analyzer.checkOnSave.command": "clippy"
+      }
+    }
+  },
+  "remoteEnv": {
+    "PKG_CONFIG_PATH": "/usr/lib/x86_64-linux-gnu/pkgconfig:/usr/share/pkgconfig"
+  }
+}

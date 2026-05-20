@@ -109,3 +109,12 @@ fn snapshot_demo() {
 fn snapshot_google_homepage() {
     assert_snapshot("google-homepage", 1338, 786);
 }
+
+#[test]
+fn snapshot_wikipedia_rust() {
+    let url = "https://en.wikipedia.org/wiki/Rust_(programming_language)";
+    let rendered = aurora::render::headless::render_url_to_image(url, 1440, 900);
+    let path = snapshots_dir().join("wikipedia-rust.png");
+    rendered.save(&path).expect("Failed to save screenshot");
+    println!("Screenshot saved to {}", path.display());
+}

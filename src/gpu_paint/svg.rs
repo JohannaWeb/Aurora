@@ -1,4 +1,3 @@
-use usvg::Transform;
 use vello::kurbo::Affine;
 use vello::Scene;
 
@@ -21,9 +20,9 @@ pub(super) fn render_svg_tree(
 
     let transform = Affine::translate((offset_x, offset_y)) * Affine::scale(scale);
 
-    let mut svg_scene = Scene::new();
-    vello_svg::render_tree(&mut svg_scene, tree);
-    scene.append(&svg_scene, Some(transform));
+    // vello_svg 0.9.0 requires vello 0.7 / usvg 0.46 which conflicts with our vello 0.9 / usvg 0.47.
+    // SVG GPU rendering is stubbed until a compatible vello_svg is available.
+    let _ = (tree, transform, scene);
 }
 
 /// Parse an SVG string into a usvg tree.
