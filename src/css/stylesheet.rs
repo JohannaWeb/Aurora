@@ -232,7 +232,7 @@ impl<'i> AtRuleParser<'i> for AuroraStyleParser<'_> {
                     Ok(cssparser::Token::UnquotedUrl(s)) => s.to_string(),
                     Ok(cssparser::Token::Function(f)) if f.eq_ignore_ascii_case("url") => {
                         input
-                            .parse_nested_block(|p| {
+                            .parse_nested_block(|p| -> Result<String, cssparser::ParseError<'_, ()>> {
                                 Ok(p.expect_string_cloned()?.as_ref().to_string())
                             })
                             .unwrap_or_default()
@@ -286,26 +286,10 @@ impl<'i> AtRuleParser<'i> for AuroraStyleParser<'_> {
                     while input.next().is_ok() {}
                     return Ok(vec![]);
                 }
-                // Pass-through: parse the block as a nested stylesheet.
-                let nested_source = collect_block_as_string(input);
-                let rules = parse_rules(
-                    &nested_source,
-                    self.fetch_ctx,
-                    self.variables,
-                    self.source_order,
-                );
-                Ok(rules)
+                Ok(parse_nested_block(input, self.fetch_ctx, self.variables, self.source_order))
             }
             AtRulePrelude::Supports | AtRulePrelude::Layer => {
-                // Pass content through without evaluating the condition.
-                let nested_source = collect_block_as_string(input);
-                let rules = parse_rules(
-                    &nested_source,
-                    self.fetch_ctx,
-                    self.variables,
-                    self.source_order,
-                );
-                Ok(rules)
+                Ok(parse_nested_block(input, self.fetch_ctx, self.variables, self.source_order))
             }
             _ => {
                 while input.next().is_ok() {}
@@ -359,15 +343,13 @@ fn parse_declaration_block<'i>(
     input: &mut Parser<'i, '_>,
     variables: &mut BTreeMap<String, String>,
 ) -> Vec<Declaration> {
-    let selector_placeholder = "";
-    let mut decl_parser = AuroraDeclarationParser { selector_placeholder, variables };
+    let mut decl_parser = AuroraDeclarationParser { variables };
     RuleBodyParser::new(input, &mut decl_parser)
         .filter_map(Result::ok)
         .collect()
 }
 
 struct AuroraDeclarationParser<'a> {
-    selector_placeholder: &'a str,
     variables: &'a mut BTreeMap<String, String>,
 }
 
@@ -539,13 +521,18 @@ fn collect_prelude_as_string<'i>(input: &mut Parser<'i, '_>) -> String {
     s
 }
 
-/// Drain a block parser into a raw string (for recursive parsing of @media contents).
-fn collect_block_as_string<'i>(input: &mut Parser<'i, '_>) -> String {
-    let mut s = String::new();
-    while let Ok(token) = input.next_including_whitespace_and_comments() {
-        s.push_str(&token.to_css_string());
-    }
-    s
+/// Parse a CSS block (e.g. @media body) directly as nested rules without string roundtrip.
+fn parse_nested_block<'i, 't>(
+    input: &mut Parser<'i, 't>,
+    fetch_ctx: Option<(&str, &opus::domain::Identity)>,
+    variables: &mut BTreeMap<String, String>,
+    source_order: &mut usize,
+) -> Vec<Rule> {
+    let mut nested = AuroraStyleParser { fetch_ctx, variables, source_order };
+    StyleSheetParser::new(input, &mut nested)
+        .filter_map(|r| r.ok())
+        .flatten()
+        .collect()
 }
 
 /// Exposed for headless/inline use — parses declarations from a style attribute.
@@ -553,7 +540,7 @@ pub(crate) fn parse_declarations_for_style_attribute(source: &str) -> Vec<Declar
     let mut input = ParserInput::new(source);
     let mut parser = Parser::new(&mut input);
     let mut variables = BTreeMap::new();
-    let mut decl_parser = AuroraDeclarationParser { selector_placeholder: "*", variables: &mut variables };
+    let mut decl_parser = AuroraDeclarationParser { variables: &mut variables };
     RuleBodyParser::new(&mut parser, &mut decl_parser)
         .filter_map(Result::ok)
         .collect()
