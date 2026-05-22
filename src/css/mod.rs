@@ -16,7 +16,7 @@ mod stylesheet;
 #[cfg(test)]
 mod tests;
 
-pub use ast::{Declaration, ElementData, Rule, Selector, Specificity};
+pub use ast::{Declaration, ElementData, Rule, Selector};
 pub use inline_style::parse_style_text;
 #[allow(unused_imports)]
 pub use length::{parse_length_value, LengthValue};
@@ -24,6 +24,6 @@ pub use properties::{
     AlignItems, BoxSizing, DisplayMode, EdgeSizes, FlexDirection, JustifyContent, Margin,
     MarginValue, TextAlign, WhiteSpace,
 };
-pub use selectors_impl::{AuroraSelectorImpl, CascadeElement};
+pub use selectors_impl::CascadeElement;
 pub use style_map::StyleMap;
 pub use stylesheet::Stylesheet;

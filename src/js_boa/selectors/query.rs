@@ -1,6 +1,6 @@
 use crate::css::{CascadeElement, ElementData};
 use crate::css::selectors_impl::{element_matches, parse_selector_list, AuroraSelectorImpl};
-use selectors::parser::Selector;
+use ::selectors::parser::Selector;
 
 use super::*;
 

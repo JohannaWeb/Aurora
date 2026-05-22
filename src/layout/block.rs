@@ -65,6 +65,10 @@ impl LayoutBox {
         };
 
         for child in children {
+            if child.styles().display_mode() == DisplayMode::None {
+                continue;
+            }
+
             let child_is_block = child
                 .tag_name()
                 .map(|_| {

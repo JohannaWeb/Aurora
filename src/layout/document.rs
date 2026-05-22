@@ -177,6 +177,7 @@ impl LayoutDocument {
         let children = styled_node
             .children()
             .iter()
+            .filter(|child| !should_skip(child))
             .map(|child| self.to_layout_box(child, x, y))
             .collect();
 
@@ -249,6 +250,19 @@ fn measure_text(
         width: max_w.min(available_width),
         height: ctx.line_height * lines as f32,
     }
+}
+
+fn should_skip(styled_node: &crate::style::StyledNode) -> bool {
+    use crate::css::DisplayMode;
+    if styled_node.styles().display_mode() == DisplayMode::None {
+        return true;
+    }
+    if let Some(tag) = styled_node.tag_name() {
+        if matches!(tag.as_str(), "style" | "script") {
+            return true;
+        }
+    }
+    false
 }
 
 fn determine_kind(styled_node: &crate::style::StyledNode) -> LayoutKind {
