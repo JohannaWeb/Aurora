@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Implementation plan
+    url: https://github.com/JohannaWeb/Aurora/blob/main/docs/current/IMPLEMENTATION_PLAN.md
+    about: Check the phase plan before opening a feature request
