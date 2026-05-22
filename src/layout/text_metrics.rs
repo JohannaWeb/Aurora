@@ -10,7 +10,7 @@ pub(in crate::layout) fn font_size_from_styles(styles: &StyleMap) -> f32 {
 }
 
 pub(in crate::layout) fn measure_text_width(text: &str, styles: &StyleMap) -> f32 {
-    crate::font::measure_text(text, font_size_from_styles(styles))
+    super::parley_text::measure(text, font_size_from_styles(styles))
 }
 
 pub(in crate::layout) fn line_height_from_styles(styles: &StyleMap) -> f32 {

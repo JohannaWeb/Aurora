@@ -76,43 +76,9 @@ fn measure_text_node(
     Size { width, height }
 }
 
-/// Intrinsic text size with simple word-wrapping (matches legacy char-width heuristic).
-fn text_content_size(text: &str, font_size: f32, line_height: f32, available_width: f32) -> (f32, f32) {
-    let intrinsic = crate::font::measure_text(text, font_size);
-    if text.split_whitespace().count() <= 1 && intrinsic <= available_width {
-        return (intrinsic, line_height);
-    }
-
-    let char_width = font_size;
-    let words: Vec<&str> = text.split_whitespace().collect();
-    if words.is_empty() {
-        return (0.0, 0.0);
-    }
-
-    let mut line_width: f32 = 0.0;
-    let mut max_width: f32 = 0.0;
-    let mut lines: u32 = 1;
-    let space_w = char_width * 0.3;
-
-    for word in words {
-        let word_w = word.chars().count() as f32 * char_width;
-        if line_width > 0.0 && line_width + space_w + word_w > available_width {
-            max_width = max_width.max(line_width);
-            line_width = word_w;
-            lines += 1;
-        } else {
-            if line_width > 0.0 {
-                line_width += space_w;
-            }
-            line_width += word_w;
-        }
-    }
-    max_width = max_width.max(line_width);
-
-    (
-        max_width.min(available_width),
-        line_height * lines as f32,
-    )
+/// Measure text size using Parley for accurate glyph metrics and line-breaking.
+fn text_content_size(text: &str, font_size: f32, _line_height: f32, available_width: f32) -> (f32, f32) {
+    super::parley_text::layout_lines(text, font_size, Some(available_width))
 }
 
 /// Recursively build a Taffy tree, returning the root handle.
