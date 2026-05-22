@@ -253,3 +253,54 @@ fn parses_textarea_as_rcdata_and_decodes_entities() {
         )])
     );
 }
+
+#[test]
+fn style_text_stays_inside_style_element() {
+    use crate::dom::Node;
+    let html = r#"<!DOCTYPE html>
+<html><head>
+<style>body{background:#eee;width:60vw}a:link,a:visited{color:#348}</style>
+</head><body><p>Hello</p></body></html>"#;
+
+    let dom = super::Parser::new(html).parse_document();
+
+    // Walk the DOM and find any text node containing CSS
+    fn find_css_text(node: &crate::dom::NodePtr, path: &str) -> Vec<String> {
+        let mut found = Vec::new();
+        let b = node.borrow();
+        match &*b {
+            Node::Text(t) if t.contains('{') => {
+                found.push(format!("{path}: {:?}", &t[..t.len().min(60)]));
+            }
+            Node::Element(el) => {
+                let new_path = format!("{path}/<{}>", el.tag_name);
+                let children = el.children.clone();
+                drop(b);
+                for child in children {
+                    found.extend(find_css_text(&child, &new_path));
+                }
+                return found;
+            }
+            Node::Document { children, .. } => {
+                let children = children.clone();
+                drop(b);
+                for child in children {
+                    found.extend(find_css_text(&child, path));
+                }
+                return found;
+            }
+            _ => {}
+        }
+        found
+    }
+
+    let occurrences = find_css_text(&dom, "doc");
+    println!("CSS text locations: {occurrences:#?}");
+    
+    for loc in &occurrences {
+        assert!(
+            loc.contains("<style>"),
+            "CSS text found outside <style> element: {loc}"
+        );
+    }
+}
