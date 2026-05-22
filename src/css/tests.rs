@@ -172,3 +172,14 @@ fn print_media_query_rules_are_excluded() {
     let stylesheet = Stylesheet::parse("@media print { p { color: invisible; } } p { color: visible; }");
     assert_eq!(styles(&stylesheet, &el("p")).get("color"), Some("visible"));
 }
+
+#[test]
+fn ua_sets_display_none_on_head() {
+    let ua = Stylesheet::user_agent_stylesheet();
+    let head = el("head");
+    assert_eq!(styles(&ua, &head).get("display"), Some("none"),
+        "UA stylesheet must set display:none on <head>");
+    let style_el = el("style");
+    assert_eq!(styles(&ua, &style_el).get("display"), Some("none"),
+        "UA stylesheet must set display:none on <style>");
+}

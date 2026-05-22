@@ -1,7 +1,5 @@
 use std::fmt::{self, Display, Formatter};
 
-use cssparser::ToCss;
-
 use super::{StyleMap, Stylesheet};
 
 impl Display for Stylesheet {

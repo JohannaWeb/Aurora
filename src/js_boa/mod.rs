@@ -53,7 +53,7 @@ use node_create::*;
 use observers::*;
 use reflection::*;
 use registry::*;
-use selectors::*;
+use self::selectors::*;
 use serialization::*;
 use storage::*;
 use style_class::*;

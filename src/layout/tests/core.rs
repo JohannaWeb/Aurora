@@ -175,3 +175,62 @@ fn wraps_inline_children_when_the_row_fills() {
     assert!(rendered.contains("text(\"hello\")"));
     assert!(rendered.contains("text(\"world\")"));
 }
+
+#[test]
+fn display_none_children_produce_no_layout_boxes() {
+    // A display:none element (style) must not render its text children.
+    // Build a DOM with <style> in both <head> (display:none via UA) and
+    // a standalone display:none div, then confirm no CSS text appears.
+    let dom = Node::document(vec![Node::element(
+        "html",
+        vec![
+            Node::element(
+                "head",
+                vec![Node::element(
+                    "style",
+                    vec![Node::text("body{background:#eee;width:60vw}")],
+                )],
+            ),
+            Node::element(
+                "body",
+                vec![Node::element("p", vec![Node::text("Hello")])],
+            ),
+        ],
+    )]);
+
+    let stylesheet = Stylesheet::user_agent_stylesheet();
+    let style_tree = StyleTree::from_dom(&dom, &stylesheet);
+    let layout = LayoutTree::from_style_tree_with_viewport_width(&style_tree, 800.0);
+    let rendered = layout.to_string();
+
+    assert!(
+        !rendered.contains("background:#eee"),
+        "CSS text from <style> leaked into layout tree:\n{rendered}"
+    );
+    // Sanity check: actual content is present
+    assert!(rendered.contains("Hello"), "Expected body content to render");
+}
+
+#[test]
+fn parsed_html_style_text_does_not_reach_layout() {
+    // Use the real html5ever parser, NOT a manually built DOM.
+    use crate::html::Parser;
+    let html = r#"<!DOCTYPE html>
+<html><head>
+<style>body{background:#eee;width:60vw}a:link,a:visited{color:#348}</style>
+</head><body><p>Hello</p></body></html>"#;
+
+    let dom = Parser::new(html).parse_document();
+    let stylesheet = Stylesheet::user_agent_stylesheet();
+    let style_tree = StyleTree::from_dom(&dom, &stylesheet);
+    let layout = LayoutTree::from_style_tree_with_viewport_width(&style_tree, 800.0);
+    let rendered = layout.to_string();
+
+    println!("Layout tree:\n{rendered}");
+
+    assert!(
+        !rendered.contains("background:#eee"),
+        "CSS text leaked into layout:\n{rendered}"
+    );
+    assert!(rendered.contains("Hello"));
+}
