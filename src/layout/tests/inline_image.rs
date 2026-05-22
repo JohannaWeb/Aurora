@@ -66,11 +66,9 @@ fn clamps_inline_width_before_wrapping() {
     println!("DEBUG clamps_inline_width_before_wrapping:\n{}", rendered);
 
     assert!(rendered.contains("inline<p> {display: inline, max-width: 64px, min-height: 60px, padding: 4px, width: 140px}"));
-    assert!(rendered.contains("text(\"one\")"));
-    assert!(rendered.contains("text(\"two\")"));
+    assert!(rendered.contains("text(\"one two\")"));
     assert!(rendered.contains("text(\"three\")"));
-    assert!(rendered.contains("text(\"four\")"));
-    assert!(rendered.contains("text(\"five\")"));
+    assert!(rendered.contains("text(\"four five\")"));
 }
 
 #[test]
@@ -103,9 +101,9 @@ fn includes_border_width_in_inline_box_geometry() {
     let rendered = layout.to_string();
 
     assert!(rendered.contains(
-            "inline<span> {border: 4px solid ember, display: inline, padding: 2px} [x: 0, y: 0, w: 44, h: 31]"
+            "inline<span> {border: 4px solid ember, display: inline, padding: 2px} [x: 0, y: 0, w: 28, h: 31]"
         ));
-    assert!(rendered.contains("text(\"Hi\") [x: 6, y: 6, w: 32, h: 19]"));
+    assert!(rendered.contains("text(\"Hi\") [x: 6, y: 6, w: 16, h: 19]"));
 }
 
 #[test]

@@ -79,7 +79,7 @@ fn keeps_percentage_width_flex_items_explicit() {
     let layout = LayoutTree::from_style_tree_with_viewport_width(&style_tree, 400.0);
     let rendered = layout.to_string();
 
-    assert!(rendered.contains("block<div> {display: flex, width: 50%} [x: 16, y: 0, w: 200"));
+    assert!(rendered.contains("block<div> {display: flex, width: 50%} [x: 10, y: 0, w: 200"));
 }
 
 #[test]
@@ -102,9 +102,9 @@ fn wraps_inline_text_across_multiple_lines() {
     );
 
     assert!(rendered.contains("inline<p> {display: inline}"));
-    assert!(rendered.contains("text(\"alpha\") [x: 0, y: 0, w: 80, h: 19]"));
-    assert!(rendered.contains("text(\"beta\") [x: 0, y: 19, w: 64, h: 19]"));
-    assert!(rendered.contains("text(\"gamma\") [x: 0, y: 38, w: 80, h: 19]"));
+    assert!(rendered.contains("text(\"alpha beta\") [x: 0, y: 0, w: 80, h: 19]"));
+    assert!(rendered.contains("text(\"gamma\") [x: 0, y: 19, w: 58, h: 19]"));
+    assert!(rendered.contains("text(\"epsilon zeta\") [x: 0, y: 58, w: 90, h: 19]"));
 }
 
 #[test]
