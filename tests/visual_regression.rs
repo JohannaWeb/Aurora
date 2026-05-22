@@ -64,15 +64,55 @@ fn assert_snapshot(fixture_name: &str, width: u32, height: u32) {
         .unwrap_or_else(|_| panic!("Failed to load baseline: {}", snapshot_path.display()))
         .to_rgba8();
 
-    let diff_ratio = pixel_diff_ratio(&rendered, &baseline);
+    let (diff_ratio, diff_image) = compute_diff(&rendered, &baseline);
+
     assert!(
         diff_ratio <= DIFF_THRESHOLD,
         "Visual regression in '{}': {:.2}% pixels differ (threshold {:.2}%)\n\
+         Diff saved to: {}\n\
          Run UPDATE_SNAPSHOTS=1 cargo test to update baselines.",
         fixture_name,
         diff_ratio * 100.0,
-        DIFF_THRESHOLD * 100.0
+        DIFF_THRESHOLD * 100.0,
+        save_diff(fixture_name, &diff_image).display()
     );
+}
+
+fn save_diff(name: &str, img: &RgbaImage) -> PathBuf {
+    let path = snapshots_dir().join(format!("{}-diff.png", name));
+    img.save(&path).expect("Failed to save diff image");
+    path
+}
+
+/// Returns (ratio, diff_image)
+fn compute_diff(actual: &RgbaImage, expected: &RgbaImage) -> (f64, RgbaImage) {
+    let (w, h) = actual.dimensions();
+    let mut diff_img = RgbaImage::new(w, h);
+    
+    if expected.dimensions() != (w, h) {
+        return (1.0, diff_img);
+    }
+
+    let mut diff_count = 0u64;
+    for (x, y, pa) in actual.enumerate_pixels() {
+        let pb = expected.get_pixel(x, y);
+        let dr = (pa.0[0] as i32 - pb.0[0] as i32).abs();
+        let dg = (pa.0[1] as i32 - pb.0[1] as i32).abs();
+        let db = (pa.0[2] as i32 - pb.0[2] as i32).abs();
+
+        if dr > PIXEL_TOLERANCE || dg > PIXEL_TOLERANCE || db > PIXEL_TOLERANCE {
+            diff_count += 1;
+            // Highlight diff in red
+            diff_img.put_pixel(x, y, image::Rgba([255, 0, 0, 255]));
+        } else {
+            // Dim background for context
+            let gray = ((pa.0[0] as u32 + pa.0[1] as u32 + pa.0[2] as u32) / 3) as u8;
+            let val = (gray as f32 * 0.1) as u8;
+            diff_img.put_pixel(x, y, image::Rgba([val, val, val, 255]));
+        }
+    }
+
+    (diff_count as f64 / (w * h) as f64, diff_img)
 }
 
 /// Returns the ratio of pixels that differ beyond PIXEL_TOLERANCE.
