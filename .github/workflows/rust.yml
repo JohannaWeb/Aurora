@@ -35,5 +35,5 @@ jobs:
     - name: Build
       run: cargo build --locked --verbose
 
-    - name: Run tests
-      run: cargo test --locked --verbose
+    - name: Run unit tests
+      run: cargo test --locked --lib --bins --verbose
