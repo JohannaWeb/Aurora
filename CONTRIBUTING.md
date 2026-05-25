@@ -40,7 +40,7 @@ You need:
 
 ```bash
 sudo apt-get install -y \
-  libwayland-dev libx11-dev libx11-xcb-dev libxcb1-dev \
+  libfontconfig1-dev libwayland-dev libx11-dev libx11-xcb-dev libxcb1-dev \
   libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
   libxkbcommon-dev pkg-config
 ```
