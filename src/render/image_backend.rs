@@ -109,12 +109,6 @@ impl RenderBackend for ImageBackend {
         let font_size = font_size.0;
 
         let text_run = crate::font::layout_text_run(text, font_size);
-        
-        // TODO: Once Parley is fully integrated, the LayoutBox should provide 
-        // the actual baseline offset. For now, we adjust to match common 
-        // browser defaults (usually ~0.8 for sans-serif).
-        let baseline_y = y + font_size * 0.81;
-
         // ISSUE: Parley 0.9.0 metrics (via Skrifa) differ from our legacy shaper.
         // The new metrics generally place the baseline slightly lower. 
         // 0.83 is a more accurate approximation for Skrifa-based fonts at 16px
