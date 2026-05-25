@@ -78,44 +78,6 @@ fn assert_snapshot(fixture_name: &str, width: u32, height: u32) {
     );
 }
 
-fn assert_url_snapshot(name: &str, url: &str, width: u32, height: u32) {
-    let rendered = aurora::render::headless::render_url_to_image(url, width, height);
-    let snapshot_path = snapshots_dir().join(format!("{name}.png"));
-
-    if updating_snapshots() {
-        rendered
-            .save(&snapshot_path)
-            .expect("Failed to save snapshot");
-        println!("Updated snapshot: {}", snapshot_path.display());
-        return;
-    }
-
-    if !snapshot_path.exists() {
-        rendered
-            .save(&snapshot_path)
-            .expect("Failed to save initial snapshot");
-        println!("Created initial snapshot: {}", snapshot_path.display());
-        return;
-    }
-
-    let baseline = image::open(&snapshot_path)
-        .unwrap_or_else(|_| panic!("Failed to load baseline: {}", snapshot_path.display()))
-        .to_rgba8();
-
-    let (diff_ratio, diff_image) = compute_diff(&rendered, &baseline);
-
-    assert!(
-        diff_ratio <= DIFF_THRESHOLD,
-        "Visual regression in '{}': {:.2}% pixels differ (threshold {:.2}%)\n\
-         Diff saved to: {}\n\
-         Run UPDATE_SNAPSHOTS=1 cargo test to update baselines.",
-        name,
-        diff_ratio * 100.0,
-        DIFF_THRESHOLD * 100.0,
-        save_diff(name, &diff_image).display()
-    );
-}
-
 fn save_diff(name: &str, img: &RgbaImage) -> PathBuf {
     let path = snapshots_dir().join(format!("{}-diff.png", name));
     img.save(&path).expect("Failed to save diff image");
@@ -167,6 +129,5 @@ fn snapshot_google_homepage() {
 
 #[test]
 fn snapshot_wikipedia_rust() {
-    let url = "https://en.wikipedia.org/wiki/Rust_(programming_language)";
-    assert_url_snapshot("wikipedia-rust", url, 1440, 900);
+    assert_snapshot("wikipedia-rust", 1440, 900);
 }

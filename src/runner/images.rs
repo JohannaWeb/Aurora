@@ -1,5 +1,5 @@
 use crate::layout::LayoutBox;
-use opus::domain::Identity;
+use crate::identity::Identity;
 use std::collections::HashMap;
 
 pub type ImageCache = HashMap<String, peniko::ImageData>;

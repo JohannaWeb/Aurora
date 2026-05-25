@@ -93,7 +93,7 @@ impl Stylesheet {
     pub fn from_dom(
         document: &NodePtr,
         base_url: Option<&str>,
-        identity: &opus::domain::Identity,
+        identity: &crate::identity::Identity,
     ) -> Self {
         let mut source = String::new();
         collect_styles(document, base_url, identity, &mut source);
@@ -156,7 +156,7 @@ impl Stylesheet {
 
 // ─── StyleSheetParser integration ────────────────────────────────────────────
 
-fn do_parse(source: &str, fetch_ctx: Option<(&str, &opus::domain::Identity)>) -> Stylesheet {
+fn do_parse(source: &str, fetch_ctx: Option<(&str, &crate::identity::Identity)>) -> Stylesheet {
     let mut variables = BTreeMap::new();
     let mut source_order = 0usize;
     let rules = parse_rules(source, fetch_ctx, &mut variables, &mut source_order);
@@ -167,7 +167,7 @@ fn do_parse(source: &str, fetch_ctx: Option<(&str, &opus::domain::Identity)>) ->
 /// Parse CSS source into a flat `Vec<Rule>` using cssparser's `StyleSheetParser`.
 pub(super) fn parse_rules(
     source: &str,
-    fetch_ctx: Option<(&str, &opus::domain::Identity)>,
+    fetch_ctx: Option<(&str, &crate::identity::Identity)>,
     variables: &mut BTreeMap<String, String>,
     source_order: &mut usize,
 ) -> Vec<Rule> {
@@ -197,7 +197,7 @@ enum AtRulePrelude {
 }
 
 struct AuroraStyleParser<'a> {
-    fetch_ctx: Option<(&'a str, &'a opus::domain::Identity)>,
+    fetch_ctx: Option<(&'a str, &'a crate::identity::Identity)>,
     variables: &'a mut BTreeMap<String, String>,
     source_order: &'a mut usize,
 }
@@ -524,7 +524,7 @@ fn collect_prelude_as_string<'i>(input: &mut Parser<'i, '_>) -> String {
 /// Parse a CSS block (e.g. @media body) directly as nested rules without string roundtrip.
 fn parse_nested_block<'i, 't>(
     input: &mut Parser<'i, 't>,
-    fetch_ctx: Option<(&str, &opus::domain::Identity)>,
+    fetch_ctx: Option<(&str, &crate::identity::Identity)>,
     variables: &mut BTreeMap<String, String>,
     source_order: &mut usize,
 ) -> Vec<Rule> {

@@ -1,4 +1,4 @@
-use opus::domain::Identity;
+use crate::identity::Identity;
 
 use super::capability::{require_file_access, require_network_access};
 use super::FetchError;

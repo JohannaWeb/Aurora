@@ -10,7 +10,7 @@
 
 ## Differentiators
 
-- Opus identity system with capability-gated fetch (`src/fetch/capability.rs`)
+- Stubbed identity system with capability-gated fetch (`src/fetch/capability.rs`)
 - Sovereign-runtime integration
 - Bastion umbrella ownership
 

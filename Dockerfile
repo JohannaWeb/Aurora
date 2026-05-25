@@ -4,6 +4,7 @@ FROM rust:1-bookworm AS builder
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
+        libfontconfig1-dev \
         libwayland-dev \
         libx11-dev \
         libx11-xcb-dev \
@@ -17,8 +18,7 @@ RUN apt-get update \
 
 WORKDIR /workspace
 
-COPY Aurora ./Aurora
-COPY Opus ./Opus
+COPY . ./Aurora
 
 WORKDIR /workspace/Aurora
 RUN cargo build --release --locked
@@ -28,6 +28,7 @@ FROM debian:bookworm-slim AS runtime
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         ca-certificates \
+        fontconfig \
         libgcc-s1 \
         libwayland-client0 \
         libwayland-cursor0 \

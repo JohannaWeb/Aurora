@@ -5,6 +5,7 @@ mod fetch;
 mod font;
 mod gpu_paint;
 mod html;
+mod identity;
 mod js_boa;
 mod layout;
 pub mod render;
@@ -30,14 +31,14 @@ fn install_crypto_provider() {
         .expect("Failed to install rustls crypto provider");
 }
 
-fn default_identity() -> opus::domain::Identity {
-    opus::domain::Identity::new(
+fn default_identity() -> identity::Identity {
+    identity::Identity::new(
         "did:human:johanna",
         "Johanna",
-        opus::domain::IdentityKind::Human,
+        identity::IdentityKind::Human,
         [
-            opus::domain::Capability::NetworkAccess,
-            opus::domain::Capability::ReadWorkspace,
+            identity::Capability::NetworkAccess,
+            identity::Capability::ReadWorkspace,
         ],
     )
 }

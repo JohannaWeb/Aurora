@@ -5,7 +5,7 @@ use crate::layout::document::LayoutDocument;
 use crate::layout::{LayoutTree, ViewportSize};
 use crate::style::StyleTree;
 use crate::ImageCache;
-use opus::domain::Identity;
+use crate::identity::Identity;
 use std::cell::RefCell;
 use std::rc::Rc;
 
