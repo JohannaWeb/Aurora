@@ -10,6 +10,7 @@ pub(crate) mod fetch;
 pub(crate) mod font;
 pub(crate) mod gpu_paint;
 pub(crate) mod html;
+pub(crate) mod identity;
 pub(crate) mod js_boa;
 pub(crate) mod layout;
 pub(crate) mod runner;

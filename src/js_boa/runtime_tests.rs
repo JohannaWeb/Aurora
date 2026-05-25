@@ -168,7 +168,7 @@ fn forced_sync_reflow_via_offset_width() {
     use crate::css::Stylesheet;
     use crate::layout::{LayoutTree, ViewportSize};
     use crate::style::StyleTree;
-    use opus::domain::{Identity, IdentityKind};
+    use crate::identity::{Identity, IdentityKind};
 
     let dom = Parser::new(
         r#"<html><body><div id="box" style="width: 100px; height: 50px;"></div></body></html>"#,

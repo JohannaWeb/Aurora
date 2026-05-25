@@ -1,4 +1,4 @@
-use opus::domain::{Capability, Identity};
+use crate::identity::{Capability, Identity};
 
 use super::FetchError;
 

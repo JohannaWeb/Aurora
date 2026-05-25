@@ -2,7 +2,7 @@ use super::fetch_string;
 use super::resolve_relative_url;
 use super::url::{ParsedUrl, Scheme};
 use super::FetchError;
-use opus::domain::{Capability, Identity, IdentityKind};
+use crate::identity::{Capability, Identity, IdentityKind};
 
 #[test]
 fn parses_http_urls() {

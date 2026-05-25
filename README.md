@@ -202,11 +202,10 @@ At the time of this edit, `cargo test` passes in this directory. That matters mo
 
 ## Docker
 
-Aurora can be built as a Docker image from the parent `projects` directory because it depends on the sibling `Opus` crate:
+Aurora can be built as a Docker image from this repository:
 
 ```bash
-cd ..
-docker build -f Aurora/Dockerfile -t aurora .
+docker build -t aurora .
 ```
 
 From this directory, the same build is available as:

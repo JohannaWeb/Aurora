@@ -17,8 +17,7 @@ RUN apt-get update \
 
 WORKDIR /workspace
 
-COPY Aurora ./Aurora
-COPY Opus ./Opus
+COPY . ./Aurora
 
 WORKDIR /workspace/Aurora
 RUN cargo build --release --locked

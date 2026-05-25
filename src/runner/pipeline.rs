@@ -6,7 +6,7 @@ use crate::css::Stylesheet;
 use crate::html::Parser;
 use crate::layout::{LayoutTree, ViewportSize};
 use crate::style::StyleTree;
-use opus::domain::Identity;
+use crate::identity::Identity;
 use std::cell::RefCell;
 use std::env;
 use std::rc::Rc;

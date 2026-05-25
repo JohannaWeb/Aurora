@@ -3,7 +3,7 @@ use crate::dom::{Node, NodePtr};
 pub(super) fn collect_styles(
     node_ptr: &NodePtr,
     base_url: Option<&str>,
-    identity: &opus::domain::Identity,
+    identity: &crate::identity::Identity,
     output: &mut String,
 ) {
     let node = node_ptr.borrow();
@@ -26,7 +26,7 @@ pub(super) fn collect_styles(
 fn collect_element_styles(
     element: &crate::dom::ElementNode,
     base_url: Option<&str>,
-    identity: &opus::domain::Identity,
+    identity: &crate::identity::Identity,
     output: &mut String,
 ) {
     if element.tag_name == "style" {
@@ -46,7 +46,7 @@ fn collect_element_styles(
 fn collect_link_styles(
     element: &crate::dom::ElementNode,
     base_url: Option<&str>,
-    identity: &opus::domain::Identity,
+    identity: &crate::identity::Identity,
     output: &mut String,
 ) {
     let (Some(base), Some(href)) = (base_url, element.attributes.get("href")) else {

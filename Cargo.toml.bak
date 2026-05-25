@@ -13,7 +13,6 @@ pollster = "0.3"
 flate2 = "1.0"
 boa_engine = "0.19"
 boa_gc = "0.19"
-opus = { path = "../Opus" }
 ab_glyph = "0.2"
 ttf-parser = "0.21"
 rustybuzz = "0.18"

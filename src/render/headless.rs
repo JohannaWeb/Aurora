@@ -7,7 +7,7 @@ use crate::layout::{LayoutTree, ViewportSize};
 use crate::render::ImageBackend;
 use crate::style::StyleTree;
 use image::RgbaImage;
-use opus::domain::{Capability, Identity, IdentityKind};
+use crate::identity::{Capability, Identity, IdentityKind};
 
 /// Fetch a URL and render it to an RGBA image using the software backend.
 pub fn render_url_to_image(url: &str, width: u32, height: u32) -> RgbaImage {

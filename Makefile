@@ -1,5 +1,5 @@
 IMAGE ?= aurora
-PROJECTS_DIR := $(abspath ..)
+PROJECT_DIR := $(abspath .)
 DOCKERFILE := $(abspath Dockerfile)
 SCREENSHOT_ROOT ?= tests/screenshots
 SCREENSHOT ?= $(SCREENSHOT_ROOT)/google-homepage.png
@@ -12,7 +12,7 @@ SCREENSHOT_FILE := $(notdir $(SCREENSHOT))
 .PHONY: docker-build docker-run docker-fixture docker-x11 docker-screenshot screenshot mockup-screenshot dynamic-screenshot raf-screenshot all-renders check-line-cap
 
 docker-build:
-	docker build -f $(DOCKERFILE) -t $(IMAGE) $(PROJECTS_DIR)
+	docker build -f $(DOCKERFILE) -t $(IMAGE) $(PROJECT_DIR)
 
 docker-run:
 	docker run --rm $(IMAGE) $(ARGS)

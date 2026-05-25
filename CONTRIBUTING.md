@@ -51,16 +51,6 @@ wgpu and winit support both platforms. You do not need the Wayland packages abov
 
 ---
 
-## The Opus dependency
-
-Aurora depends on a sibling crate called `Opus` at the path `../Opus`. When working in Codespaces or inside the repository checkout alone this path will not resolve.
-
-**To work around this locally**, clone the parent organization repo which contains both crates as siblings, or use a `[patch.crates-io]` override in your local Cargo config. Most contributors working in Codespaces do not hit this because the devcontainer environment is pre-configured.
-
-If you are contributing and hit the missing `Opus` error, open an issue — it is a known friction point and will be resolved as the public repository structure is settled.
-
----
-
 ## Building and running
 
 ```bash

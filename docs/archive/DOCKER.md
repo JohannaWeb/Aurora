@@ -1,11 +1,9 @@
 # Docker
 
-Aurora depends on the sibling `Opus` crate through `../Opus`, so build the image
-from the parent `projects` directory:
+Aurora can be built as a Docker image from this repository:
 
 ```bash
-cd ..
-docker build -f Aurora/Dockerfile -t aurora .
+docker build -t aurora .
 ```
 
 Or from the Aurora directory:
