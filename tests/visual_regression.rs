@@ -3,8 +3,8 @@
 //! Run:  cargo test --test visual_regression
 //! Update baselines: UPDATE_SNAPSHOTS=1 cargo test --test visual_regression
 
-use std::path::PathBuf;
 use image::RgbaImage;
+use std::path::PathBuf;
 
 /// Max allowed pixel diff ratio before a test fails (1%).
 const DIFF_THRESHOLD: f64 = 0.01;
@@ -78,6 +78,44 @@ fn assert_snapshot(fixture_name: &str, width: u32, height: u32) {
     );
 }
 
+fn assert_url_snapshot(name: &str, url: &str, width: u32, height: u32) {
+    let rendered = aurora::render::headless::render_url_to_image(url, width, height);
+    let snapshot_path = snapshots_dir().join(format!("{name}.png"));
+
+    if updating_snapshots() {
+        rendered
+            .save(&snapshot_path)
+            .expect("Failed to save snapshot");
+        println!("Updated snapshot: {}", snapshot_path.display());
+        return;
+    }
+
+    if !snapshot_path.exists() {
+        rendered
+            .save(&snapshot_path)
+            .expect("Failed to save initial snapshot");
+        println!("Created initial snapshot: {}", snapshot_path.display());
+        return;
+    }
+
+    let baseline = image::open(&snapshot_path)
+        .unwrap_or_else(|_| panic!("Failed to load baseline: {}", snapshot_path.display()))
+        .to_rgba8();
+
+    let (diff_ratio, diff_image) = compute_diff(&rendered, &baseline);
+
+    assert!(
+        diff_ratio <= DIFF_THRESHOLD,
+        "Visual regression in '{}': {:.2}% pixels differ (threshold {:.2}%)\n\
+         Diff saved to: {}\n\
+         Run UPDATE_SNAPSHOTS=1 cargo test to update baselines.",
+        name,
+        diff_ratio * 100.0,
+        DIFF_THRESHOLD * 100.0,
+        save_diff(name, &diff_image).display()
+    );
+}
+
 fn save_diff(name: &str, img: &RgbaImage) -> PathBuf {
     let path = snapshots_dir().join(format!("{}-diff.png", name));
     img.save(&path).expect("Failed to save diff image");
@@ -88,7 +126,7 @@ fn save_diff(name: &str, img: &RgbaImage) -> PathBuf {
 fn compute_diff(actual: &RgbaImage, expected: &RgbaImage) -> (f64, RgbaImage) {
     let (w, h) = actual.dimensions();
     let mut diff_img = RgbaImage::new(w, h);
-    
+
     if expected.dimensions() != (w, h) {
         return (1.0, diff_img);
     }
@@ -115,29 +153,6 @@ fn compute_diff(actual: &RgbaImage, expected: &RgbaImage) -> (f64, RgbaImage) {
     (diff_count as f64 / (w * h) as f64, diff_img)
 }
 
-/// Returns the ratio of pixels that differ beyond PIXEL_TOLERANCE.
-fn pixel_diff_ratio(a: &RgbaImage, b: &RgbaImage) -> f64 {
-    let (w, h) = a.dimensions();
-    if b.dimensions() != (w, h) {
-        // Size mismatch — treat as fully different.
-        return 1.0;
-    }
-
-    let total = (w * h) as f64;
-    let mut diff_count = 0u64;
-
-    for (pa, pb) in a.pixels().zip(b.pixels()) {
-        let dr = (pa.0[0] as i32 - pb.0[0] as i32).abs();
-        let dg = (pa.0[1] as i32 - pb.0[1] as i32).abs();
-        let db = (pa.0[2] as i32 - pb.0[2] as i32).abs();
-        if dr > PIXEL_TOLERANCE || dg > PIXEL_TOLERANCE || db > PIXEL_TOLERANCE {
-            diff_count += 1;
-        }
-    }
-
-    diff_count as f64 / total
-}
-
 // --- Tests ---
 
 #[test]
@@ -153,8 +168,5 @@ fn snapshot_google_homepage() {
 #[test]
 fn snapshot_wikipedia_rust() {
     let url = "https://en.wikipedia.org/wiki/Rust_(programming_language)";
-    let rendered = aurora::render::headless::render_url_to_image(url, 1440, 900);
-    let path = snapshots_dir().join("wikipedia-rust.png");
-    rendered.save(&path).expect("Failed to save screenshot");
-    println!("Screenshot saved to {}", path.display());
+    assert_url_snapshot("wikipedia-rust", url, 1440, 900);
 }
