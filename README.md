@@ -30,6 +30,7 @@ Aurora currently focuses on the core pieces of a browser engine:
 * HTTP and HTTPS fetch support with normal TLS certificate validation
 * local `file://` fetch support gated by identity/capability checks
 * placeholder rendering for remote images using `<img>` layout and alt text
+* optional `<video>` frame playback through **ffmpeg-next**
 * embedded **Boa** JavaScript runtime
 * live Rust DOM/BOM bridge exposed to JavaScript
 
@@ -140,6 +141,14 @@ To fetch an HTTPS page:
 
 ```bash
 cargo run -- https://example.com/
+```
+
+To enable experimental video playback, install the FFmpeg development packages
+that provide `libavutil.pc`, `libavcodec.pc`, `libavformat.pc`, and
+`libswscale.pc`, then run with:
+
+```bash
+cargo run --features media-ffmpeg -- file:///path/to/page.html
 ```
 
 To render the bundled static Google homepage fixture:

@@ -35,6 +35,11 @@ pub(in crate::layout) enum LayoutKind {
         src: Option<String>,
         display_mode: DisplayMode,
     },
+    Media {
+        src: Option<String>,
+        poster: Option<String>,
+        display_mode: DisplayMode,
+    },
     Text {
         text: String,
     },
@@ -99,6 +104,7 @@ impl LayoutBox {
             | LayoutKind::Inline { tag_name }
             | LayoutKind::Control { tag_name } => Some(tag_name),
             LayoutKind::Image { .. } => Some("img"),
+            LayoutKind::Media { .. } => Some("video"),
             _ => None,
         }
     }
@@ -131,6 +137,24 @@ impl LayoutBox {
 
     pub fn is_image(&self) -> bool {
         matches!(self.kind, LayoutKind::Image { .. })
+    }
+
+    pub fn media_src(&self) -> Option<&str> {
+        match &self.kind {
+            LayoutKind::Media { src, .. } => src.as_deref(),
+            _ => None,
+        }
+    }
+
+    pub fn media_poster(&self) -> Option<&str> {
+        match &self.kind {
+            LayoutKind::Media { poster, .. } => poster.as_deref(),
+            _ => None,
+        }
+    }
+
+    pub fn is_media(&self) -> bool {
+        matches!(self.kind, LayoutKind::Media { .. })
     }
 
     pub fn is_svg_element(&self) -> bool {

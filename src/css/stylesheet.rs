@@ -66,7 +66,7 @@ impl Stylesheet {
              head, style, script, link, meta, title, noscript, template { display: none; } \
              a, abbr, acronym, b, bdo, big, br, button, cite, code, dfn, em, i, img, \
              input, kbd, label, map, object, q, s, samp, select, small, span, strong, \
-             sub, sup, textarea, time, tt, u, var { display: inline; } \
+             sub, sup, textarea, time, tt, u, var, video { display: inline; } \
              b, strong { font-weight: bold; } \
              i, em, cite, dfn, var { font-style: italic; } \
              small { font-size: 0.8em; } \
@@ -76,7 +76,7 @@ impl Stylesheet {
              :link { color: #0000ee; } \
              sup { vertical-align: super; font-size: 0.75em; } \
              sub { vertical-align: sub; font-size: 0.75em; } \
-             img { display: inline-block; } \
+             img, video { display: inline-block; } \
              input, button, select, textarea { display: inline-block; font-family: inherit; font-size: inherit; } \
              button { cursor: pointer; } \
              textarea { white-space: pre-wrap; } \

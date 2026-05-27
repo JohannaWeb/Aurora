@@ -47,11 +47,12 @@ impl AuroraApp {
             needs_reflow |= runtime.tick(now);
             needs_reflow |= runtime.drain_animation_frame_callbacks(now);
         }
+        let needs_redraw = self.input.media.update();
         if needs_reflow {
             let viewport = *self.input.viewport.borrow();
             self.reflow(viewport.width as u32, viewport.height as u32);
         }
-        needs_reflow
+        needs_reflow || needs_redraw
     }
 
     pub(super) fn next_runtime_deadline(&self) -> Option<Instant> {
@@ -85,7 +86,8 @@ impl AuroraApp {
         );
 
         let surface_texture = match surface.surface.get_current_texture() {
-            wgpu::CurrentSurfaceTexture::Success(t) | wgpu::CurrentSurfaceTexture::Suboptimal(t) => t,
+            wgpu::CurrentSurfaceTexture::Success(t)
+            | wgpu::CurrentSurfaceTexture::Suboptimal(t) => t,
             _ => return, // timeout / occluded / outdated / lost — skip frame
         };
         let render_params = vello::RenderParams {
@@ -166,6 +168,7 @@ fn paint_content_layer(app: &AuroraApp, scene: &mut Scene, width: u32, height: u
         &mut content_scene,
         &app.input.images,
         &app.input.svgs,
+        &app.input.media,
     );
     scene.append(
         &content_scene,

@@ -275,6 +275,12 @@ fn determine_kind(styled_node: &crate::style::StyledNode) -> LayoutKind {
                     src: el.attributes.get("src").cloned(),
                     display_mode: styled_node.styles().display_mode(),
                 }
+            } else if el.tag_name.eq_ignore_ascii_case("video") {
+                LayoutKind::Media {
+                    src: el.attributes.get("src").cloned(),
+                    poster: el.attributes.get("poster").cloned(),
+                    display_mode: styled_node.styles().display_mode(),
+                }
             } else {
                 LayoutKind::Block {
                     tag_name: el.tag_name.clone(),

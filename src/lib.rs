@@ -13,8 +13,10 @@ pub(crate) mod html;
 pub(crate) mod identity;
 pub(crate) mod js_boa;
 pub(crate) mod layout;
+pub(crate) mod media;
 pub(crate) mod runner;
 pub(crate) mod style;
 pub(crate) mod window;
 
-pub(crate) use runner::{ImageCache, SvgCache, load_images, load_svgs};
+pub(crate) use media::MediaCache;
+pub(crate) use runner::{load_images, load_svgs, ImageCache, SvgCache};
