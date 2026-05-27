@@ -4,9 +4,9 @@ use super::images::{load_images, load_svgs};
 use super::scripts::extract_scripts;
 use crate::css::Stylesheet;
 use crate::html::Parser;
+use crate::identity::Identity;
 use crate::layout::{LayoutTree, ViewportSize};
 use crate::style::StyleTree;
-use crate::identity::Identity;
 use std::cell::RefCell;
 use std::env;
 use std::rc::Rc;
@@ -29,13 +29,14 @@ pub(crate) fn run_browser(cli: CliOptions, identity: Identity) {
     let layout = LayoutTree::from_style_tree_with_viewport(&style_tree, content_viewport);
     let image_cache = load_images(layout.root(), base_url.as_deref(), &identity);
     let svg_cache = load_svgs(layout.root(), base_url.as_deref(), &identity);
+    let media_cache = crate::MediaCache::load(layout.root(), base_url.as_deref(), &identity);
 
     let stylesheet_rc = Rc::new(RefCell::new(stylesheet));
     let viewport_rc = Rc::new(RefCell::new(viewport));
     let layout_rc = Rc::new(RefCell::new(layout));
-    let layout_doc_rc = Rc::new(RefCell::new(
-        crate::layout::document::LayoutDocument::new(content_viewport),
-    ));
+    let layout_doc_rc = Rc::new(RefCell::new(crate::layout::document::LayoutDocument::new(
+        content_viewport,
+    )));
 
     if let Some(runtime) = runtime.as_mut() {
         runtime.set_shared_state(
@@ -60,6 +61,7 @@ pub(crate) fn run_browser(cli: CliOptions, identity: Identity) {
         layout_doc_rc,
         image_cache,
         svg_cache,
+        media_cache,
         runtime,
     );
 }
@@ -163,6 +165,7 @@ fn maybe_open_window(
     layout_doc: Rc<RefCell<crate::layout::document::LayoutDocument>>,
     images: crate::ImageCache,
     svgs: crate::SvgCache,
+    media: crate::MediaCache,
     runtime: Option<crate::js_boa::BoaRuntime>,
 ) {
     let has_screenshot = env::var("AURORA_SCREENSHOT").is_ok();
@@ -179,6 +182,7 @@ fn maybe_open_window(
             layout,
             images,
             svgs,
+            media,
             runtime,
             layout_doc,
         };

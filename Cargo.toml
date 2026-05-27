@@ -4,6 +4,10 @@ name = "aurora"
 version = "0.1.0"
 edition = "2024"
 
+[features]
+default = []
+media-ffmpeg = ["dep:ffmpeg-next"]
+
 [dependencies]
 rustls = { version = "0.23", features = ["ring"] } # still needed for install_crypto_provider()
 wgpu = "29.0.3"
@@ -15,6 +19,7 @@ ab_glyph = "0.2"
 rustybuzz = "0.20.1"
 peniko = "0.6"
 image = "0.25.10"
+ffmpeg-next = { version = "8.1.0", optional = true }
 html5ever = "0.39.0"
 markup5ever = "0.39.0"
 cssparser = "0.37.0"

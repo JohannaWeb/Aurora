@@ -65,6 +65,25 @@ impl LayoutBox {
                     self.rect
                 )?;
             }
+            LayoutKind::Media {
+                src,
+                poster,
+                display_mode,
+            } => {
+                let kind = if *display_mode == DisplayMode::Inline {
+                    "inline"
+                } else {
+                    "block"
+                };
+                writeln!(
+                    f,
+                    "{indent}{kind}<video src={:?} poster={:?}> {} {}",
+                    src,
+                    poster,
+                    format_styles(&self.styles),
+                    self.rect
+                )?;
+            }
             LayoutKind::Text { text } => {
                 writeln!(f, "{indent}text(\"{text}\") {}", self.rect)?;
             }

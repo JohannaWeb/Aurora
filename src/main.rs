@@ -8,11 +8,13 @@ mod html;
 mod identity;
 mod js_boa;
 mod layout;
+mod media;
 pub mod render;
 mod runner;
 mod style;
 mod window;
 
+pub(crate) use media::MediaCache;
 pub(crate) use runner::{load_images, load_svgs, ImageCache, SvgCache};
 
 fn main() {

@@ -87,6 +87,18 @@ impl LayoutBox {
                     mode,
                 ))
             }
+            mode if tag_name == "video" => Some(Self::layout_media(
+                node,
+                styles,
+                node.styles().margin(),
+                node.styles().border_width(),
+                node.styles().padding(),
+                x,
+                y,
+                available_width,
+                viewport_height,
+                mode,
+            )),
             _ if tag_name == "textarea" || tag_name == "input" || tag_name == "button" => {
                 Some(Self::layout_control(
                     tag_name,

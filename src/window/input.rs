@@ -1,11 +1,12 @@
 use crate::css::Stylesheet;
 use crate::dom::NodePtr;
+use crate::identity::Identity;
 use crate::js_boa::BoaRuntime;
 use crate::layout::document::LayoutDocument;
 use crate::layout::{LayoutTree, ViewportSize};
+use crate::media::MediaCache;
 use crate::style::StyleTree;
 use crate::ImageCache;
-use crate::identity::Identity;
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -18,6 +19,7 @@ pub struct WindowInput {
     pub layout: Rc<RefCell<LayoutTree>>,
     pub images: ImageCache,
     pub svgs: crate::SvgCache,
+    pub media: MediaCache,
     pub runtime: Option<BoaRuntime>,
     /// Shared incremental layout document — also wired into the JS registry
     /// so DOM mutations can mark nodes dirty directly.
@@ -51,7 +53,20 @@ impl WindowInput {
 
         // Only reload images when layout changes (not on every style-only reflow).
         let layout_borrow = self.layout.borrow();
-        self.images = crate::load_images(layout_borrow.root(), self.base_url.as_deref(), &self.identity);
-        self.svgs = crate::load_svgs(layout_borrow.root(), self.base_url.as_deref(), &self.identity);
+        self.images = crate::load_images(
+            layout_borrow.root(),
+            self.base_url.as_deref(),
+            &self.identity,
+        );
+        self.svgs = crate::load_svgs(
+            layout_borrow.root(),
+            self.base_url.as_deref(),
+            &self.identity,
+        );
+        self.media = MediaCache::load(
+            layout_borrow.root(),
+            self.base_url.as_deref(),
+            &self.identity,
+        );
     }
 }

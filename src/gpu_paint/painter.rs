@@ -1,12 +1,12 @@
 use crate::layout::LayoutBox;
-use crate::{ImageCache, SvgCache};
+use crate::{ImageCache, MediaCache, SvgCache};
 use peniko::{Color, Fill};
 use vello::kurbo::{Affine, Rect as KRect};
 use vello::Scene;
 
 use super::color::parse_color;
 use super::element::paint_element_with_opacity;
-use super::image::paint_image;
+use super::image::{paint_image, paint_media};
 use super::scrollbar::paint_scrollbar_if_needed;
 use super::svg::render_svg_tree;
 use super::text::{paint_text_label, paint_text_with_opacity};
@@ -14,8 +14,14 @@ use super::text::{paint_text_label, paint_text_with_opacity};
 pub struct GpuPainter;
 
 impl GpuPainter {
-    pub fn paint(layout_box: &LayoutBox, scene: &mut Scene, images: &ImageCache, svgs: &SvgCache) {
-        Self::paint_with_opacity(layout_box, scene, 1.0, images, svgs);
+    pub fn paint(
+        layout_box: &LayoutBox,
+        scene: &mut Scene,
+        images: &ImageCache,
+        svgs: &SvgCache,
+        media: &MediaCache,
+    ) {
+        Self::paint_with_opacity(layout_box, scene, 1.0, images, svgs, media);
     }
 
     pub fn paint_scrollbars(layout_box: &LayoutBox, scene: &mut Scene, viewport_height: f32) {
@@ -42,6 +48,7 @@ impl GpuPainter {
         parent_opacity: f32,
         images: &ImageCache,
         svgs: &SvgCache,
+        media: &MediaCache,
     ) {
         let styles = layout_box.styles();
         let effective_opacity = parent_opacity * styles.opacity();
@@ -61,6 +68,8 @@ impl GpuPainter {
             } else {
                 paint_image(layout_box, scene, images);
             }
+        } else if layout_box.is_media() {
+            paint_media(layout_box, scene, media, images);
         } else if layout_box.is_svg_element() {
             paint_inline_svg(layout_box, scene);
         } else if let Some(text) = layout_box.text() {
@@ -70,7 +79,7 @@ impl GpuPainter {
         }
 
         for child in layout_box.children() {
-            Self::paint_with_opacity(child, scene, effective_opacity, images, svgs);
+            Self::paint_with_opacity(child, scene, effective_opacity, images, svgs, media);
         }
     }
 }

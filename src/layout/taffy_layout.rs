@@ -228,6 +228,10 @@ fn determine_layout_kind(styled_node: &StyledNode) -> LayoutKind {
                 let alt = el.attributes.get("alt").cloned();
                 let src = el.attributes.get("src").cloned();
                 LayoutKind::Image { alt, src, display_mode }
+            } else if tag_name.eq_ignore_ascii_case("video") {
+                let src = el.attributes.get("src").cloned();
+                let poster = el.attributes.get("poster").cloned();
+                LayoutKind::Media { src, poster, display_mode }
             } else if matches!(tag_name.as_str(), "textarea" | "input" | "button") {
                 LayoutKind::Control { tag_name }
             } else {

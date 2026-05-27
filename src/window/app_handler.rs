@@ -68,7 +68,9 @@ impl winit::application::ApplicationHandler for AuroraApp {
             } => self.handle_click(),
             WindowEvent::RedrawRequested => {
                 if self.surface.is_some() {
-                    self.run_frame_tasks();
+                    if self.run_frame_tasks() {
+                        self.request_redraw();
+                    }
                     self.render();
                     self.schedule_next_frame(event_loop);
                 }
@@ -87,7 +89,7 @@ impl winit::application::ApplicationHandler for AuroraApp {
     }
 
     fn about_to_wait(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
-        if self.has_animation_frame_callbacks() || self.timer_is_due() {
+        if self.has_animation_frame_callbacks() || self.timer_is_due() || self.has_active_media() {
             self.request_redraw();
         }
         self.schedule_next_frame(event_loop);
@@ -149,12 +151,16 @@ impl AuroraApp {
     }
 
     fn schedule_next_frame(&self, event_loop: &winit::event_loop::ActiveEventLoop) {
-        if self.has_animation_frame_callbacks() {
+        if self.has_animation_frame_callbacks() || self.has_active_media() {
             event_loop.set_control_flow(ControlFlow::Poll);
         } else if let Some(deadline) = self.next_runtime_deadline() {
             event_loop.set_control_flow(ControlFlow::WaitUntil(deadline));
         } else {
             event_loop.set_control_flow(ControlFlow::Wait);
         }
+    }
+
+    fn has_active_media(&self) -> bool {
+        self.input.media.has_active_media()
     }
 }

@@ -67,7 +67,10 @@ fn clamps_inline_width_before_wrapping() {
 
     assert!(rendered.contains("inline<p> {display: inline, max-width: 64px, min-height: 60px, padding: 4px, width: 140px}"));
     for word in ["one", "two", "three", "four", "five"] {
-        assert!(rendered.contains(word), "missing wrapped word: {word}\n{rendered}");
+        assert!(
+            rendered.contains(word),
+            "missing wrapped word: {word}\n{rendered}"
+        );
     }
 }
 
@@ -133,4 +136,33 @@ fn lays_out_images_with_attributes_as_replaced_boxes() {
     assert!(rendered.contains(
             "inline<img alt=Some(\"grumpy cat\") src=Some(\"cat.txt\")> {border: 2px solid ember, display: inline, padding: 4px} [x: 0, y: 0, w: 132, h: 92]"
         ));
+}
+
+#[test]
+fn lays_out_video_as_replaced_media_box() {
+    let dom = Node::document(vec![Node::element(
+        "body",
+        vec![Node::element_with_attributes(
+            "video",
+            [
+                ("src".to_string(), "clip.mp4".to_string()),
+                ("poster".to_string(), "poster.png".to_string()),
+                ("width".to_string(), "320".to_string()),
+                ("height".to_string(), "180".to_string()),
+            ]
+            .into_iter()
+            .collect(),
+            Vec::new(),
+        )],
+    )]);
+    let stylesheet =
+        Stylesheet::parse("video { display: inline; padding: 4px; border: 2px solid ember; }");
+    let style_tree = StyleTree::from_dom(&dom, &stylesheet);
+
+    let layout = LayoutTree::from_style_tree_with_viewport_width(&style_tree, 400.0);
+    let rendered = layout.to_string();
+
+    assert!(rendered.contains(
+        "inline<video src=Some(\"clip.mp4\") poster=Some(\"poster.png\")> {border: 2px solid ember, display: inline, padding: 4px} [x: 0, y: 0, w: 332, h: 192]"
+    ));
 }
