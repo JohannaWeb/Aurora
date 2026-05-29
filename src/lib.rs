@@ -16,6 +16,7 @@ pub(crate) mod layout;
 pub(crate) mod media;
 pub(crate) mod runner;
 pub(crate) mod style;
+pub(crate) mod stylo_bridge;
 pub(crate) mod window;
 
 pub(crate) use media::MediaCache;
