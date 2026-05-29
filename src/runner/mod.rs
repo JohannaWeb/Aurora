@@ -7,5 +7,7 @@ mod pipeline;
 mod scripts;
 
 pub(crate) use cli::CliOptions;
-pub(crate) use images::{load_images, load_svgs, ImageCache, SvgCache};
+pub(crate) use images::{
+    ImageCache, SvgCache, load_images, load_missing_images, load_missing_svgs, load_svgs,
+};
 pub(crate) use pipeline::run_browser;

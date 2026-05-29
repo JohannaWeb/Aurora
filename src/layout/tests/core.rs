@@ -1,7 +1,265 @@
 use crate::css::Stylesheet;
 use crate::dom::Node;
+use crate::html::Parser;
+use crate::identity::{Identity, IdentityKind};
 use crate::layout::LayoutTree;
 use crate::style::StyleTree;
+
+#[test]
+fn demo_flex_nav_items_stay_inside_header() {
+    let dom = Parser::new(include_str!("../../../fixtures/demo/index.html")).parse_document();
+    let identity = Identity::new("did:human:test", "Test", IdentityKind::Human, []);
+    let mut stylesheet = Stylesheet::from_dom(&dom, None, &identity);
+    stylesheet.merge(Stylesheet::user_agent_stylesheet());
+    let style_tree = StyleTree::from_dom(&dom, &stylesheet);
+    let layout = LayoutTree::from_style_tree_with_viewport_width(&style_tree, 960.0);
+    let rendered = layout.to_string();
+
+    assert!(
+        right_edge_of_text(&rendered, "About") <= 900.0,
+        "nav item escaped the 960px viewport:\n{rendered}"
+    );
+}
+
+#[test]
+fn mixed_inline_elements_wrap_without_overlap() {
+    let dom = Parser::new(include_str!("../../../fixtures/demo/index.html")).parse_document();
+    let identity = Identity::new("did:human:test", "Test", IdentityKind::Human, []);
+    let mut stylesheet = Stylesheet::from_dom(&dom, None, &identity);
+    stylesheet.merge(Stylesheet::user_agent_stylesheet());
+    let style_tree = StyleTree::from_dom(&dom, &stylesheet);
+    let layout = LayoutTree::from_style_tree_with_viewport_width(&style_tree, 960.0);
+    let rendered = layout.to_string();
+
+    let align = text_box(&rendered, "align-items: center");
+    let suffix = text_box(&rendered, ". The navigation items utilize");
+    assert_eq!(
+        align.1, suffix.1,
+        "inline siblings should share the same wrapped line:\n{rendered}"
+    );
+    assert!(
+        align.0 + align.2 <= suffix.0,
+        "inline siblings overlap after wrapping:\n{rendered}"
+    );
+}
+
+#[test]
+fn empty_td_does_not_crowd_out_sibling_cells() {
+    // Mimics HN subtext row: <tr><td colspan="2"></td><td class="subtext">...</td></tr>
+    // The empty td must not fill the entire flex row and push the subtext off-screen.
+    let dom = Node::document(vec![Node::element(
+        "table",
+        vec![Node::element(
+            "tr",
+            vec![
+                Node::element("td", vec![]),
+                Node::element(
+                    "td",
+                    vec![Node::element(
+                        "span",
+                        vec![Node::text("123 points by user")],
+                    )],
+                ),
+            ],
+        )],
+    )]);
+    let stylesheet = Stylesheet::user_agent_stylesheet();
+    let style_tree = StyleTree::from_dom(&dom, &stylesheet);
+    let layout = LayoutTree::from_style_tree_with_viewport_width(&style_tree, 800.0);
+    let rendered = layout.to_string();
+    println!("EMPTY TD LAYOUT:\n{}", rendered);
+
+    // The subtext content must be visible (x < 400, not pushed off-screen)
+    let x_of = |label: &str| -> f32 {
+        let prefix = format!("text(\"{label}\") [x:");
+        rendered
+            .find(&prefix)
+            .and_then(|pos| {
+                let after = rendered[pos + prefix.len()..].trim_start();
+                after
+                    .split(|c: char| !c.is_numeric() && c != '.')
+                    .next()
+                    .and_then(|s| s.parse::<f32>().ok())
+            })
+            .unwrap_or(9999.0)
+    };
+
+    let x = x_of("123 points by user");
+    assert!(
+        x < 400.0,
+        "subtext content was pushed off-screen (x={x}); empty td is eating the row\n{rendered}"
+    );
+}
+
+fn right_edge_of_text(rendered: &str, label: &str) -> f32 {
+    let (x, _, width) = text_box(rendered, label);
+    x + width
+}
+
+fn text_box(rendered: &str, label: &str) -> (f32, f32, f32) {
+    let prefix = format!("text(\"{label}\") [x:");
+    let pos = rendered
+        .find(&prefix)
+        .unwrap_or_else(|| panic!("text box not found for {label:?}\n{rendered}"));
+    let line = rendered[pos + prefix.len()..]
+        .lines()
+        .next()
+        .unwrap_or_default();
+    let x = parse_metric(line, "");
+    let y = parse_metric(line, ", y: ");
+    let width = parse_metric(line, ", w: ");
+    (x, y, width)
+}
+
+fn parse_metric(line: &str, marker: &str) -> f32 {
+    let value = if marker.is_empty() {
+        line
+    } else {
+        let pos = line
+            .find(marker)
+            .unwrap_or_else(|| panic!("metric marker {marker:?} not found in {line:?}"));
+        &line[pos + marker.len()..]
+    };
+    value
+        .trim_start()
+        .split(|c: char| !c.is_numeric() && c != '.')
+        .next()
+        .and_then(|s| s.parse::<f32>().ok())
+        .unwrap_or_else(|| panic!("metric value not found in {line:?}"))
+}
+
+#[test]
+fn nested_table_nav_cells_stay_horizontal() {
+    // Mimics HN: outer-table > tr > td > inner-table > tr > [td:logo][td:nav][td:login]
+    // nav links inside the middle td should all be on one Y line
+    let dom = Node::document(vec![Node::element(
+        "table",
+        vec![Node::element(
+            "tr",
+            vec![Node::element(
+                "td",
+                vec![Node::element(
+                    "table",
+                    vec![Node::element(
+                        "tr",
+                        vec![
+                            Node::element("td", vec![Node::text("*")]),
+                            Node::element(
+                                "td",
+                                vec![Node::element(
+                                    "span",
+                                    vec![
+                                        Node::element("b", vec![Node::text("Hacker News")]),
+                                        Node::text(" "),
+                                        Node::element("a", vec![Node::text("new")]),
+                                        Node::text(" | "),
+                                        Node::element("a", vec![Node::text("comments")]),
+                                    ],
+                                )],
+                            ),
+                            Node::element(
+                                "td",
+                                vec![Node::element("a", vec![Node::text("login")])],
+                            ),
+                        ],
+                    )],
+                )],
+            )],
+        )],
+    )]);
+    let stylesheet = Stylesheet::user_agent_stylesheet();
+    let style_tree = StyleTree::from_dom(&dom, &stylesheet);
+    let layout = LayoutTree::from_style_tree_with_viewport_width(&style_tree, 800.0);
+    let rendered = layout.to_string();
+    println!("NESTED NAV LAYOUT:\n{}", rendered);
+
+    let y_of = |label: &str| -> f32 {
+        let prefix = format!("text(\"{label}\") [x:");
+        rendered
+            .find(&prefix)
+            .and_then(|pos| {
+                let after = &rendered[pos..];
+                after.find(", y: ").and_then(|y_pos| {
+                    let y_str = &after[y_pos + 5..];
+                    y_str
+                        .split(|c: char| !c.is_numeric() && c != '.')
+                        .next()
+                        .and_then(|s| s.parse::<f32>().ok())
+                })
+            })
+            .unwrap_or(-1.0)
+    };
+
+    let y_hn = y_of("Hacker News");
+    let y_new = y_of("new");
+    let y_comments = y_of("comments");
+    assert_eq!(
+        y_hn, y_new,
+        "'Hacker News' and 'new' must be on the same line (y={y_hn} vs {y_new})\n{rendered}"
+    );
+    assert_eq!(
+        y_new, y_comments,
+        "'new' and 'comments' must be on the same line (y={y_new} vs {y_comments})\n{rendered}"
+    );
+}
+
+#[test]
+fn table_row_keeps_inline_nav_on_one_line() {
+    let dom = Node::document(vec![Node::element(
+        "table",
+        vec![Node::element(
+            "tr",
+            vec![Node::element(
+                "td",
+                vec![Node::element(
+                    "span",
+                    vec![
+                        Node::element("b", vec![Node::text("HN")]),
+                        Node::text(" "),
+                        Node::element("a", vec![Node::text("new")]),
+                        Node::text(" | "),
+                        Node::element("a", vec![Node::text("past")]),
+                    ],
+                )],
+            )],
+        )],
+    )]);
+    let stylesheet = Stylesheet::user_agent_stylesheet();
+    let style_tree = StyleTree::from_dom(&dom, &stylesheet);
+    let layout = LayoutTree::from_style_tree_with_viewport_width(&style_tree, 800.0);
+    let rendered = layout.to_string();
+    println!("NAV LAYOUT:\n{}", rendered);
+
+    // All three inline items should be at the same Y
+    let y_of = |label: &str| -> f32 {
+        let prefix = format!("text(\"{label}\") [x:");
+        rendered
+            .find(&prefix)
+            .and_then(|pos| {
+                let after = &rendered[pos..];
+                after.find(", y: ").and_then(|y_pos| {
+                    let y_str = &after[y_pos + 5..];
+                    y_str
+                        .split(|c: char| !c.is_numeric() && c != '.')
+                        .next()
+                        .and_then(|s| s.parse::<f32>().ok())
+                })
+            })
+            .unwrap_or(-1.0)
+    };
+
+    let y_hn = y_of("HN");
+    let y_new = y_of("new");
+    let y_past = y_of("past");
+    assert_eq!(
+        y_hn, y_new,
+        "HN and 'new' should be on the same line (y_hn={y_hn}, y_new={y_new})\n{rendered}"
+    );
+    assert_eq!(
+        y_new, y_past,
+        "'new' and 'past' should be on the same line (y_new={y_new}, y_past={y_past})\n{rendered}"
+    );
+}
 
 #[test]
 fn builds_layout_boxes_with_geometry() {
@@ -104,7 +362,10 @@ fn wraps_inline_text_across_multiple_lines() {
 
     assert!(rendered.contains("inline<p> {display: inline}"));
     for word in ["alpha", "beta", "gamma", "delta", "epsilon", "zeta"] {
-        assert!(rendered.contains(word), "missing wrapped word: {word}\n{rendered}");
+        assert!(
+            rendered.contains(word),
+            "missing wrapped word: {word}\n{rendered}"
+        );
     }
 }
 
@@ -192,10 +453,7 @@ fn display_none_children_produce_no_layout_boxes() {
                     vec![Node::text("body{background:#eee;width:60vw}")],
                 )],
             ),
-            Node::element(
-                "body",
-                vec![Node::element("p", vec![Node::text("Hello")])],
-            ),
+            Node::element("body", vec![Node::element("p", vec![Node::text("Hello")])]),
         ],
     )]);
 
@@ -209,7 +467,10 @@ fn display_none_children_produce_no_layout_boxes() {
         "CSS text from <style> leaked into layout tree:\n{rendered}"
     );
     // Sanity check: actual content is present
-    assert!(rendered.contains("Hello"), "Expected body content to render");
+    assert!(
+        rendered.contains("Hello"),
+        "Expected body content to render"
+    );
 }
 
 #[test]

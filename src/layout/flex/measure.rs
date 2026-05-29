@@ -57,16 +57,7 @@ fn measure_intrinsic_child(
     viewport_height: f32,
 ) -> Option<LayoutBox> {
     let measured = LayoutBox::from_styled_node(child, 0.0, 0.0, 10000.0, viewport_height)?;
-    let intrinsic = if measured.children.is_empty() {
-        measured.rect.width + measured.padding.horizontal() + measured.border.horizontal()
-    } else {
-        let child_max = measured
-            .children
-            .iter()
-            .map(|child| child.total_width())
-            .fold(0.0_f32, f32::max);
-        child_max + measured.padding.horizontal() + measured.border.horizontal()
-    };
+    let intrinsic = max_content_width(&measured).min(10000.0);
     LayoutBox::from_styled_node(
         child,
         0.0,
@@ -74,4 +65,48 @@ fn measure_intrinsic_child(
         intrinsic.min(content_width),
         viewport_height,
     )
+}
+
+/// Recursively find the max-content width of a layout box.
+///
+/// Regular block boxes expand to fill available width, so their `rect.width` is not
+/// a useful intrinsic measurement. We recurse into their children instead.
+/// Anonymous inline wrappers and true inline/text/image boxes already carry the
+/// correct content width in `rect.width`.
+fn max_content_width(b: &LayoutBox) -> f32 {
+    use super::super::LayoutKind;
+    let is_stretched_block = matches!(&b.kind, LayoutKind::Block { tag_name }
+        if tag_name != "anonymous-inline");
+
+    let inner = if is_stretched_block && !b.children.is_empty() {
+        let is_row_container = match b.styles.display_mode() {
+            DisplayMode::TableRow => true,
+            DisplayMode::Flex => {
+                b.styles.flex_direction() == FlexDirection::Row && !b.styles.flex_wrap()
+            }
+            _ => false,
+        };
+
+        if is_row_container {
+            let gap = b.styles.gap_px();
+            let n = b.children.len();
+            let sum: f32 = b.children.iter().map(max_content_width).sum();
+            sum + if n > 1 { gap * (n as f32 - 1.0) } else { 0.0 }
+        } else {
+            b.children
+                .iter()
+                .map(max_content_width)
+                .fold(0.0_f32, f32::max)
+        }
+    } else if is_stretched_block {
+        // Empty block: stretched rect.width is not a useful intrinsic measure.
+        // Use the CSS-explicit width (or min-width floor), falling back to 0.
+        b.styles
+            .width_px()
+            .unwrap_or_else(|| b.styles.min_width_px().unwrap_or(0.0))
+    } else {
+        b.rect.width
+    };
+
+    inner + b.margin.horizontal() + b.border.horizontal() + b.padding.horizontal()
 }

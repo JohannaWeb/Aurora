@@ -7,6 +7,7 @@ pub(crate) struct CliOptions {
     pub(crate) debug_dom: bool,
     pub(crate) debug_style: bool,
     pub(crate) debug_layout: bool,
+    pub(crate) allow_workspace_read: bool,
 }
 
 impl CliOptions {
@@ -16,6 +17,7 @@ impl CliOptions {
         let mut debug_dom = env_flag("AURORA_DEBUG_DOM");
         let mut debug_style = env_flag("AURORA_DEBUG_STYLE");
         let mut debug_layout = env_flag("AURORA_DEBUG_LAYOUT");
+        let mut allow_workspace_read = env_flag("AURORA_ALLOW_WORKSPACE_READ");
 
         while let Some(arg) = args.next() {
             match arg.as_str() {
@@ -25,7 +27,9 @@ impl CliOptions {
                         std::process::exit(2);
                     };
                     input_url = Some(fixture_url(&name));
+                    allow_workspace_read = true;
                 }
+                "--allow-workspace-read" => allow_workspace_read = true,
                 "--debug-dom" => debug_dom = true,
                 "--debug-style" => debug_style = true,
                 "--debug-layout" => debug_layout = true,
@@ -44,6 +48,7 @@ impl CliOptions {
             debug_dom,
             debug_style,
             debug_layout,
+            allow_workspace_read,
         }
     }
 }

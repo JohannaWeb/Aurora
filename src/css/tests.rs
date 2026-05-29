@@ -25,7 +25,11 @@ fn styles(stylesheet: &Stylesheet, el: &ElementData) -> StyleMap {
 }
 
 /// Call styles_for with ancestors but no siblings.
-fn styles_with_ancestors(stylesheet: &Stylesheet, el: &ElementData, ancestors: &[ElementData]) -> StyleMap {
+fn styles_with_ancestors(
+    stylesheet: &Stylesheet,
+    el: &ElementData,
+    ancestors: &[ElementData],
+) -> StyleMap {
     stylesheet.styles_for(el, ancestors, &[], 0)
 }
 
@@ -44,13 +48,19 @@ fn parser_keeps_braces_inside_declaration_values() {
 #[test]
 fn important_declarations_override_later_normal_declarations() {
     let stylesheet = Stylesheet::parse("p { color: red !important; } p { color: blue; }");
-    assert_eq!(styles(&stylesheet, &element("p", &[])).get("color"), Some("red"));
+    assert_eq!(
+        styles(&stylesheet, &element("p", &[])).get("color"),
+        Some("red")
+    );
 }
 
 #[test]
 fn display_inline_block_maps_to_distinct_display_mode() {
     let stylesheet = Stylesheet::parse("span { display: inline-block; }");
-    assert_eq!(styles(&stylesheet, &element("span", &[])).display_mode(), DisplayMode::InlineBlock);
+    assert_eq!(
+        styles(&stylesheet, &element("span", &[])).display_mode(),
+        DisplayMode::InlineBlock
+    );
 }
 
 #[test]
@@ -143,12 +153,16 @@ fn adjacent_sibling_combinator_matches_immediately_preceding() {
     let siblings = vec![h2, p.clone()];
     // p at index 1, h2 at index 0 — adjacent match
     assert_eq!(
-        stylesheet.styles_for(&p, &[], &siblings, 1).get("margin-top"),
+        stylesheet
+            .styles_for(&p, &[], &siblings, 1)
+            .get("margin-top"),
         Some("0")
     );
     // p at index 0 — no preceding sibling
     assert_eq!(
-        stylesheet.styles_for(&p, &[], &siblings, 0).get("margin-top"),
+        stylesheet
+            .styles_for(&p, &[], &siblings, 0)
+            .get("margin-top"),
         None
     );
 }
@@ -156,8 +170,14 @@ fn adjacent_sibling_combinator_matches_immediately_preceding() {
 #[test]
 fn is_pseudo_class_matches_any_in_list() {
     let stylesheet = Stylesheet::parse(":is(h1, h2, h3) { font-weight: bold; }");
-    assert_eq!(styles(&stylesheet, &el("h1")).get("font-weight"), Some("bold"));
-    assert_eq!(styles(&stylesheet, &el("h2")).get("font-weight"), Some("bold"));
+    assert_eq!(
+        styles(&stylesheet, &el("h1")).get("font-weight"),
+        Some("bold")
+    );
+    assert_eq!(
+        styles(&stylesheet, &el("h2")).get("font-weight"),
+        Some("bold")
+    );
     assert_eq!(styles(&stylesheet, &el("p")).get("font-weight"), None);
 }
 
@@ -169,7 +189,8 @@ fn media_query_rules_are_included() {
 
 #[test]
 fn print_media_query_rules_are_excluded() {
-    let stylesheet = Stylesheet::parse("@media print { p { color: invisible; } } p { color: visible; }");
+    let stylesheet =
+        Stylesheet::parse("@media print { p { color: invisible; } } p { color: visible; }");
     assert_eq!(styles(&stylesheet, &el("p")).get("color"), Some("visible"));
 }
 
@@ -177,9 +198,27 @@ fn print_media_query_rules_are_excluded() {
 fn ua_sets_display_none_on_head() {
     let ua = Stylesheet::user_agent_stylesheet();
     let head = el("head");
-    assert_eq!(styles(&ua, &head).get("display"), Some("none"),
-        "UA stylesheet must set display:none on <head>");
+    assert_eq!(
+        styles(&ua, &head).get("display"),
+        Some("none"),
+        "UA stylesheet must set display:none on <head>"
+    );
     let style_el = el("style");
-    assert_eq!(styles(&ua, &style_el).get("display"), Some("none"),
-        "UA stylesheet must set display:none on <style>");
+    assert_eq!(
+        styles(&ua, &style_el).get("display"),
+        Some("none"),
+        "UA stylesheet must set display:none on <style>"
+    );
+}
+
+#[test]
+fn author_origin_overrides_user_agent_origin() {
+    let mut stylesheet = Stylesheet::user_agent_stylesheet();
+    stylesheet.merge(Stylesheet::parse("body { display: flex; }"));
+
+    assert_eq!(
+        styles(&stylesheet, &el("body")).get("display"),
+        Some("flex"),
+        "author styles must beat same-specificity UA rules"
+    );
 }

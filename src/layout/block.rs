@@ -79,6 +79,7 @@ impl LayoutBox {
                             | DisplayMode::Grid
                             | DisplayMode::FlowRoot
                             | DisplayMode::Table
+                            | DisplayMode::TableRow
                             | DisplayMode::ListItem
                     )
                 })
@@ -144,12 +145,25 @@ impl LayoutBox {
         );
 
         let content_height = cursor_y - content_y;
+        let content_used_width = layout_children
+            .iter()
+            .map(|child| (child.rect.x - content_x) + child.total_width())
+            .fold(0.0_f32, f32::max)
+            .min(content_width);
         let inner_height = if layout_children.is_empty() {
             BLOCK_VERTICAL_PADDING
         } else {
             content_height + BLOCK_VERTICAL_PADDING
         };
         let resolved_content_height = clamp_content_height(&styles, inner_height, viewport_height);
+        let auto_inline_block = matches!(kind, LayoutKind::InlineBlock { .. })
+            && styles.get("width").is_none()
+            && styles.get("min-width").is_none();
+        let used_rect_width = if auto_inline_block {
+            content_used_width + padding.horizontal() + border.horizontal()
+        } else {
+            rect_width
+        };
 
         Self {
             node,
@@ -157,7 +171,7 @@ impl LayoutBox {
             rect: Rect {
                 x: rect_x,
                 y: rect_y,
-                width: rect_width,
+                width: used_rect_width,
                 height: border.top
                     + padding.top
                     + resolved_content_height

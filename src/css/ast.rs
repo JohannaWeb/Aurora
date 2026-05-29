@@ -18,7 +18,30 @@ pub struct ElementData {
 pub struct Rule {
     pub selector: Selector,
     pub declarations: Vec<Declaration>,
+    pub origin: Origin,
     pub source_order: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Origin {
+    UserAgent,
+    Author,
+}
+
+impl Origin {
+    pub fn normal_rank(self) -> u8 {
+        match self {
+            Self::UserAgent => 0,
+            Self::Author => 1,
+        }
+    }
+
+    pub fn important_rank(self) -> u8 {
+        match self {
+            Self::Author => 0,
+            Self::UserAgent => 1,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -149,7 +149,7 @@ impl LayoutBox {
                     viewport_height,
                 ))
             }
-            DisplayMode::Flex => Some(Self::layout_flex_container(
+            DisplayMode::Flex | DisplayMode::TableRow => Some(Self::layout_flex_container(
                 Some(node.node.clone()),
                 LayoutKind::Block {
                     tag_name: tag_name.to_string(),

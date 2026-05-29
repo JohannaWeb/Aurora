@@ -40,13 +40,6 @@ impl BoaRuntime {
             .set_shared_state(layout_tree, stylesheet, viewport, self.document.clone());
     }
 
-    pub fn set_layout_document(
-        &mut self,
-        layout_doc: Rc<RefCell<crate::layout::document::LayoutDocument>>,
-    ) {
-        *self.registry.layout_document.borrow_mut() = Some(layout_doc);
-    }
-
     pub fn perform_sync_reflow(&self) {
         self.registry.perform_sync_reflow();
     }

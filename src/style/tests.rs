@@ -73,3 +73,36 @@ fn inherits_visibility() {
 
     assert!(rendered.contains("visibility: hidden"));
 }
+
+#[test]
+fn custom_properties_do_not_leak_between_unrelated_branches() {
+    let mut first_attrs = BTreeMap::new();
+    first_attrs.insert("class".to_string(), "first".to_string());
+    let mut second_attrs = BTreeMap::new();
+    second_attrs.insert("class".to_string(), "second".to_string());
+
+    let dom = Node::document(vec![Node::element(
+        "body",
+        vec![
+            Node::element_with_attributes(
+                "section",
+                first_attrs,
+                vec![Node::element("p", vec![Node::text("First")])],
+            ),
+            Node::element_with_attributes(
+                "section",
+                second_attrs,
+                vec![Node::element("p", vec![Node::text("Second")])],
+            ),
+        ],
+    )]);
+
+    let stylesheet = Stylesheet::parse(
+        ".first { --accent: red; } .first p, .second p { color: var(--accent, blue); }",
+    );
+    let style_tree = StyleTree::from_dom(&dom, &stylesheet);
+    let rendered = style_tree.to_string();
+
+    assert!(rendered.contains("\"First\" {color: red, display: inline}"));
+    assert!(rendered.contains("\"Second\" {color: blue, display: inline}"));
+}

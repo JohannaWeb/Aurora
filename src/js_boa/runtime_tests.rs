@@ -166,9 +166,9 @@ fn cancel_idle_callback_prevents_callback() {
 #[test]
 fn forced_sync_reflow_via_offset_width() {
     use crate::css::Stylesheet;
+    use crate::identity::{Identity, IdentityKind};
     use crate::layout::{LayoutTree, ViewportSize};
     use crate::style::StyleTree;
-    use crate::identity::{Identity, IdentityKind};
 
     let dom = Parser::new(
         r#"<html><body><div id="box" style="width: 100px; height: 50px;"></div></body></html>"#,
@@ -245,6 +245,59 @@ fn input_triggered_event_dispatch() {
     assert_eq!(text_content(&dom), "click me");
     runtime.dispatch_event(&btn_node, "click");
     assert_eq!(text_content(&dom), "clicked");
+}
+
+#[test]
+fn element_dispatch_event_invokes_registered_listeners() {
+    let dom = Parser::new(r#"<html><body><button id="btn">press</button></body></html>"#)
+        .parse_document();
+    let mut runtime = BoaRuntime::new(dom.clone());
+
+    runtime
+        .execute(
+            r#"
+            const btn = document.getElementById("btn");
+            btn.addEventListener("activate", (event) => {
+                event.preventDefault();
+                document.body.textContent = event.type + ":" + event.defaultPrevented;
+            });
+            const result = btn.dispatchEvent(Event("activate"));
+            document.body.setAttribute("data-result", String(result));
+            "#,
+        )
+        .unwrap();
+
+    assert_eq!(text_content(&dom), "activate:true");
+    assert!(
+        runtime
+            .execute("document.body.getAttribute('data-result')")
+            .unwrap()
+            .as_string()
+            .map(|value| value.to_std_string().unwrap_or_default())
+            .as_deref()
+            == Some("false")
+    );
+}
+
+#[test]
+fn crypto_randomness_is_not_faked() {
+    let dom = Parser::new("<html><body></body></html>").parse_document();
+    let mut runtime = BoaRuntime::new(dom.clone());
+
+    runtime
+        .execute(
+            r#"
+            try {
+                crypto.randomUUID();
+                document.body.textContent = "fake";
+            } catch (error) {
+                document.body.textContent = "unsupported";
+            }
+            "#,
+        )
+        .unwrap();
+
+    assert_eq!(text_content(&dom), "unsupported");
 }
 
 fn text_content(node: &NodePtr) -> String {

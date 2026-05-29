@@ -58,10 +58,9 @@ impl LayoutBox {
 
             let remaining_width = (content_width - (line_x - content_x)).max(TEXT_CHAR_WIDTH);
             if let Some(mut layout_child) =
-                Self::from_styled_node(child, line_x, line_y, remaining_width, viewport_height)
+                Self::from_styled_node(child, line_x, line_y, content_width, viewport_height)
             {
                 if line_x > content_x && layout_child.total_width() > remaining_width {
-                    // if the child does not fit on the current line, advance to the next line and lay it out again.
                     max_line_width = max_line_width.max(line_x - content_x);
                     line_y += line_height.max(TEXT_LINE_HEIGHT);
                     line_x = content_x;

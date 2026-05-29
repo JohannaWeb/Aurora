@@ -7,9 +7,10 @@ use boa_engine::object::builtins::JsArray;
 use boa_engine::object::{FunctionObjectBuilder, ObjectInitializer};
 use boa_engine::property::Attribute;
 use boa_engine::{
-    js_string, Context, JsError, JsObject, JsResult, JsString, JsValue, NativeFunction, Source,
+    Context, JsError, JsNativeError, JsObject, JsResult, JsString, JsValue, NativeFunction, Source,
+    js_string,
 };
-use boa_gc::{empty_trace, Finalize, Trace};
+use boa_gc::{Finalize, Trace, empty_trace};
 
 use std::cell::RefCell;
 use std::collections::BTreeMap;
@@ -41,6 +42,7 @@ mod style_class;
 mod tree;
 mod utils;
 
+use self::selectors::*;
 use accessor_install::*;
 use accessors::*;
 use capture::*;
@@ -53,7 +55,6 @@ use node_create::*;
 use observers::*;
 use reflection::*;
 use registry::*;
-use self::selectors::*;
 use serialization::*;
 use storage::*;
 use style_class::*;

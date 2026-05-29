@@ -16,10 +16,10 @@ mod stylesheet;
 #[cfg(test)]
 mod tests;
 
-pub use ast::{Declaration, ElementData, Rule, Selector};
+pub use ast::{Declaration, ElementData, Origin, Rule, Selector};
 pub use inline_style::parse_style_text;
 #[allow(unused_imports)]
-pub use length::{parse_length_value, LengthValue};
+pub use length::{LengthValue, parse_length_value};
 pub use properties::{
     AlignItems, BoxSizing, DisplayMode, EdgeSizes, FlexDirection, JustifyContent, Margin,
     MarginValue, TextAlign, WhiteSpace,

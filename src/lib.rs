@@ -16,8 +16,9 @@ pub(crate) mod layout;
 pub(crate) mod media;
 pub(crate) mod runner;
 pub(crate) mod style;
+#[cfg(feature = "stylo-bridge")]
 pub(crate) mod stylo_bridge;
 pub(crate) mod window;
 
 pub(crate) use media::MediaCache;
-pub(crate) use runner::{load_images, load_svgs, ImageCache, SvgCache};
+pub(crate) use runner::{ImageCache, SvgCache, load_missing_images, load_missing_svgs};

@@ -45,7 +45,7 @@ impl LayoutBox {
                 child,
                 line_x,
                 line_y,
-                remaining_width,
+                available_width,
                 DEFAULT_VIEWPORT_HEIGHT,
             ) {
                 if line_x > x && layout_child.total_width() > remaining_width {

@@ -16,13 +16,31 @@ pub(crate) fn load_images(
     base_url: Option<&str>,
     identity: &Identity,
 ) -> ImageCache {
+    let mut cache = ImageCache::new();
+    load_missing_images(root, base_url, identity, &mut cache);
+    cache
+}
+
+pub(crate) fn load_missing_images(
+    root: &LayoutBox,
+    base_url: Option<&str>,
+    identity: &Identity,
+    cache: &mut ImageCache,
+) {
     let mut urls = Vec::new();
     collect_image_srcs(root, base_url, &mut urls);
 
-    let mut cache = ImageCache::new();
     for source in urls {
         if !is_svg_url(&source.resolved) {
-            load_image(&source.resolved, identity, &mut cache);
+            if cache.contains_key(&source.resolved) {
+                if source.raw != source.resolved {
+                    if let Some(image) = cache.get(&source.resolved).cloned() {
+                        cache.insert(source.raw, image);
+                    }
+                }
+                continue;
+            }
+            load_image(&source.resolved, identity, cache);
             if source.raw != source.resolved {
                 if let Some(image) = cache.get(&source.resolved).cloned() {
                     cache.insert(source.raw, image);
@@ -30,18 +48,34 @@ pub(crate) fn load_images(
             }
         }
     }
-
-    cache
 }
 
 pub(crate) fn load_svgs(root: &LayoutBox, base_url: Option<&str>, identity: &Identity) -> SvgCache {
+    let mut cache = SvgCache::new();
+    load_missing_svgs(root, base_url, identity, &mut cache);
+    cache
+}
+
+pub(crate) fn load_missing_svgs(
+    root: &LayoutBox,
+    base_url: Option<&str>,
+    identity: &Identity,
+    cache: &mut SvgCache,
+) {
     let mut urls = Vec::new();
     collect_image_srcs(root, base_url, &mut urls);
 
-    let mut cache = SvgCache::new();
     for source in urls {
         if is_svg_url(&source.resolved) {
-            load_svg(&source.resolved, identity, &mut cache);
+            if cache.contains_key(&source.resolved) {
+                if source.raw != source.resolved {
+                    if let Some(tree) = cache.get(&source.resolved).cloned() {
+                        cache.insert(source.raw, tree);
+                    }
+                }
+                continue;
+            }
+            load_svg(&source.resolved, identity, cache);
             if source.raw != source.resolved {
                 if let Some(tree) = cache.get(&source.resolved).cloned() {
                     cache.insert(source.raw, tree);
@@ -49,8 +83,6 @@ pub(crate) fn load_svgs(root: &LayoutBox, base_url: Option<&str>, identity: &Ide
             }
         }
     }
-
-    cache
 }
 
 fn is_svg_url(url: &str) -> bool {
