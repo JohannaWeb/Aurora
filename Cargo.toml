@@ -7,6 +7,16 @@ edition = "2024"
 [features]
 default = []
 media-ffmpeg = ["dep:ffmpeg-next"]
+stylo-bridge = [
+    "dep:app_units",
+    "dep:atomic_refcell",
+    "dep:euclid",
+    "dep:servo_style",
+    "dep:stylo_atoms",
+    "dep:stylo_dom",
+    "dep:stylo_traits",
+]
+taffy-document = []
 
 [dependencies]
 rustls = { version = "0.23", features = ["ring"] } # still needed for install_crypto_provider()
@@ -30,4 +40,12 @@ parley = "0.7"
 reqwest = { version = "0.12", features = ["blocking", "rustls-tls", "gzip", "deflate", "brotli"], default-features = false }
 usvg = "0.47.0"
 winit = "0.30.13"
+servo_style = { package = "stylo", version = "0.17.0", optional = true }
+stylo_dom = { version = "0.17.0", optional = true }
+stylo_atoms = { version = "0.17.0", optional = true }
+atomic_refcell = { version = "0.1.14", optional = true }
+euclid = { version = "0.22.14", optional = true }
+app_units = { version = "0.7.8", optional = true }
+url = "2.5.8"
+stylo_traits = { version = "0.17.0", optional = true }
 # vello_svg removed: v0.9.0 links against vello 0.7 + usvg 0.46, incompatible with our vello 0.9 + usvg 0.47

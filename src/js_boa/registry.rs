@@ -12,8 +12,6 @@ pub(super) struct NodeRegistry {
     pub(super) viewport: Rc<RefCell<Option<Rc<RefCell<crate::layout::ViewportSize>>>>>,
     pub(super) document: Rc<RefCell<Option<NodePtr>>>,
     pub(super) listeners: Rc<RefCell<BTreeMap<u32, BTreeMap<String, Vec<JsObject>>>>>,
-    /// Shared incremental layout document. Same Rc as WindowInput.layout_doc.
-    pub(super) layout_document: Rc<RefCell<Option<Rc<RefCell<crate::layout::document::LayoutDocument>>>>>,
 }
 
 unsafe impl Trace for NodeRegistry {
@@ -33,7 +31,6 @@ impl NodeRegistry {
             viewport: Rc::new(RefCell::new(None)),
             document: Rc::new(RefCell::new(None)),
             listeners: Rc::new(RefCell::new(BTreeMap::new())),
-            layout_document: Rc::new(RefCell::new(None)),
         }
     }
 
@@ -45,6 +42,22 @@ impl NodeRegistry {
             .entry(event_type)
             .or_default()
             .push(callback);
+    }
+
+    pub(super) fn remove_event_listener(
+        &self,
+        node_id: u32,
+        event_type: &str,
+        callback: &JsObject,
+    ) {
+        let mut listeners = self.listeners.borrow_mut();
+        let Some(by_type) = listeners.get_mut(&node_id) else {
+            return;
+        };
+        let Some(callbacks) = by_type.get_mut(event_type) else {
+            return;
+        };
+        callbacks.retain(|stored| !JsObject::equals(stored, callback));
     }
 
     pub(super) fn get_listeners(&self, node_id: u32, event_type: &str) -> Vec<JsObject> {
@@ -97,19 +110,12 @@ impl NodeRegistry {
 
     pub(super) fn mark_style_dirty(&self, node: &NodePtr) {
         self.dirty.borrow_mut().style = true;
-        if let Some(ld) = self.layout_document.borrow().as_ref() {
-            ld.borrow_mut().mark_dirty(node, false);
-        }
     }
 
     pub(super) fn mark_layout_dirty(&self, node: &NodePtr) {
         let mut dirty = self.dirty.borrow_mut();
         dirty.style = true;
         dirty.layout = true;
-        drop(dirty);
-        if let Some(ld) = self.layout_document.borrow().as_ref() {
-            ld.borrow_mut().mark_dirty(node, true);
-        }
     }
 
     pub(super) fn take_needs_reflow(&self) -> bool {
@@ -155,16 +161,10 @@ impl NodeRegistry {
 
             let style_tree = crate::style::StyleTree::from_dom(document, &stylesheet.borrow());
 
-            // Use LayoutDocument (incremental) if available, else full rebuild.
-            let new_layout = if let Some(ld) = self.layout_document.borrow().as_ref() {
-                let root = ld.borrow_mut().compute(&style_tree);
-                crate::layout::LayoutTree::from_root(root)
-            } else {
-                crate::layout::LayoutTree::from_style_tree_with_viewport(
-                    &style_tree,
-                    content_viewport,
-                )
-            };
+            let new_layout = crate::layout::LayoutTree::from_style_tree_with_viewport(
+                &style_tree,
+                content_viewport,
+            );
 
             *layout_tree.borrow_mut() = new_layout;
             self.clear_dirty_bits();

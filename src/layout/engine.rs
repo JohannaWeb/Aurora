@@ -8,7 +8,10 @@ use super::taffy_layout::compute_taffy_layout;
 use super::{LayoutBox, ViewportSize};
 
 /// Build the layout tree root using Taffy or the legacy engine as appropriate.
-pub fn layout_root_from_style_tree(style_tree: &crate::style::StyleTree, viewport: ViewportSize) -> LayoutBox {
+pub fn layout_root_from_style_tree(
+    style_tree: &crate::style::StyleTree,
+    viewport: ViewportSize,
+) -> LayoutBox {
     if needs_legacy_layout(style_tree.root()) {
         LayoutBox::layout_root(style_tree.root(), viewport).expect("layout root must produce a box")
     } else {
@@ -74,6 +77,7 @@ fn is_block_flow(node: &StyledNode) -> bool {
             | DisplayMode::Grid
             | DisplayMode::FlowRoot
             | DisplayMode::Table
+            | DisplayMode::TableRow
             | DisplayMode::ListItem
     )
 }

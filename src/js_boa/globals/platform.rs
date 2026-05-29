@@ -42,25 +42,10 @@ pub(in crate::js_boa) fn install_platform_objects(context: &mut Context, global_
     let _ = perf.set(js_string!("timeOrigin"), 0.0, false, context);
     let _ = context.register_global_property(js_string!("performance"), perf, Attribute::all());
 
-    // Crypto (stub): randomUUID returns a fixed-ish value.
+    // Crypto is intentionally absent-for-now rather than fake-random.
     let crypto = ObjectInitializer::new(context)
-        .function(
-            NativeFunction::from_fn_ptr(|_this, _args, _ctx| {
-                Ok(JsValue::from(js_string!(
-                    "00000000-0000-0000-0000-000000000000"
-                )))
-            }),
-            js_string!("randomUUID"),
-            0,
-        )
-        .function(
-            NativeFunction::from_fn_ptr(|_this, args, _ctx| {
-                // Return the same typed array unchanged.
-                Ok(args.get(0).cloned().unwrap_or(JsValue::undefined()))
-            }),
-            js_string!("getRandomValues"),
-            1,
-        )
+        .function(unsupported_crypto(), js_string!("randomUUID"), 0)
+        .function(unsupported_crypto(), js_string!("getRandomValues"), 1)
         .build();
     let _ = context.register_global_property(js_string!("crypto"), crypto, Attribute::all());
 
@@ -76,10 +61,10 @@ pub(in crate::js_boa) fn install_platform_objects(context: &mut Context, global_
             .property(js_string!("bubbles"), false, Attribute::all())
             .property(js_string!("cancelable"), false, Attribute::all())
             .property(js_string!("defaultPrevented"), false, Attribute::all())
-            .function(noop_native(), js_string!("preventDefault"), 0)
             .function(noop_native(), js_string!("stopPropagation"), 0)
             .function(noop_native(), js_string!("stopImmediatePropagation"), 0)
             .build();
+        install_prevent_default(ctx, &obj);
         Ok(obj.into())
     });
     let _ = global_obj.set(
@@ -97,9 +82,9 @@ pub(in crate::js_boa) fn install_platform_objects(context: &mut Context, global_
                 Attribute::all(),
             )
             .property(js_string!("detail"), JsValue::null(), Attribute::all())
-            .function(noop_native(), js_string!("preventDefault"), 0)
             .function(noop_native(), js_string!("stopPropagation"), 0)
             .build();
+        install_prevent_default(ctx, &obj);
         Ok(obj.into())
     });
     let _ = global_obj.set(
@@ -108,4 +93,30 @@ pub(in crate::js_boa) fn install_platform_objects(context: &mut Context, global_
         false,
         context,
     );
+}
+
+fn unsupported_crypto() -> NativeFunction {
+    NativeFunction::from_fn_ptr(|_this, _args, _ctx| {
+        Err(JsNativeError::typ()
+            .with_message("crypto randomness is not implemented in Aurora")
+            .into())
+    })
+}
+
+fn install_prevent_default(ctx: &mut Context, event: &JsObject) {
+    let event_clone = event.clone();
+    let prevent = NativeFunction::from_copy_closure_with_captures(
+        |_this, _args, event: &JsObject, ctx| {
+            let _ = event.set(
+                js_string!("defaultPrevented"),
+                JsValue::from(true),
+                false,
+                ctx,
+            );
+            Ok(JsValue::undefined())
+        },
+        event_clone,
+    );
+    let prevent_fn = NativeFunction::to_js_function(prevent, ctx.realm());
+    let _ = event.set(js_string!("preventDefault"), prevent_fn, false, ctx);
 }

@@ -39,8 +39,7 @@ impl LayoutTree {
         Self { root }
     }
 
-    /// Create a LayoutTree from a pre-computed root LayoutBox.
-    /// Used by LayoutDocument for incremental reflow.
+    #[cfg(feature = "taffy-document")]
     pub fn from_root(root: LayoutBox) -> Self {
         Self { root }
     }

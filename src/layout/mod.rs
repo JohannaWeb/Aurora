@@ -2,6 +2,7 @@
 
 mod block;
 mod r#box;
+#[cfg(feature = "taffy-document")]
 pub mod document;
 mod constants;
 mod constraints;

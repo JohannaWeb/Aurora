@@ -79,6 +79,7 @@ pub enum DisplayMode {
     InlineGrid,
     FlowRoot,
     Table,
+    TableRow,
     ListItem,
     None,
 }

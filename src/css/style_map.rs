@@ -28,6 +28,7 @@ impl StyleMap {
             Some("inline-grid") => DisplayMode::InlineGrid,
             Some("flow-root") => DisplayMode::FlowRoot,
             Some("table") | Some("inline-table") => DisplayMode::Table,
+            Some("table-row") => DisplayMode::TableRow,
             Some("list-item") => DisplayMode::ListItem,
             Some("none") => DisplayMode::None,
             _ => DisplayMode::Block,

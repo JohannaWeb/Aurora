@@ -1,24 +1,21 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 
 use cssparser::{
-    parse_important, AtRuleParser, BasicParseErrorKind, CowRcStr, ParseError, Parser,
-    ParserInput, ParserState, QualifiedRuleParser, RuleBodyParser, StyleSheetParser, ToCss,
+    AtRuleParser, BasicParseErrorKind, CowRcStr, ParseError, Parser, ParserInput, ParserState,
+    QualifiedRuleParser, RuleBodyParser, StyleSheetParser, ToCss,
 };
 use selectors::parser::{ParseRelative, SelectorList};
 
 use crate::dom::NodePtr;
 
 use super::dom_styles::collect_styles;
-use super::selectors_impl::{
-    element_matches, AurSelectorParser, AuroraSelectorImpl,
-};
-use super::{Declaration, ElementData, Rule, Selector, StyleMap};
+use super::selectors_impl::{AurSelectorParser, AuroraSelectorImpl, element_matches};
+use super::{Declaration, ElementData, Origin, Rule, Selector, StyleMap};
 
 // ─── Stylesheet ───────────────────────────────────────────────────────────────
 
 pub struct Stylesheet {
     pub rules: Vec<Rule>,
-    pub variables: BTreeMap<String, String>,
     /// Bucket index: maps "#id", ".class", "tag", or "*" → rule indices.
     index: HashMap<String, Vec<usize>>,
 }
@@ -27,7 +24,6 @@ impl Stylesheet {
     pub fn merge(&mut self, other: Stylesheet) {
         let offset = self.rules.len();
         self.rules.extend(other.rules);
-        self.variables.extend(other.variables);
         for (key, indices) in other.index {
             self.index
                 .entry(key)
@@ -37,7 +33,7 @@ impl Stylesheet {
     }
 
     pub fn user_agent_stylesheet() -> Self {
-        Self::parse(
+        Self::parse_with_origin(
             "html, body, div, p, section, article, aside, nav, header, footer, main, \
              figure, figcaption, blockquote, form, fieldset, details, summary, dialog { display: block; } \
              h1, h2, h3, h4, h5, h6 { display: block; font-weight: bold; } \
@@ -83,11 +79,16 @@ impl Stylesheet {
              ol { list-style-type: decimal; } \
              ul { list-style-type: disc; } \
              ",
+            Origin::UserAgent,
         )
     }
 
     pub fn parse(source: &str) -> Self {
-        do_parse(source, None)
+        Self::parse_with_origin(source, Origin::Author)
+    }
+
+    fn parse_with_origin(source: &str, origin: Origin) -> Self {
+        do_parse(source, None, origin)
     }
 
     pub fn from_dom(
@@ -98,7 +99,7 @@ impl Stylesheet {
         let mut source = String::new();
         collect_styles(document, base_url, identity, &mut source);
         let fetch_ctx = base_url.map(|b| (b, identity));
-        do_parse(&source, fetch_ctx)
+        do_parse(&source, fetch_ctx, Origin::Author)
     }
 
     pub fn styles_for(
@@ -148,32 +149,35 @@ impl Stylesheet {
         apply_declarations(&mut styles, matching, self);
         styles
     }
-
-    pub fn resolve_variables(&self, value: &str) -> String {
-        resolve_vars_with_map(value, &self.variables)
-    }
 }
 
 // ─── StyleSheetParser integration ────────────────────────────────────────────
 
-fn do_parse(source: &str, fetch_ctx: Option<(&str, &crate::identity::Identity)>) -> Stylesheet {
-    let mut variables = BTreeMap::new();
+fn do_parse(
+    source: &str,
+    fetch_ctx: Option<(&str, &crate::identity::Identity)>,
+    origin: Origin,
+) -> Stylesheet {
     let mut source_order = 0usize;
-    let rules = parse_rules(source, fetch_ctx, &mut variables, &mut source_order);
+    let rules = parse_rules(source, fetch_ctx, origin, &mut source_order);
     let index = build_index(&rules);
-    Stylesheet { rules, variables, index }
+    Stylesheet { rules, index }
 }
 
 /// Parse CSS source into a flat `Vec<Rule>` using cssparser's `StyleSheetParser`.
 pub(super) fn parse_rules(
     source: &str,
     fetch_ctx: Option<(&str, &crate::identity::Identity)>,
-    variables: &mut BTreeMap<String, String>,
+    origin: Origin,
     source_order: &mut usize,
 ) -> Vec<Rule> {
     let mut input = ParserInput::new(source);
     let mut parser = Parser::new(&mut input);
-    let mut rule_parser = AuroraStyleParser { fetch_ctx, variables, source_order };
+    let mut rule_parser = AuroraStyleParser {
+        fetch_ctx,
+        origin,
+        source_order,
+    };
     let sheet_parser = StyleSheetParser::new(&mut parser, &mut rule_parser);
     sheet_parser.filter_map(|r| r.ok()).flatten().collect()
 }
@@ -183,7 +187,9 @@ fn is_print_only(condition: &str) -> bool {
     let c = condition.trim().to_ascii_lowercase();
     c == "print"
         || c == "only print"
-        || (c.contains("print") && !c.contains("screen") && !c.contains("all")
+        || (c.contains("print")
+            && !c.contains("screen")
+            && !c.contains("all")
             && !c.contains("not print"))
 }
 
@@ -198,7 +204,7 @@ enum AtRulePrelude {
 
 struct AuroraStyleParser<'a> {
     fetch_ctx: Option<(&'a str, &'a crate::identity::Identity)>,
-    variables: &'a mut BTreeMap<String, String>,
+    origin: Origin,
     source_order: &'a mut usize,
 }
 
@@ -230,13 +236,11 @@ impl<'i> AtRuleParser<'i> for AuroraStyleParser<'_> {
                 let url = match input.next() {
                     Ok(cssparser::Token::QuotedString(s)) => s.to_string(),
                     Ok(cssparser::Token::UnquotedUrl(s)) => s.to_string(),
-                    Ok(cssparser::Token::Function(f)) if f.eq_ignore_ascii_case("url") => {
-                        input
-                            .parse_nested_block(|p| -> Result<String, cssparser::ParseError<'_, ()>> {
-                                Ok(p.expect_string_cloned()?.as_ref().to_string())
-                            })
-                            .unwrap_or_default()
-                    }
+                    Ok(cssparser::Token::Function(f)) if f.eq_ignore_ascii_case("url") => input
+                        .parse_nested_block(|p| -> Result<String, cssparser::ParseError<'_, ()>> {
+                            Ok(p.expect_string_cloned()?.as_ref().to_string())
+                        })
+                        .unwrap_or_default(),
                     _ => String::new(),
                 };
                 // Drain the rest of the prelude (media condition after the URL).
@@ -263,7 +267,7 @@ impl<'i> AtRuleParser<'i> for AuroraStyleParser<'_> {
                         let rules = parse_rules(
                             &css,
                             Some((&resolved, identity)),
-                            self.variables,
+                            self.origin,
                             self.source_order,
                         );
                         return Ok(rules);
@@ -286,11 +290,19 @@ impl<'i> AtRuleParser<'i> for AuroraStyleParser<'_> {
                     while input.next().is_ok() {}
                     return Ok(vec![]);
                 }
-                Ok(parse_nested_block(input, self.fetch_ctx, self.variables, self.source_order))
+                Ok(parse_nested_block(
+                    input,
+                    self.fetch_ctx,
+                    self.origin,
+                    self.source_order,
+                ))
             }
-            AtRulePrelude::Supports | AtRulePrelude::Layer => {
-                Ok(parse_nested_block(input, self.fetch_ctx, self.variables, self.source_order))
-            }
+            AtRulePrelude::Supports | AtRulePrelude::Layer => Ok(parse_nested_block(
+                input,
+                self.fetch_ctx,
+                self.origin,
+                self.source_order,
+            )),
             _ => {
                 while input.next().is_ok() {}
                 Ok(vec![])
@@ -318,7 +330,7 @@ impl<'i> QualifiedRuleParser<'i> for AuroraStyleParser<'_> {
         _start: &ParserState,
         input: &mut Parser<'i, 't>,
     ) -> Result<Vec<Rule>, ParseError<'i, ()>> {
-        let declarations = parse_declaration_block(input, self.variables);
+        let declarations = parse_declaration_block(input);
         if declarations.is_empty() {
             return Ok(vec![]);
         }
@@ -329,7 +341,12 @@ impl<'i> QualifiedRuleParser<'i> for AuroraStyleParser<'_> {
             .map(|selector| {
                 let order = *self.source_order;
                 *self.source_order += 1;
-                Rule { selector: selector.clone(), declarations: declarations.clone(), source_order: order }
+                Rule {
+                    selector: selector.clone(),
+                    declarations: declarations.clone(),
+                    origin: self.origin,
+                    source_order: order,
+                }
             })
             .collect();
 
@@ -339,21 +356,16 @@ impl<'i> QualifiedRuleParser<'i> for AuroraStyleParser<'_> {
 
 // ─── Declaration parsing ──────────────────────────────────────────────────────
 
-fn parse_declaration_block<'i>(
-    input: &mut Parser<'i, '_>,
-    variables: &mut BTreeMap<String, String>,
-) -> Vec<Declaration> {
-    let mut decl_parser = AuroraDeclarationParser { variables };
+fn parse_declaration_block<'i>(input: &mut Parser<'i, '_>) -> Vec<Declaration> {
+    let mut decl_parser = AuroraDeclarationParser;
     RuleBodyParser::new(input, &mut decl_parser)
         .filter_map(Result::ok)
         .collect()
 }
 
-struct AuroraDeclarationParser<'a> {
-    variables: &'a mut BTreeMap<String, String>,
-}
+struct AuroraDeclarationParser;
 
-impl<'i> cssparser::DeclarationParser<'i> for AuroraDeclarationParser<'_> {
+impl<'i> cssparser::DeclarationParser<'i> for AuroraDeclarationParser {
     type Declaration = Declaration;
     type Error = ();
 
@@ -364,124 +376,86 @@ impl<'i> cssparser::DeclarationParser<'i> for AuroraDeclarationParser<'_> {
         _state: &ParserState,
     ) -> Result<Declaration, ParseError<'i, ()>> {
         let name = name.to_ascii_lowercase();
-        let mut value = input
-            .parse_until_before(cssparser::Delimiter::Bang, |input| {
-                let mut value = String::new();
-                while let Ok(token) = input.next_including_whitespace_and_comments() {
-                    value.push_str(&token.to_css_string());
-                }
-                Ok::<_, ParseError<'i, ()>>(value)
-            })?
-            .trim()
-            .to_string();
-        let important = input.try_parse(parse_important).is_ok();
-        value = value.trim().to_string();
+        let value_start = input.state();
+        while input.next_including_whitespace_and_comments().is_ok() {}
+        let raw = input.slice_from(value_start.position());
+        let (value, important) = split_important(raw);
 
-        if name.starts_with("--") {
-            self.variables.insert(name.clone(), value.clone());
-        }
-
-        Ok(Declaration { name: name.to_string(), value, important })
+        Ok(Declaration {
+            name: name.to_string(),
+            value,
+            important,
+        })
     }
 }
 
-impl<'i> cssparser::AtRuleParser<'i> for AuroraDeclarationParser<'_> {
+impl<'i> cssparser::AtRuleParser<'i> for AuroraDeclarationParser {
     type Prelude = ();
     type AtRule = Declaration;
     type Error = ();
 }
 
-impl<'i> cssparser::QualifiedRuleParser<'i> for AuroraDeclarationParser<'_> {
+impl<'i> cssparser::QualifiedRuleParser<'i> for AuroraDeclarationParser {
     type Prelude = ();
     type QualifiedRule = Declaration;
     type Error = ();
 }
 
-impl<'i> cssparser::RuleBodyItemParser<'i, Declaration, ()> for AuroraDeclarationParser<'_> {
-    fn parse_declarations(&self) -> bool { true }
-    fn parse_qualified(&self) -> bool { false }
+impl<'i> cssparser::RuleBodyItemParser<'i, Declaration, ()> for AuroraDeclarationParser {
+    fn parse_declarations(&self) -> bool {
+        true
+    }
+    fn parse_qualified(&self) -> bool {
+        false
+    }
 }
 
-// ─── Variable resolution ──────────────────────────────────────────────────────
-
-fn resolve_vars_with_map(value: &str, vars: &BTreeMap<String, String>) -> String {
-    if !value.contains("var(") {
-        return value.to_string();
-    }
-    let mut result = String::new();
-    let mut i = 0;
-    while i < value.len() {
-        if value[i..].starts_with("var(") {
-            let content_start = i + 4;
-            let (end, inner) = find_matching_close(value, content_start);
-            let (var_name, fallback) = split_var_args(inner);
-            let var_name = var_name.trim();
-            if let Some(val) = vars.get(var_name) {
-                let resolved = resolve_vars_with_map(val, vars);
-                result.push_str(&resolved);
-            } else if let Some(fb) = fallback {
-                let resolved = resolve_vars_with_map(fb.trim(), vars);
-                result.push_str(&resolved);
-            } else {
-                result.push_str(&value[i..=end]);
-            }
-            i = end + 1;
-        } else {
-            let ch = value[i..].chars().next().unwrap_or('\0');
-            result.push(ch);
-            i += ch.len_utf8();
+fn split_important(value: &str) -> (String, bool) {
+    let trimmed = value.trim();
+    let lower = trimmed.to_ascii_lowercase();
+    if let Some(bang_index) = lower.rfind("!important") {
+        let suffix = lower[bang_index + "!important".len()..].trim();
+        if suffix.is_empty() {
+            return (trimmed[..bang_index].trim().to_string(), true);
         }
     }
-    result
-}
-
-fn find_matching_close(s: &str, start: usize) -> (usize, &str) {
-    let mut depth = 1usize;
-    let mut i = start;
-    for ch in s[start..].chars() {
-        match ch {
-            '(' => depth += 1,
-            ')' => {
-                depth -= 1;
-                if depth == 0 {
-                    return (i, &s[start..i]);
-                }
-            }
-            _ => {}
-        }
-        i += ch.len_utf8();
-    }
-    (s.len().saturating_sub(1), &s[start..])
-}
-
-fn split_var_args(s: &str) -> (&str, Option<&str>) {
-    let mut depth = 0usize;
-    for (i, ch) in s.char_indices() {
-        match ch {
-            '(' => depth += 1,
-            ')' => depth -= 1,
-            ',' if depth == 0 => return (&s[..i], Some(&s[i + 1..])),
-            _ => {}
-        }
-    }
-    (s, None)
+    (trimmed.to_string(), false)
 }
 
 // ─── apply_declarations ───────────────────────────────────────────────────────
 
-fn apply_declarations(styles: &mut StyleMap, rules: Vec<&Rule>, stylesheet: &Stylesheet) {
-    let mut normal = Vec::new();
-    let mut important = Vec::new();
+fn apply_declarations(styles: &mut StyleMap, rules: Vec<&Rule>, _stylesheet: &Stylesheet) {
+    let mut declarations = Vec::new();
     for rule in rules {
-        for decl in &rule.declarations {
-            if decl.important { important.push(decl); } else { normal.push(decl); }
+        for (declaration_order, decl) in rule.declarations.iter().enumerate() {
+            let origin_rank = if decl.important {
+                rule.origin.important_rank()
+            } else {
+                rule.origin.normal_rank()
+            };
+            declarations.push((
+                decl.important,
+                origin_rank,
+                rule.selector.specificity(),
+                rule.source_order,
+                declaration_order,
+                decl,
+            ));
         }
     }
-    for decl in normal.into_iter().chain(important) {
-        styles.0.insert(
-            decl.name.clone(),
-            stylesheet.resolve_variables(&decl.value),
-        );
+    declarations.sort_by_key(
+        |(important, origin_rank, specificity, source_order, declaration_order, _)| {
+            (
+                *important,
+                *origin_rank,
+                *specificity,
+                *source_order,
+                *declaration_order,
+            )
+        },
+    );
+    for (_, _, _, _, _, decl) in declarations {
+        styles.0.insert(decl.name.clone(), decl.value.clone());
     }
 }
 
@@ -525,10 +499,14 @@ fn collect_prelude_as_string<'i>(input: &mut Parser<'i, '_>) -> String {
 fn parse_nested_block<'i, 't>(
     input: &mut Parser<'i, 't>,
     fetch_ctx: Option<(&str, &crate::identity::Identity)>,
-    variables: &mut BTreeMap<String, String>,
+    origin: Origin,
     source_order: &mut usize,
 ) -> Vec<Rule> {
-    let mut nested = AuroraStyleParser { fetch_ctx, variables, source_order };
+    let mut nested = AuroraStyleParser {
+        fetch_ctx,
+        origin,
+        source_order,
+    };
     StyleSheetParser::new(input, &mut nested)
         .filter_map(|r| r.ok())
         .flatten()
@@ -539,8 +517,7 @@ fn parse_nested_block<'i, 't>(
 pub(crate) fn parse_declarations_for_style_attribute(source: &str) -> Vec<Declaration> {
     let mut input = ParserInput::new(source);
     let mut parser = Parser::new(&mut input);
-    let mut variables = BTreeMap::new();
-    let mut decl_parser = AuroraDeclarationParser { variables: &mut variables };
+    let mut decl_parser = AuroraDeclarationParser;
     RuleBodyParser::new(&mut parser, &mut decl_parser)
         .filter_map(Result::ok)
         .collect()

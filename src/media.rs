@@ -41,32 +41,43 @@ impl Default for MediaCache {
 
 impl MediaCache {
     pub(crate) fn load(root: &LayoutBox, base_url: Option<&str>, identity: &Identity) -> Self {
+        let mut cache = Self::default();
+        cache.load_missing(root, base_url, identity);
+        cache
+    }
+
+    pub(crate) fn load_missing(
+        &mut self,
+        root: &LayoutBox,
+        base_url: Option<&str>,
+        identity: &Identity,
+    ) {
         let mut sources = Vec::new();
         collect_media_srcs(root, base_url, &mut sources);
 
-        let mut cache = Self::default();
         if sources.is_empty() {
-            return cache;
+            return;
         }
 
         if !init_decoder() {
             eprintln!("Aurora: media playback requires the media-ffmpeg feature");
-            return cache;
+            return;
         }
 
         for (raw, resolved) in sources {
             if raw != resolved {
-                cache.aliases.insert(raw.clone(), resolved.clone());
+                self.aliases.insert(raw.clone(), resolved.clone());
+            }
+            if self.videos.contains_key(&resolved) {
+                continue;
             }
             match decode_video(&resolved, identity) {
                 Ok(video) => {
-                    cache.videos.insert(resolved, video);
+                    self.videos.insert(resolved, video);
                 }
                 Err(error) => eprintln!("Aurora: failed to decode media {raw}: {error}"),
             }
         }
-
-        cache
     }
 
     pub(crate) fn update(&mut self) -> bool {

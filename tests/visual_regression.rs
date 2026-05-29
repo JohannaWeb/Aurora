@@ -28,6 +28,10 @@ fn updating_snapshots() -> bool {
 
 /// Render a fixture and compare to its baseline snapshot.
 fn assert_snapshot(fixture_name: &str, width: u32, height: u32) {
+    assert_snapshot_named(fixture_name, fixture_name, width, height);
+}
+
+fn assert_snapshot_named(fixture_name: &str, snapshot_name: &str, width: u32, height: u32) {
     let html_path = fixture_path(fixture_name);
     assert!(
         html_path.exists(),
@@ -41,7 +45,7 @@ fn assert_snapshot(fixture_name: &str, width: u32, height: u32) {
         height,
     );
 
-    let snapshot_path = snapshots_dir().join(format!("{}.png", fixture_name));
+    let snapshot_path = snapshots_dir().join(format!("{}.png", snapshot_name));
 
     if updating_snapshots() {
         rendered
@@ -71,10 +75,10 @@ fn assert_snapshot(fixture_name: &str, width: u32, height: u32) {
         "Visual regression in '{}': {:.2}% pixels differ (threshold {:.2}%)\n\
          Diff saved to: {}\n\
          Run UPDATE_SNAPSHOTS=1 cargo test to update baselines.",
-        fixture_name,
+        snapshot_name,
         diff_ratio * 100.0,
         DIFF_THRESHOLD * 100.0,
-        save_diff(fixture_name, &diff_image).display()
+        save_diff(snapshot_name, &diff_image).display()
     );
 }
 
@@ -120,6 +124,11 @@ fn compute_diff(actual: &RgbaImage, expected: &RgbaImage) -> (f64, RgbaImage) {
 #[test]
 fn snapshot_demo() {
     assert_snapshot("demo", 1200, 900);
+}
+
+#[test]
+fn snapshot_demo_narrow() {
+    assert_snapshot_named("demo", "demo-narrow", 960, 540);
 }
 
 #[test]

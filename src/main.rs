@@ -15,15 +15,15 @@ mod style;
 mod window;
 
 pub(crate) use media::MediaCache;
-pub(crate) use runner::{load_images, load_svgs, ImageCache, SvgCache};
+pub(crate) use runner::{ImageCache, SvgCache, load_missing_images, load_missing_svgs};
 
 fn main() {
     println!("Aurora: Starting up...");
     install_crypto_provider();
     println!("Aurora: Crypto provider installed.");
 
-    let identity = default_identity();
     let cli = runner::CliOptions::from_env();
+    let identity = default_identity(&cli);
     runner::run_browser(cli, identity);
 }
 
@@ -33,14 +33,16 @@ fn install_crypto_provider() {
         .expect("Failed to install rustls crypto provider");
 }
 
-fn default_identity() -> identity::Identity {
+fn default_identity(cli: &runner::CliOptions) -> identity::Identity {
+    let mut capabilities = vec![identity::Capability::NetworkAccess];
+    if cli.allow_workspace_read {
+        capabilities.push(identity::Capability::ReadWorkspace);
+    }
+
     identity::Identity::new(
         "did:human:johanna",
         "Johanna",
         identity::IdentityKind::Human,
-        [
-            identity::Capability::NetworkAccess,
-            identity::Capability::ReadWorkspace,
-        ],
+        capabilities,
     )
 }
