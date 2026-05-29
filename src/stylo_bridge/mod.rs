@@ -7,7 +7,8 @@
 pub mod arena;
 pub mod impls;
 
-pub use arena::{build_arena, ArenaDoc};
+pub use arena::ArenaDoc;
+pub use arena::build_arena;
 pub use impls::AuroraNode;
 
 use servo_style::{
@@ -23,6 +24,7 @@ use servo_style::{
 };
 use servo_style::traversal::recalc_style_at;
 use servo_style::selector_parser::SnapshotMap;
+use selectors::Element as _; // bring first_element_child into scope
 
 // ── Stub painters ─────────────────────────────────────────────────────────────
 
@@ -105,4 +107,34 @@ pub fn resolve_styles(doc: &mut ArenaDoc) {
 
     doc.stylist.rule_tree().maybe_gc();
     servo_style::thread_state::exit(ThreadState::LAYOUT);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::dom::Node;
+
+    fn make_dom(html: &str) -> crate::dom::NodePtr {
+        crate::html::parse_html(html)
+    }
+
+    #[test]
+    fn stylo_resolves_display_block_for_div() {
+        let dom = make_dom("<html><body><div id='x'>hello</div></body></html>");
+        let css = "div { display: block; color: red; }".to_string();
+        let mut doc = build_arena(&dom, &[css]);
+        resolve_styles(&mut doc);
+
+        // Find the div node in the arena and check it has computed styles.
+        let div_id = doc.nodes.iter().find(|n| {
+            n.data.element().map_or(false, |e| e.local_name.as_ref() == "div")
+        }).map(|n| n.id);
+
+        assert!(div_id.is_some(), "div node not found in arena");
+        let div = &doc.nodes[div_id.unwrap()];
+        assert!(div.stylo_data.has_data(), "div has no computed style data");
+
+        let data = div.stylo_data.get().expect("borrow_data returned None");
+        assert!(data.has_styles(), "div styles not resolved");
+    }
 }

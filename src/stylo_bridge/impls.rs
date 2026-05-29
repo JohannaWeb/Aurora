@@ -1,4 +1,5 @@
 //! Stylo DOM trait implementations for `AuroraNode<'a>`.
+#![allow(dead_code)]
 
 use std::fmt;
 use std::hash::{Hash, Hasher};
@@ -23,7 +24,7 @@ use servo_style::{
     selector_parser::{NonTSPseudoClass, PseudoElement, SelectorImpl},
     servo_arc::{Arc, ArcBorrow},
     shared_lock::{Locked, SharedRwLock},
-    values::{AtomIdent, GenericAtomIdent},
+    values::AtomIdent,
     LocalName, Namespace,
 };
 use stylo_dom::ElementState;

@@ -1,4 +1,5 @@
 //! Arena-based DOM that is `Send + Sync` — required by stylo's traversal.
+#![allow(dead_code)]
 
 use std::cell::Cell;
 use std::sync::atomic::AtomicBool;
