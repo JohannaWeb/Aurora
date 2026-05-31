@@ -27,8 +27,6 @@ mod tests;
 
 pub use r#box::LayoutBox;
 pub use rect::Rect;
-#[allow(unused_imports)]
-pub use taffy_adapter::style_to_taffy;
 pub use tree::{LayoutTree, ViewportSize};
 
 pub(in crate::layout) use r#box::LayoutKind;
