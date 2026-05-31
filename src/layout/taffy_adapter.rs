@@ -10,7 +10,8 @@ use taffy::prelude::{
 
 use super::ViewportSize;
 
-pub fn style_to_taffy(styles: &StyleMap) -> TaffyStyle {
+#[cfg(test)]
+fn style_to_taffy(styles: &StyleMap) -> TaffyStyle {
     style_to_taffy_with_viewport(styles, ViewportSize {
         width: 800.0,
         height: 600.0,
