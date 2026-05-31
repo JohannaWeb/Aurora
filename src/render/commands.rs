@@ -129,3 +129,12 @@ pub enum DrawCommand {
         opacity: f32,
     },
 }
+
+/// Represents what needs to be recomputed in the next frame.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum InvalidationLevel {
+    None,
+    Paint,   // Only repaint (e.g. opacity, color change)
+    Layout,  // Recompute positions (e.g. width, height, margin)
+    Style,   // Recompute CSS cascade (e.g. class change, new styles)
+}

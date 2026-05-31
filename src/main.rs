@@ -1,9 +1,9 @@
 mod atlas;
+mod blitz_document;
 mod css;
 mod dom;
 mod fetch;
 mod font;
-mod gpu_paint;
 mod html;
 mod identity;
 mod js_boa;

@@ -1,4 +1,5 @@
 use crate::ImageCache;
+use crate::blitz_document::BlitzDocument;
 use crate::css::Stylesheet;
 use crate::dom::NodePtr;
 use crate::identity::Identity;
@@ -20,6 +21,7 @@ pub struct WindowInput {
     pub svgs: crate::SvgCache,
     pub media: MediaCache,
     pub runtime: Option<BoaRuntime>,
+    pub blitz_doc: Option<BlitzDocument>,
 }
 
 impl WindowInput {
@@ -60,5 +62,11 @@ impl WindowInput {
             self.base_url.as_deref(),
             &self.identity,
         );
+
+        if let Some(blitz_doc) = &mut self.blitz_doc {
+            let content_w = width;
+            let content_h = ((height as f32) - crate::window::BROWSER_CHROME_HEIGHT).max(1.0) as u32;
+            blitz_doc.resolve(content_w, content_h);
+        }
     }
 }

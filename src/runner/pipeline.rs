@@ -2,6 +2,7 @@ use super::cli::{CliOptions, env_f32};
 use super::fixtures::demo_html;
 use super::images::{load_images, load_svgs};
 use super::scripts::extract_scripts;
+use crate::blitz_document::BlitzDocument;
 use crate::css::Stylesheet;
 use crate::html::Parser;
 use crate::identity::Identity;
@@ -46,6 +47,10 @@ pub(crate) fn run_browser(cli: CliOptions, identity: Identity) {
     print_debug_output(&cli, &dom, &style_tree, &layout_rc.borrow());
     let _ = crate::font::get_glyph_metrics('A');
 
+    let content_w = viewport.width as u32;
+    let content_h = (viewport.height - crate::window::BROWSER_CHROME_HEIGHT).max(1.0) as u32;
+    let blitz_doc = BlitzDocument::from_html(&html, base_url.as_deref(), &identity, content_w, content_h);
+
     maybe_open_window(
         dom,
         stylesheet_rc,
@@ -57,6 +62,7 @@ pub(crate) fn run_browser(cli: CliOptions, identity: Identity) {
         svg_cache,
         media_cache,
         runtime,
+        blitz_doc,
     );
 }
 
@@ -160,6 +166,7 @@ fn maybe_open_window(
     svgs: crate::SvgCache,
     media: crate::MediaCache,
     runtime: Option<crate::js_boa::BoaRuntime>,
+    blitz_doc: BlitzDocument,
 ) {
     let has_screenshot = env::var("AURORA_SCREENSHOT").is_ok();
     let is_headless = env::var("AURORA_HEADLESS").is_ok();
@@ -177,6 +184,7 @@ fn maybe_open_window(
             svgs,
             media,
             runtime,
+            blitz_doc: Some(blitz_doc),
         };
         if let Err(error) = crate::window::open(window_input) {
             eprintln!("Window disabled: {error}");

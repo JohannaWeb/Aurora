@@ -7,15 +7,6 @@ edition = "2024"
 [features]
 default = []
 media-ffmpeg = ["dep:ffmpeg-next"]
-stylo-bridge = [
-    "dep:app_units",
-    "dep:atomic_refcell",
-    "dep:euclid",
-    "dep:servo_style",
-    "dep:stylo_atoms",
-    "dep:stylo_dom",
-    "dep:stylo_traits",
-]
 taffy-document = []
 
 [dependencies]
@@ -23,12 +14,13 @@ rustls = { version = "0.23", features = ["ring"] } # still needed for install_cr
 wgpu = "29.0.3"
 vello = "0.9.0"
 pollster = "0.4.0"
-boa_engine = "0.21.1"
-boa_gc = "0.21.1"
+boa_engine = { git = "https://github.com/boa-dev/boa" }
+boa_gc = { git = "https://github.com/boa-dev/boa" }
 ab_glyph = "0.2"
 rustybuzz = "0.20.1"
 peniko = "0.6"
-image = "0.25.10"
+#lowered dep because of blitz-dom transitive
+image = "0.25.6"
 ffmpeg-next = { version = "8.1.0", optional = true }
 html5ever = "0.39.0"
 markup5ever = "0.39.0"
@@ -36,16 +28,16 @@ cssparser = "0.37.0"
 selectors = "0.38.0"
 precomputed-hash = "0.1"
 taffy = "0.10.1"
+# parley pinned: 0.9 currently conflicts with the active vello/peniko/text stack.
+# Revisit once Linebender crate versions align.
 parley = "0.7"
 reqwest = { version = "0.12", features = ["blocking", "rustls-tls", "gzip", "deflate", "brotli"], default-features = false }
 usvg = "0.47.0"
 winit = "0.30.13"
-servo_style = { package = "stylo", version = "0.17.0", optional = true }
-stylo_dom = { version = "0.17.0", optional = true }
-stylo_atoms = { version = "0.17.0", optional = true }
-atomic_refcell = { version = "0.1.14", optional = true }
-euclid = { version = "0.22.14", optional = true }
-app_units = { version = "0.7.8", optional = true }
 url = "2.5.8"
-stylo_traits = { version = "0.17.0", optional = true }
+blitz-dom = "0.3.0-alpha.4"
+blitz-html = "0.3.0-alpha.4"
+blitz-paint = "0.3.0-alpha.4"
+blitz-traits = "=0.3.0-alpha.4"
+anyrender_vello = "0.10.1"
 # vello_svg removed: v0.9.0 links against vello 0.7 + usvg 0.46, incompatible with our vello 0.9 + usvg 0.47

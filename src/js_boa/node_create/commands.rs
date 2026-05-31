@@ -5,7 +5,7 @@ pub(in crate::js_boa) fn install_command_methods(
     cap: &NodeCapture,
 ) {
     init.function(
-        NativeFunction::from_fn_ptr(|_this, _args, ctx| Ok(JsArray::new(ctx).into())),
+        NativeFunction::from_fn_ptr(|_this, _args, ctx| Ok(JsArray::new(ctx)?.into())),
         js_string!("getClientRects"),
         0,
     );

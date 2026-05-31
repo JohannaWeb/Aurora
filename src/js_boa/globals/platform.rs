@@ -24,17 +24,17 @@ pub(in crate::js_boa) fn install_platform_objects(context: &mut Context, global_
         .function(noop_native(), js_string!("clearMarks"), 0)
         .function(noop_native(), js_string!("clearMeasures"), 0)
         .function(
-            NativeFunction::from_fn_ptr(|_this, _args, ctx| Ok(JsArray::new(ctx).into())),
+            NativeFunction::from_fn_ptr(|_this, _args, ctx| Ok(JsArray::new(ctx)?.into())),
             js_string!("getEntries"),
             0,
         )
         .function(
-            NativeFunction::from_fn_ptr(|_this, _args, ctx| Ok(JsArray::new(ctx).into())),
+            NativeFunction::from_fn_ptr(|_this, _args, ctx| Ok(JsArray::new(ctx)?.into())),
             js_string!("getEntriesByType"),
             1,
         )
         .function(
-            NativeFunction::from_fn_ptr(|_this, _args, ctx| Ok(JsArray::new(ctx).into())),
+            NativeFunction::from_fn_ptr(|_this, _args, ctx| Ok(JsArray::new(ctx)?.into())),
             js_string!("getEntriesByName"),
             2,
         )
