@@ -8,7 +8,6 @@ pub mod arena;
 pub mod impls;
 
 pub use arena::ArenaDoc;
-pub use arena::build_arena;
 pub use impls::AuroraNode;
 
 use servo_style::{
@@ -123,7 +122,7 @@ mod tests {
     fn stylo_resolves_display_block_for_div() {
         let dom = make_dom("<html><body><div id='x'>hello</div></body></html>");
         let css = "div { display: block; color: red; }".to_string();
-        let mut doc = build_arena(&dom, &[css]);
+        let mut doc = arena::build_arena(&dom, &[css]);
         resolve_styles(&mut doc);
 
         // Find the div node in the arena and check it has computed styles.
