@@ -45,10 +45,12 @@ impl StyloNodeData {
     }
     pub unsafe fn ensure_init(&self) -> ElementDataMut<'_> {
         let ptr = self.inner.get();
-        if (*ptr).is_none() { *ptr = Some(ElementDataWrapper::default()); }
-        (*ptr).as_ref().unwrap().borrow_mut()
+        unsafe {
+            if (*ptr).is_none() { *ptr = Some(ElementDataWrapper::default()); }
+            (*ptr).as_ref().unwrap().borrow_mut()
+        }
     }
-    pub unsafe fn clear(&self) { *self.inner.get() = None; }
+    pub unsafe fn clear(&self) { unsafe { *self.inner.get() = None; } }
     pub fn get(&self) -> Option<ElementDataRef<'_>> {
         unsafe { (*self.inner.get()).as_ref().map(|w| w.borrow()) }
     }
