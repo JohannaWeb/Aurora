@@ -15,7 +15,7 @@ pub(super) fn install_observers(context: &mut Context) {
                 .function(noop_native(), js_string!("unobserve"), 1)
                 .function(noop_native(), js_string!("disconnect"), 0)
                 .function(
-                    NativeFunction::from_fn_ptr(|_this, _args, ctx| Ok(JsArray::new(ctx).into())),
+                    NativeFunction::from_fn_ptr(|_this, _args, ctx| Ok(JsArray::new(ctx)?.into())),
                     js_string!("takeRecords"),
                     0,
                 )

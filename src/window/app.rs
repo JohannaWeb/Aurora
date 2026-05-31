@@ -1,4 +1,3 @@
-use crate::gpu_paint::GpuPainter;
 use std::sync::Arc;
 use std::time::Instant;
 use vello::kurbo::Affine;
@@ -71,20 +70,22 @@ impl AuroraApp {
     }
 
     pub(super) fn render(&mut self) {
-        let surface = self.surface.as_ref().unwrap();
-        let width = surface.config.width;
-        let height = surface.config.height;
-        let device_handle = &self.context.devices[surface.dev_id];
-        let mut scene = Scene::new();
+        // Extract what we need from surface before any mutable borrows of self.
+        let (width, height, dev_id) = {
+            let s = self.surface.as_ref().unwrap();
+            (s.config.width, s.config.height, s.dev_id)
+        };
 
+        let mut scene = Scene::new();
         paint_content_layer(self, &mut scene, width, height);
-        paint_scrollbar_layer(self, &mut scene, width, height);
         paint_browser_chrome_scene(
             &mut scene,
             width,
             self.input.base_url.as_deref().unwrap_or("aurora://local"),
         );
 
+        let surface = self.surface.as_ref().unwrap();
+        let device_handle = &self.context.devices[dev_id];
         let surface_texture = match surface.surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(t)
             | wgpu::CurrentSurfaceTexture::Suboptimal(t) => t,
@@ -97,8 +98,7 @@ impl AuroraApp {
             height,
         };
 
-        let renderer =
-            renderer_for_surface(&mut self.renderers, surface.dev_id, &device_handle.device);
+        let renderer = renderer_for_surface(&mut self.renderers, dev_id, &device_handle.device);
         renderer
             .render_to_texture(
                 &device_handle.device,
@@ -149,9 +149,9 @@ fn renderer_for_surface<'a>(
     renderers[dev_id].as_mut().unwrap()
 }
 
-fn paint_content_layer(app: &AuroraApp, scene: &mut Scene, width: u32, height: u32) {
+fn paint_content_layer(app: &mut AuroraApp, scene: &mut Scene, width: u32, height: u32) {
     let content_top = BROWSER_CHROME_HEIGHT as f64;
-    // Clip to the area below the chrome; use IDENTITY so the clip rect is in screen coords.
+    let content_height = (height as f32 - BROWSER_CHROME_HEIGHT).max(1.0) as u32;
     scene.push_layer(
         Fill::NonZero,
         vello::peniko::BlendMode::default(),
@@ -159,42 +159,13 @@ fn paint_content_layer(app: &AuroraApp, scene: &mut Scene, width: u32, height: u
         Affine::IDENTITY,
         &vello::kurbo::Rect::new(0.0, content_top, width as f64, height as f64),
     );
-    // Paint into a sub-scene, then append it with the scroll+chrome offset applied.
-    // scene.append is the correct way to transform content in vello — push_layer's
-    // transform only applies to the clip shape, not to draw calls inside the layer.
     let mut content_scene = Scene::new();
-    GpuPainter::paint(
-        app.input.layout.borrow().root(),
-        &mut content_scene,
-        &app.input.images,
-        &app.input.svgs,
-        &app.input.media,
-    );
+    if let Some(blitz_doc) = &mut app.input.blitz_doc {
+        blitz_doc.paint_to_scene(&mut content_scene, width, content_height);
+    }
     scene.append(
         &content_scene,
         Some(Affine::translate((0.0, content_top - app.scroll_y))),
-    );
-    scene.pop_layer();
-}
-
-fn paint_scrollbar_layer(app: &AuroraApp, scene: &mut Scene, width: u32, height: u32) {
-    let content_top = BROWSER_CHROME_HEIGHT as f64;
-    scene.push_layer(
-        Fill::NonZero,
-        vello::peniko::BlendMode::default(),
-        1.0,
-        Affine::IDENTITY,
-        &vello::kurbo::Rect::new(0.0, content_top, width as f64, height as f64),
-    );
-    let mut scrollbar_scene = Scene::new();
-    GpuPainter::paint_scrollbars(
-        app.input.layout.borrow().root(),
-        &mut scrollbar_scene,
-        (height as f32 - BROWSER_CHROME_HEIGHT).max(1.0),
-    );
-    scene.append(
-        &scrollbar_scene,
-        Some(Affine::translate((0.0, content_top))),
     );
     scene.pop_layer();
 }

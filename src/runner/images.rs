@@ -132,10 +132,9 @@ fn load_image(url: &str, identity: &Identity, cache: &mut ImageCache) {
 fn load_svg(url: &str, identity: &Identity, cache: &mut SvgCache) {
     match crate::fetch::fetch_bytes(url, identity) {
         Ok(bytes) => {
-            if let Some(tree) = crate::gpu_paint::svg::parse_svg_bytes(&bytes) {
-                cache.insert(url.to_string(), tree);
-            } else {
-                eprintln!("Aurora: failed to parse SVG {url}");
+            match usvg::Tree::from_data(&bytes, &usvg::Options::default()) {
+                Ok(tree) => { cache.insert(url.to_string(), tree); }
+                Err(e) => eprintln!("Aurora: failed to parse SVG {url}: {e}"),
             }
         }
         Err(e) => eprintln!("Aurora: failed to fetch SVG {url}: {e}"),
