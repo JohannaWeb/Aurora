@@ -7,6 +7,15 @@ use vello::Scene;
 
 use crate::identity::Identity;
 
+use std::sync::{Mutex, OnceLock};
+use std::collections::BTreeMap;
+
+static NET_CACHE: OnceLock<Mutex<BTreeMap<String, Vec<u8>>>> = OnceLock::new();
+
+fn get_net_cache() -> &'static Mutex<BTreeMap<String, Vec<u8>>> {
+    NET_CACHE.get_or_init(|| Mutex::new(BTreeMap::new()))
+}
+
 struct AuroraNetProvider {
     identity: Identity,
 }
@@ -21,15 +30,28 @@ impl NetProvider for AuroraNetProvider {
     fn fetch(&self, _doc_id: usize, request: Request, handler: Box<dyn NetHandler>) {
         let url = request.url.to_string();
         let identity = self.identity.clone();
+
+        // Check cache first
+        let cache = get_net_cache();
+        if let Some(cached_bytes) = cache.lock().unwrap().get(&url) {
+            handler.bytes(url, Bytes::from(cached_bytes.clone()));
+            return;
+        }
+
         std::thread::spawn(move || {
             let bytes = match crate::fetch::fetch_bytes(&url, &identity) {
-                Ok(b) => Bytes::from(b),
+                Ok(b) => b,
                 Err(e) => {
                     eprintln!("blitz fetch: {url}: {e}");
-                    Bytes::new()
+                    Vec::new()
                 }
             };
-            handler.bytes(url, bytes);
+
+            // Save to cache
+            let cache = get_net_cache();
+            cache.lock().unwrap().insert(url.clone(), bytes.clone());
+
+            handler.bytes(url, Bytes::from(bytes));
         });
     }
 }

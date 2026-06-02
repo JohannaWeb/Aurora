@@ -41,17 +41,29 @@ impl AuroraApp {
 
     pub(super) fn run_frame_tasks(&mut self) -> bool {
         let now = Instant::now();
-        let mut needs_reflow = false;
+        let mut needs_reflow = self.input.needs_reflow;
+
         if let Some(runtime) = self.input.runtime.as_mut() {
             needs_reflow |= runtime.tick(now);
             needs_reflow |= runtime.drain_animation_frame_callbacks(now);
+            needs_reflow |= runtime.take_needs_reflow();
         }
+
         let needs_redraw = self.input.media.update();
         if needs_reflow {
-            let viewport = *self.input.viewport.borrow();
-            self.reflow(viewport.width as u32, viewport.height as u32);
+            self.perform_sync_reflow();
         }
         needs_reflow || needs_redraw
+    }
+
+    /// Forces a synchronous reflow of both supported workflows.
+    ///
+    /// This is intentionally dual-path: the live renderer paints through Blitz DOM
+    /// and Blitz Paint, while the legacy LayoutTree remains the source for tests,
+    /// screenshots, JS layout accessors, and current hit testing.
+    pub(super) fn perform_sync_reflow(&mut self) {
+        let viewport = *self.input.viewport.borrow();
+        self.reflow(viewport.width as u32, viewport.height as u32);
     }
 
     pub(super) fn next_runtime_deadline(&self) -> Option<Instant> {

@@ -185,6 +185,7 @@ fn maybe_open_window(
             media,
             runtime,
             blitz_doc: Some(blitz_doc),
+            needs_reflow: false,
         };
         if let Err(error) = crate::window::open(window_input) {
             eprintln!("Window disabled: {error}");

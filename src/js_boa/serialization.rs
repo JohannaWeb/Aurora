@@ -1,6 +1,6 @@
 use super::*;
 
-pub(super) fn serialize_outer_html(node: &NodePtr) -> String {
+pub(crate) fn serialize_outer_html(node: &NodePtr) -> String {
     let mut out = String::new();
     serialize(node, &mut out);
     out
