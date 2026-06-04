@@ -75,8 +75,6 @@ fn clamps_inline_width_before_wrapping() {
 
 #[test]
 fn maps_inline_block_to_inline_behavior() {
-    // This test documents the current limitation mentioned in PRINCIPAL_REVIEW.md:
-    // 'inline-block' is currently mapped to 'inline' in the StyleMap.
     let dom = Node::document(vec![Node::element(
         "body",
         vec![Node::element("div", vec![Node::text("Box")])],
@@ -87,9 +85,7 @@ fn maps_inline_block_to_inline_behavior() {
     let layout = LayoutTree::from_style_tree_with_viewport_width(&style_tree, 200.0);
     let rendered = layout.to_string();
 
-    // Currently, this will be rendered as an inline box, not a block-level box inside an inline context.
-    // If inline-block were properly implemented, this would likely be an 'InlineBlock' kind.
-    assert!(rendered.contains("inline<div>"));
+    assert!(rendered.contains("inline-block<div>"));
     assert!(rendered.contains("width: 100px"));
 }
 
