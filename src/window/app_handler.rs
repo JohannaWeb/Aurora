@@ -161,44 +161,30 @@ impl AuroraApp {
         let content_x = self.mouse_x as f32;
         let content_y = (self.mouse_y - super::BROWSER_CHROME_HEIGHT as f64 + self.scroll_y) as f32;
 
-        // Hit testing still uses the legacy LayoutTree by design until the Blitz
-        // renderer path exposes the DOM node mapping Aurora needs for dispatch.
+        // Navigation: use blitz-dom hit test so coordinates match what is rendered.
+        if let Some(href) = self
+            .input
+            .blitz_doc
+            .as_ref()
+            .and_then(|doc| doc.hit_test_anchor(content_x, content_y))
+        {
+            let full_url = match &self.input.base_url {
+                Some(base) => crate::fetch::resolve_relative_url(base, &href)
+                    .unwrap_or(href),
+                None => href,
+            };
+            self.input.navigate_to(&full_url);
+            self.scroll_y = 0.0;
+            self.request_redraw();
+            return;
+        }
+
+        // JS event dispatch: legacy LayoutTree hit test for DOM node identity.
         let hit_node = {
             let layout = self.input.layout.borrow();
             layout.hit_test(content_x, content_y)
         };
-
         if let Some(node) = hit_node {
-            // Traverse ancestors to check for an anchor (<a>) link click
-            let mut path = Vec::new();
-            if find_ancestors(&self.input.dom, &node, &mut path) {
-                let mut navigated = false;
-                for ancestor in path {
-                    let b = ancestor.borrow();
-                    if let crate::dom::Node::Element(el) = &*b {
-                        if el.tag_name.to_lowercase() == "a" {
-                            if let Some(href) = el.attributes.get("href") {
-                                let full_url = match &self.input.base_url {
-                                    Some(base) => match crate::fetch::resolve_relative_url(base, href) {
-                                        Ok(u) => u,
-                                        Err(_) => href.clone(),
-                                    },
-                                    None => href.clone(),
-                                };
-                                self.input.navigate_to(&full_url);
-                                self.scroll_y = 0.0;
-                                navigated = true;
-                                break;
-                            }
-                        }
-                    }
-                }
-                if navigated {
-                    self.request_redraw();
-                    return;
-                }
-            }
-
             if let Some(runtime) = self.input.runtime.as_mut() {
                 if runtime.dispatch_event(&node, "click") {
                     self.request_redraw();
@@ -234,34 +220,3 @@ impl AuroraApp {
     }
 }
 
-fn find_ancestors(
-    root: &crate::dom::NodePtr,
-    target: &crate::dom::NodePtr,
-    path: &mut Vec<crate::dom::NodePtr>,
-) -> bool {
-    if std::rc::Rc::ptr_eq(root, target) {
-        path.push(root.clone());
-        return true;
-    }
-    let b = root.borrow();
-    match &*b {
-        crate::dom::Node::Element(el) => {
-            for c in &el.children {
-                if find_ancestors(c, target, path) {
-                    path.push(root.clone());
-                    return true;
-                }
-            }
-        }
-        crate::dom::Node::Document { children, .. } => {
-            for c in children {
-                if find_ancestors(c, target, path) {
-                    path.push(root.clone());
-                    return true;
-                }
-            }
-        }
-        _ => {}
-    }
-    false
-}

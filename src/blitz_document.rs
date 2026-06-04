@@ -3,6 +3,7 @@ use blitz_dom::{BaseDocument, DocumentConfig};
 use blitz_html::HtmlDocument;
 use blitz_traits::net::{Bytes, NetHandler, NetProvider, Request};
 use blitz_traits::shell::{ColorScheme, Viewport};
+use markup5ever::local_name;
 use vello::Scene;
 
 use crate::identity::Identity;
@@ -83,6 +84,22 @@ impl BlitzDocument {
         self.inner
             .set_viewport(Viewport::new(width, height, 1.0, ColorScheme::Light));
         self.inner.resolve(0.0);
+    }
+
+    /// Walk up from the hit node looking for an `<a href="...">` ancestor.
+    /// Coordinates are in document space (scroll already applied by the caller).
+    pub fn hit_test_anchor(&self, x: f32, y: f32) -> Option<String> {
+        let hit = self.inner.hit(x, y)?;
+        let mut node_id = hit.node_id;
+        loop {
+            let node = self.inner.get_node(node_id)?;
+            if node.data.is_element_with_tag_name(&local_name!("a")) {
+                if let Some(href) = node.data.attr(local_name!("href")) {
+                    return Some(href.to_string());
+                }
+            }
+            node_id = node.parent?;
+        }
     }
 
     pub fn paint_to_scene(&mut self, scene: &mut Scene, width: u32, height: u32) {
