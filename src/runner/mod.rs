@@ -3,11 +3,11 @@
 mod cli;
 mod fixtures;
 mod images;
-mod pipeline;
+pub(crate) mod pipeline;
 pub(crate) mod scripts;
 
 pub(crate) use cli::CliOptions;
 pub(crate) use images::{
     ImageCache, SvgCache, load_images, load_missing_images, load_missing_svgs, load_svgs,
 };
-pub(crate) use pipeline::run_browser;
+pub(crate) use pipeline::{fetch_script, run_browser};

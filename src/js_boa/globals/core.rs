@@ -29,10 +29,35 @@ pub(in crate::js_boa) fn install_window_core(context: &mut Context, global_obj: 
         .function(log_native(), js_string!("error"), 1)
         .function(log_native(), js_string!("debug"), 1)
         .function(log_native(), js_string!("trace"), 1)
+        .function(log_native(), js_string!("dir"), 1)
+        .function(log_native(), js_string!("dirxml"), 1)
+        .function(log_native(), js_string!("table"), 1)
         .function(noop_native(), js_string!("group"), 0)
+        .function(noop_native(), js_string!("groupCollapsed"), 0)
         .function(noop_native(), js_string!("groupEnd"), 0)
-        .function(noop_native(), js_string!("time"), 0)
-        .function(noop_native(), js_string!("timeEnd"), 0)
+        .function(noop_native(), js_string!("time"), 1)
+        .function(noop_native(), js_string!("timeEnd"), 1)
+        .function(noop_native(), js_string!("timeLog"), 1)
+        .function(noop_native(), js_string!("timeStamp"), 1)
+        .function(noop_native(), js_string!("clear"), 0)
+        .function(noop_native(), js_string!("count"), 0)
+        .function(noop_native(), js_string!("countReset"), 0)
+        .function(noop_native(), js_string!("profile"), 0)
+        .function(noop_native(), js_string!("profileEnd"), 0)
+        .function(
+            NativeFunction::from_fn_ptr(|_this, args, ctx| {
+                let cond = args.get(0).map(|v| v.to_boolean()).unwrap_or(false);
+                if !cond {
+                    let msg = args.get(1)
+                        .map(|v| v.display().to_string())
+                        .unwrap_or_else(|| "Assertion failed".to_string());
+                    eprintln!("console.assert: {msg}");
+                }
+                Ok(JsValue::undefined())
+            }),
+            js_string!("assert"),
+            1,
+        )
         .build();
     let _ = context.register_global_property(js_string!("console"), console, Attribute::all());
 

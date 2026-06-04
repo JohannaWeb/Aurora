@@ -114,30 +114,27 @@ impl WindowInput {
         let mut new_stylesheet = Stylesheet::from_dom(&new_dom, Some(url), &self.identity);
         new_stylesheet.merge(Stylesheet::user_agent_stylesheet());
 
-        // 4. Initialize scripts/runtime
+        // 4. Initialize scripts/runtime — fetch externals in parallel, skip oversized ones.
         let scripts = crate::runner::scripts::extract_scripts(&new_dom);
         let new_runtime = if !scripts.is_empty() {
             println!("Boa: Processing {} scripts...", scripts.len());
+            let fetched: Vec<Option<String>> = {
+                let handles: Vec<_> = scripts
+                    .into_iter()
+                    .map(|(source, is_url)| {
+                        let url_str = url.to_string();
+                        let identity = self.identity.clone();
+                        std::thread::spawn(move || {
+                            crate::runner::pipeline::fetch_script(source, is_url, Some(&url_str), &identity)
+                        })
+                    })
+                    .collect();
+                handles.into_iter().map(|h| h.join().unwrap_or(None)).collect()
+            };
             let mut rt = crate::js_boa::BoaRuntime::new(Rc::clone(&new_dom));
-            for (source, is_url) in scripts {
-                let content = if !is_url {
-                    Some(source)
-                } else {
-                    match crate::fetch::resolve_relative_url(url, &source) {
-                        Ok(full_url) => {
-                            println!("Boa: Fetching external script: {}", full_url);
-                            crate::fetch::fetch_string(&full_url, &self.identity).ok()
-                        }
-                        Err(e) => {
-                            eprintln!("Failed to resolve script URL {}: {}", source, e);
-                            None
-                        }
-                    }
-                };
-                if let Some(script_content) = content {
-                    if let Err(e) = rt.execute(&script_content) {
-                        eprintln!("JS Error: {}", e);
-                    }
+            for content in fetched.into_iter().flatten() {
+                if let Err(e) = rt.execute(&content) {
+                    eprintln!("JS Error: {}", e);
                 }
             }
             Some(rt)

@@ -25,6 +25,16 @@ pub(in crate::js_boa) fn set_text_content(node: &NodePtr, text: &str) {
     }
 }
 
+pub(in crate::js_boa) fn prepend_child_ptr(parent: &NodePtr, child: &NodePtr) {
+    let mut p = parent.borrow_mut();
+    let kids: &mut Vec<NodePtr> = match &mut *p {
+        Node::Element(el) => &mut el.children,
+        Node::Document { children, .. } => children,
+        _ => return,
+    };
+    kids.insert(0, child.clone());
+}
+
 pub(in crate::js_boa) fn append_child_ptr(parent: &NodePtr, child: &NodePtr) {
     if let Node::Element(el) = &mut *parent.borrow_mut() {
         el.children.push(child.clone());

@@ -130,9 +130,26 @@ pub(super) fn install_xhr_and_fetch(context: &mut Context) {
                 return { documentElement: null, body: null, head: null, querySelector: function(){return null;}, querySelectorAll: function(){return [];} };
             };
         };
+        globalThis.AbortSignal = function() {
+            this.aborted = false;
+            this.reason = undefined;
+            this.addEventListener = function(){};
+            this.removeEventListener = function(){};
+            this.throwIfAborted = function(){
+                if (this.aborted) throw this.reason !== undefined ? this.reason : new Error("AbortError");
+            };
+        };
+        globalThis.AbortSignal.abort = function(reason) {
+            var s = new globalThis.AbortSignal();
+            s.aborted = true;
+            s.reason = reason !== undefined ? reason : new Error("AbortError");
+            return s;
+        };
+        globalThis.AbortSignal.timeout = function() { return new globalThis.AbortSignal(); };
+        globalThis.AbortSignal.any = function() { return new globalThis.AbortSignal(); };
         globalThis.AbortController = function() {
-            this.signal = { aborted: false, addEventListener: function(){}, removeEventListener: function(){} };
-            this.abort = function(){ this.signal.aborted = true; };
+            this.signal = new globalThis.AbortSignal();
+            this.abort = function(reason){ this.signal.aborted = true; this.signal.reason = reason; };
         };
         globalThis.WebSocket = function() { throw new Error("Aurora: WebSocket not supported"); };
         globalThis.Worker = function() { throw new Error("Aurora: Worker not supported"); };
