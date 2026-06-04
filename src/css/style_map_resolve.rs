@@ -143,7 +143,7 @@ impl StyleMap {
         let mut resolved = BTreeMap::new();
         for (name, value) in &self.0 {
             if value.contains("var(") {
-                if let Some(new_value) = self.resolve_single_value(value, ancestors) {
+                if let Some(new_value) = self.resolve_single_value(value, ancestors, 0) {
                     resolved.insert(name.clone(), new_value);
                 }
             }
@@ -153,7 +153,11 @@ impl StyleMap {
         }
     }
 
-    fn resolve_single_value(&self, value: &str, ancestors: &[&StyleMap]) -> Option<String> {
+    fn resolve_single_value(&self, value: &str, ancestors: &[&StyleMap], depth: u8) -> Option<String> {
+        // Guard against circular CSS variable references (e.g. --a: var(--b); --b: var(--a)).
+        if depth > 32 {
+            return None;
+        }
         if !value.contains("var(") {
             return Some(value.to_string());
         }
@@ -173,7 +177,7 @@ impl StyleMap {
                 if let Some(val) = self.lookup_variable(var_name, ancestors) {
                     // Resolved — recursively handle any var() inside the resolved value.
                     if val.contains("var(") {
-                        if let Some(resolved) = self.resolve_single_value(&val, ancestors) {
+                        if let Some(resolved) = self.resolve_single_value(&val, ancestors, depth + 1) {
                             result.push_str(&resolved);
                         } else {
                             result.push_str(&val);
@@ -183,7 +187,7 @@ impl StyleMap {
                     }
                 } else if let Some(fb) = fallback {
                     // Variable not found — use fallback, which may itself contain var().
-                    if let Some(resolved) = self.resolve_single_value(fb.trim(), ancestors) {
+                    if let Some(resolved) = self.resolve_single_value(fb.trim(), ancestors, depth + 1) {
                         result.push_str(&resolved);
                     } else {
                         result.push_str(fb.trim());

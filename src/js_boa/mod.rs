@@ -62,3 +62,4 @@ use tree::*;
 use utils::*;
 
 pub use runtime::BoaRuntime;
+pub(crate) use serialization::serialize_outer_html;

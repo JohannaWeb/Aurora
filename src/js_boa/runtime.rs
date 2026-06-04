@@ -285,6 +285,14 @@ impl BoaRuntime {
                 .unwrap_or(false)
     }
 
+    pub fn take_needs_reflow(&self) -> bool {
+        self.registry.take_needs_reflow()
+    }
+
+    pub fn has_dirty_bits(&self) -> bool {
+        self.registry.has_dirty_bits()
+    }
+
     fn ready_timers(&mut self, now: Instant) -> Vec<TimerEntry> {
         let mut ready = Vec::new();
         let mut pending = Vec::new();
