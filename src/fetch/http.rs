@@ -1,12 +1,13 @@
 //! HTTP(S) transport via reqwest::blocking.
 //! Replaces the hand-rolled TLS + chunked + redirect stack.
 
+use std::collections::HashMap;
 use std::sync::{LazyLock, Mutex};
 use std::time::{Duration, Instant};
 
 use reqwest::blocking::Client;
 use reqwest::header::ACCEPT;
-
+use url::Url;
 use super::FetchError;
 
 // Wikimedia API etiquette requires a descriptive UA with contact info.
@@ -29,16 +30,37 @@ static LAST_REQUEST: LazyLock<Mutex<Instant>> = LazyLock::new(|| {
     Mutex::new(Instant::now().checked_sub(Duration::from_millis(150)).unwrap_or(Instant::now()))
 });
 const REQUEST_INTERVAL: Duration = Duration::from_millis(150);
+static RATE_LIMITERS: LazyLock<Mutex<HashMap<String, Instant>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
 
-fn pace() {
-    // Hold the lock while sleeping so queued threads each wait their turn
-    // rather than all waking simultaneously after one interval.
-    let mut last = LAST_REQUEST.lock().unwrap();
-    let elapsed = last.elapsed();
-    if elapsed < REQUEST_INTERVAL {
-        std::thread::sleep(REQUEST_INTERVAL - elapsed);
+fn pace(url: &str) {
+    let host = Url::parse(url).ok()
+        .and_then(|u| u.host_str().map(|h| h.to_string()))
+        .unwrap_or_default();
+
+    let throttled = matches!(host.as_str(),
+        "upload.wikimedia.org" | "en.wikipedia.org"
+    );
+    if !throttled { return; }
+
+    let sleep_for = {
+        let mut map = RATE_LIMITERS.lock().unwrap();
+        let last = map.entry(host).or_insert_with(|| {
+            Instant::now() - REQUEST_INTERVAL
+        });
+        let elapsed = last.elapsed();
+        let sleep_for = if elapsed < REQUEST_INTERVAL {
+            REQUEST_INTERVAL - elapsed
+        } else {
+            Duration::ZERO
+        };
+        *last = Instant::now() + sleep_for;
+        sleep_for
+    }; // lock dropped here
+
+    if sleep_for > Duration::ZERO {
+        std::thread::sleep(sleep_for);
     }
-    *last = Instant::now();
 }
 
 fn client() -> &'static Client {
@@ -48,7 +70,7 @@ fn client() -> &'static Client {
 /// Fetch a URL and return the body as bytes.
 /// Follows redirects automatically (reqwest handles this natively).
 pub fn fetch_bytes(url: &str) -> Result<Vec<u8>, FetchError> {
-    pace();
+    pace(url);
     let response = client()
         .get(url)
         .header(ACCEPT, "text/html, text/css, */*")
