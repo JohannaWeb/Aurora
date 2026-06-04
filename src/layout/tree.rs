@@ -1,5 +1,6 @@
 use crate::style::StyleTree;
 
+#[cfg(test)]
 use super::constants::{DEFAULT_VIEWPORT_HEIGHT, DEFAULT_VIEWPORT_WIDTH};
 use super::engine::layout_root_from_style_tree;
 use super::LayoutBox;
@@ -16,11 +17,12 @@ pub struct ViewportSize {
 }
 
 impl LayoutTree {
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub fn from_style_tree(style_tree: &StyleTree) -> Self {
         Self::from_style_tree_with_viewport_width(style_tree, DEFAULT_VIEWPORT_WIDTH)
     }
 
+    #[cfg(test)]
     pub fn from_style_tree_with_viewport_width(
         style_tree: &StyleTree,
         viewport_width: f32,

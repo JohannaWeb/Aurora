@@ -1,4 +1,4 @@
-use peniko::Color;
+use vello::peniko::Color;
 use vello::Scene;
 
 use super::display::truncate_chrome_text;

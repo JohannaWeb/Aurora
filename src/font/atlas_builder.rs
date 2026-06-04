@@ -52,7 +52,6 @@ fn register_character(
         });
 
         if let Some((atlas_x, atlas_y)) = packer.pack(width, height) {
-            let advance = advance_width(font, glyph_id);
             atlas.register_glyph(
                 ch,
                 &bitmap,
@@ -60,18 +59,11 @@ fn register_character(
                 height,
                 bounds.min.x as i32,
                 bounds.min.y as i32,
-                advance,
                 atlas_x,
                 atlas_y,
             );
         }
     } else if ch == ' ' {
-        let advance = advance_width(font, glyph_id);
-        atlas.register_glyph(ch, &[], 0, 0, 0, 0, advance, 0, 0);
+        atlas.register_glyph(ch, &[], 0, 0, 0, 0, 0, 0);
     }
-}
-
-fn advance_width(font: &ab_glyph::FontRef<'static>, glyph_id: ab_glyph::GlyphId) -> f32 {
-    let upem = font.units_per_em().unwrap_or(1000.0);
-    font.h_advance_unscaled(glyph_id) * (ATLAS_BASE_SIZE / upem)
 }

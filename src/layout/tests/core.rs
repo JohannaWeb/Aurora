@@ -1,14 +1,14 @@
 use crate::css::Stylesheet;
 use crate::dom::Node;
 use crate::html::Parser;
-use crate::identity::{Identity, IdentityKind};
+use crate::identity::Identity;
 use crate::layout::LayoutTree;
 use crate::style::StyleTree;
 
 #[test]
 fn demo_flex_nav_items_stay_inside_header() {
     let dom = Parser::new(include_str!("../../../fixtures/demo/index.html")).parse_document();
-    let identity = Identity::new("did:human:test", "Test", IdentityKind::Human, []);
+    let identity = Identity::new("did:human:test", "Test", []);
     let mut stylesheet = Stylesheet::from_dom(&dom, None, &identity);
     stylesheet.merge(Stylesheet::user_agent_stylesheet());
     let style_tree = StyleTree::from_dom(&dom, &stylesheet);
@@ -24,7 +24,7 @@ fn demo_flex_nav_items_stay_inside_header() {
 #[test]
 fn mixed_inline_elements_wrap_without_overlap() {
     let dom = Parser::new(include_str!("../../../fixtures/demo/index.html")).parse_document();
-    let identity = Identity::new("did:human:test", "Test", IdentityKind::Human, []);
+    let identity = Identity::new("did:human:test", "Test", []);
     let mut stylesheet = Stylesheet::from_dom(&dom, None, &identity);
     stylesheet.merge(Stylesheet::user_agent_stylesheet());
     let style_tree = StyleTree::from_dom(&dom, &stylesheet);

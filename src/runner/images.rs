@@ -1,8 +1,9 @@
 use crate::identity::Identity;
 use crate::layout::LayoutBox;
 use std::collections::HashMap;
+use vello::peniko::{Blob, ImageAlphaType, ImageData, ImageFormat};
 
-pub type ImageCache = HashMap<String, peniko::ImageData>;
+pub type ImageCache = HashMap<String, ImageData>;
 pub type SvgCache = HashMap<String, usvg::Tree>;
 
 #[derive(Clone)]
@@ -141,14 +142,14 @@ fn load_svg(url: &str, identity: &Identity, cache: &mut SvgCache) {
     }
 }
 
-fn image_data_from_dynamic(dyn_img: image::DynamicImage) -> peniko::ImageData {
+fn image_data_from_dynamic(dyn_img: image::DynamicImage) -> ImageData {
     let rgba = dyn_img.to_rgba8();
     let width = rgba.width();
     let height = rgba.height();
-    peniko::ImageData {
-        data: peniko::Blob::from(rgba.into_raw()),
-        format: peniko::ImageFormat::Rgba8,
-        alpha_type: peniko::ImageAlphaType::Alpha,
+    ImageData {
+        data: Blob::from(rgba.into_raw()),
+        format: ImageFormat::Rgba8,
+        alpha_type: ImageAlphaType::Alpha,
         width,
         height,
     }

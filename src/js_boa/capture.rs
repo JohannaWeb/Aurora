@@ -25,9 +25,7 @@ impl Finalize for DocCapture {}
 
 #[derive(Clone)]
 pub(super) struct WindowCapture {
-    #[allow(dead_code)]
     pub(super) storage: Rc<RefCell<BTreeMap<String, String>>>,
-    #[allow(dead_code)]
     pub(super) session: Rc<RefCell<BTreeMap<String, String>>>,
     pub(super) next_timer: Rc<RefCell<u32>>,
     pub(super) timers: Rc<RefCell<Vec<TimerEntry>>>,

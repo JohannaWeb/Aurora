@@ -26,8 +26,5 @@ pub fn layout_text_run(text: &str, font_size: f32) -> TextRun {
         cursor_x += pos.x_advance as f32 * scale;
     }
 
-    TextRun {
-        glyphs,
-        width: cursor_x,
-    }
+    TextRun { glyphs }
 }

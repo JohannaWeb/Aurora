@@ -42,7 +42,6 @@ fn default_identity(cli: &runner::CliOptions) -> identity::Identity {
     identity::Identity::new(
         "did:human:johanna",
         "Johanna",
-        identity::IdentityKind::Human,
         capabilities,
     )
 }

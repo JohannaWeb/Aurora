@@ -4,7 +4,6 @@ use super::calc::{eval_calc, CalcContext};
 use super::length::parse_length_value;
 use super::StyleMap;
 
-#[allow(dead_code)]
 impl StyleMap {
     pub fn width_resolved(
         &self,
@@ -102,30 +101,9 @@ impl StyleMap {
         resolve_length(raw, &ctx)
     }
 
-    #[allow(dead_code)]
-    pub fn font_weight(&self) -> &str {
-        self.get("font-weight").unwrap_or("normal")
-    }
-
-    pub fn is_bold(&self) -> bool {
-        matches!(self.font_weight(), "bold" | "700" | "bolder")
-    }
-
-    pub fn font_style(&self) -> &str {
-        self.get("font-style").unwrap_or("normal")
-    }
-
-    pub fn is_italic(&self) -> bool {
-        matches!(self.font_style(), "italic" | "oblique")
-    }
-
     pub fn line_height_px(&self) -> Option<f32> {
         self.get("line-height")
             .and_then(super::length::parse_length_px)
-    }
-
-    pub fn text_decoration(&self) -> Option<&str> {
-        self.get("text-decoration")
     }
 
     pub fn opacity(&self) -> f32 {

@@ -17,5 +17,4 @@ pub struct PositionedGlyph {
 #[derive(Debug, Clone)]
 pub struct TextRun {
     pub glyphs: Vec<PositionedGlyph>,
-    pub width: f32,
 }

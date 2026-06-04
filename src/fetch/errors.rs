@@ -2,7 +2,6 @@ use std::fmt::{self, Display, Formatter};
 
 /// Error types that can occur during fetching.
 #[derive(Debug)]
-#[allow(dead_code)]
 pub enum FetchError {
     /// Unknown URL scheme.
     UnsupportedScheme(String),
@@ -16,8 +15,6 @@ pub enum FetchError {
     InvalidResponse(String),
     /// HTTP error status code with reason.
     HttpStatus(u16, String),
-    /// Too many redirects encountered.
-    TooManyRedirects,
 }
 
 impl Display for FetchError {
@@ -31,7 +28,6 @@ impl Display for FetchError {
             FetchError::Network(msg) => write!(f, "network error: {msg}"),
             FetchError::InvalidResponse(message) => write!(f, "invalid HTTP response: {message}"),
             FetchError::HttpStatus(code, reason) => write!(f, "HTTP {code} {reason}"),
-            FetchError::TooManyRedirects => write!(f, "too many redirects"),
         }
     }
 }

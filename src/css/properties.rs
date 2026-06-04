@@ -62,10 +62,6 @@ impl Margin {
         self.left.to_px() + self.right.to_px()
     }
 
-    #[allow(dead_code)]
-    pub fn vertical(&self) -> f32 {
-        self.top.to_px() + self.bottom.to_px()
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -276,7 +276,6 @@ dependencies = [
  "image",
  "markup5ever",
  "parley 0.7.0",
- "peniko",
  "pollster",
  "precomputed-hash",
  "reqwest",
@@ -284,10 +283,8 @@ dependencies = [
  "rustybuzz",
  "selectors",
  "taffy 0.10.1",
- "url",
  "usvg 0.47.0",
  "vello",
- "wgpu",
  "winit",
 ]
 

@@ -14,7 +14,7 @@ pub enum LengthValue {
     Lvh(f32),
     Dvh(f32),
     /// CSS grid fraction unit — cannot be resolved outside a grid container; returns 0.
-    Fr(f32),
+    Fr,
     /// Line-height relative — approximated as font_size (no computed line-height available here).
     Lh(f32),
     /// Root line-height relative — approximated as root_font_size.
@@ -44,7 +44,7 @@ impl LengthValue {
             LengthValue::Svh(v) | LengthValue::Lvh(v) | LengthValue::Dvh(v) => {
                 viewport_height * v / 100.0
             }
-            LengthValue::Fr(_) => 0.0,
+            LengthValue::Fr => 0.0,
             LengthValue::Lh(v) => font_size * v,
             LengthValue::Rlh(v) => root_font_size * v,
         }
@@ -144,7 +144,7 @@ pub fn parse_length_value(value: &str) -> Option<LengthValue> {
         return v.trim().parse::<f32>().ok().map(LengthValue::Lh);
     }
     if let Some(v) = value.strip_suffix("fr") {
-        return v.trim().parse::<f32>().ok().map(LengthValue::Fr);
+        return v.trim().parse::<f32>().ok().map(|_| LengthValue::Fr);
     }
     None
 }

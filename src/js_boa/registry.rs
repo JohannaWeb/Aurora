@@ -108,11 +108,11 @@ impl NodeRegistry {
         self.reverse_nodes.borrow().get(&key).copied()
     }
 
-    pub(super) fn mark_style_dirty(&self, node: &NodePtr) {
+    pub(super) fn mark_style_dirty(&self, _node: &NodePtr) {
         self.dirty.borrow_mut().style = true;
     }
 
-    pub(super) fn mark_layout_dirty(&self, node: &NodePtr) {
+    pub(super) fn mark_layout_dirty(&self, _node: &NodePtr) {
         let mut dirty = self.dirty.borrow_mut();
         dirty.style = true;
         dirty.layout = true;

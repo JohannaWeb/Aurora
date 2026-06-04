@@ -1,4 +1,4 @@
-#[allow(dead_code)]
+#[cfg(test)]
 pub(in crate::layout) const DEFAULT_VIEWPORT_WIDTH: f32 = 1200.0;
 pub(in crate::layout) const DEFAULT_VIEWPORT_HEIGHT: f32 = 900.0;
 pub(in crate::layout) const BLOCK_VERTICAL_PADDING: f32 = 6.0;

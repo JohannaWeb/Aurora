@@ -1,4 +1,4 @@
-use peniko::{Color, Fill};
+use vello::peniko::{Color, Fill};
 use vello::kurbo::{Affine, Rect as KRect};
 use vello::Scene;
 

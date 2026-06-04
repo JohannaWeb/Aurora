@@ -37,20 +37,10 @@ impl GlyphAtlas {
         glyph_height: u32,
         x_offset: i32,
         y_offset: i32,
-        advance_width: f32,
         atlas_x: u32,
         atlas_y: u32,
     ) {
         self.copy_bitmap(bitmap, glyph_width, glyph_height, atlas_x, atlas_y);
-
-        let uv_min = (
-            atlas_x as f32 / self.width as f32,
-            atlas_y as f32 / self.height as f32,
-        );
-        let uv_max = (
-            (atlas_x + glyph_width) as f32 / self.width as f32,
-            (atlas_y + glyph_height) as f32 / self.height as f32,
-        );
 
         let metrics = GlyphMetrics {
             x: atlas_x,
@@ -59,9 +49,6 @@ impl GlyphAtlas {
             height: glyph_height,
             x_offset,
             y_offset,
-            advance_width,
-            uv_min,
-            uv_max,
         };
 
         self.glyphs.insert(ch, metrics);
@@ -70,11 +57,6 @@ impl GlyphAtlas {
     /// Get metrics for a character.
     pub fn get_glyph(&self, ch: char) -> Option<GlyphMetrics> {
         self.glyphs.get(&ch).copied()
-    }
-
-    #[allow(dead_code)]
-    pub fn glyphs(&self) -> &HashMap<char, GlyphMetrics> {
-        &self.glyphs
     }
 
     fn copy_bitmap(

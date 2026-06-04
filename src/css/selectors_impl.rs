@@ -260,17 +260,6 @@ pub struct CascadeElement<'a> {
     pub sibling_index: usize,
 }
 
-impl<'a> CascadeElement<'a> {
-    pub fn new(
-        element: &'a ElementData,
-        ancestors: &'a [ElementData],
-        siblings: &'a [ElementData],
-        sibling_index: usize,
-    ) -> Self {
-        Self { element, ancestors, siblings, sibling_index }
-    }
-}
-
 impl<'a> selectors::Element for CascadeElement<'a> {
     type Impl = AuroraSelectorImpl;
 

@@ -3,11 +3,9 @@ use std::time::Instant;
 
 pub struct BoaRuntime {
     pub(super) context: Context,
-    #[allow(dead_code)]
     document: NodePtr,
     pub(super) registry: NodeRegistry,
     window: WindowCapture,
-    pub(super) sync_reflow_callback: Option<Box<dyn Fn()>>,
 }
 
 impl BoaRuntime {
@@ -26,7 +24,6 @@ impl BoaRuntime {
             document,
             registry,
             window,
-            sync_reflow_callback: None,
         }
     }
 
@@ -38,10 +35,6 @@ impl BoaRuntime {
     ) {
         self.registry
             .set_shared_state(layout_tree, stylesheet, viewport, self.document.clone());
-    }
-
-    pub fn perform_sync_reflow(&self) {
-        self.registry.perform_sync_reflow();
     }
 
     pub fn dispatch_event(&mut self, node: &NodePtr, event_type: &str) -> bool {
@@ -70,7 +63,7 @@ impl BoaRuntime {
             let parent = {
                 let b = current.borrow();
                 match &*b {
-                    Node::Element(el) => {
+                    Node::Element(_) => {
                         // Walk the registry to find the parent.
                         // This is a O(N) fallback — replace with parent pointers in Phase 5+.
                         self.find_parent(&current)
@@ -103,27 +96,65 @@ impl BoaRuntime {
         let event = JsObject::with_null_proto();
         let target_id = self.registry.node_id(target).unwrap_or(0);
 
-        let _ = event.set(js_string!("type"), js_string!(event_type), false, &mut self.context);
-        let _ = event.set(js_string!("bubbles"), JsValue::from(true), false, &mut self.context);
-        let _ = event.set(js_string!("cancelable"), JsValue::from(true), false, &mut self.context);
-        let _ = event.set(js_string!("defaultPrevented"), JsValue::from(false), false, &mut self.context);
-        let _ = event.set(js_string!("isTrusted"), JsValue::from(true), false, &mut self.context);
-        let _ = event.set(js_string!("timeStamp"), JsValue::from(0.0), false, &mut self.context);
+        let _ = event.set(
+            js_string!("type"),
+            js_string!(event_type),
+            false,
+            &mut self.context,
+        );
+        let _ = event.set(
+            js_string!("bubbles"),
+            JsValue::from(true),
+            false,
+            &mut self.context,
+        );
+        let _ = event.set(
+            js_string!("cancelable"),
+            JsValue::from(true),
+            false,
+            &mut self.context,
+        );
+        let _ = event.set(
+            js_string!("defaultPrevented"),
+            JsValue::from(false),
+            false,
+            &mut self.context,
+        );
+        let _ = event.set(
+            js_string!("isTrusted"),
+            JsValue::from(true),
+            false,
+            &mut self.context,
+        );
+        let _ = event.set(
+            js_string!("timeStamp"),
+            JsValue::from(0.0),
+            false,
+            &mut self.context,
+        );
 
         // target and currentTarget — the DOM node's JS object if available.
-        if let Some(target_node) = self.registry.lookup(target_id) {
-            if let Some(js_target) = self.registry.nodes.borrow().get(&target_id) {
-                // We can't easily get the JS object here without a full mirror;
-                // set the node id as a proxy for now.
-                let _ = event.set(js_string!("_targetId"), JsValue::from(target_id), false, &mut self.context);
-            }
+        if self.registry.lookup(target_id).is_some() {
+            // We can't easily get the JS object here without a full mirror;
+            // set the node id as a proxy for now.
+            let _ = event.set(
+                js_string!("_targetId"),
+                JsValue::from(target_id),
+                false,
+                &mut self.context,
+            );
         }
 
         // preventDefault — sets defaultPrevented.
         let ev_clone = event.clone();
         let prevent_fn = NativeFunction::from_copy_closure_with_captures(
             |_this, _args, ev: &JsObject, ctx| {
-                let _ = ev.set(js_string!("defaultPrevented"), JsValue::from(true), false, ctx);
+                let _ = ev.set(
+                    js_string!("defaultPrevented"),
+                    JsValue::from(true),
+                    false,
+                    ctx,
+                );
                 Ok(JsValue::undefined())
             },
             ev_clone,
@@ -175,33 +206,6 @@ impl BoaRuntime {
         None
     }
 
-    /// Fire the DOMContentLoaded event on the document.
-    pub fn fire_dom_content_loaded(&mut self) {
-        let doc_node = self.document.clone();
-        let event = self.build_event_object("DOMContentLoaded", &doc_node);
-
-        // Fire document-level listeners.
-        let doc_id = self.registry.node_id(&doc_node);
-        if let Some(id) = doc_id {
-            let listeners = self.registry.get_listeners(id, "DOMContentLoaded");
-            for listener in listeners {
-                let _ = listener.call(
-                    &JsValue::undefined(),
-                    &[event.clone().into()],
-                    &mut self.context,
-                );
-            }
-        }
-
-        // Also fire window-level DOMContentLoaded listeners.
-        let script = "if (typeof window._domContentLoadedListeners !== 'undefined') { \
-            window._domContentLoadedListeners.forEach(function(fn) { try { fn(); } catch(e) {} }); \
-        }";
-        let _ = self.context.eval(Source::from_bytes(script));
-        let _ = self.context.run_jobs();
-        self.drain_microtasks();
-    }
-
     pub fn execute(&mut self, script: &str) -> JsResult<JsValue> {
         let result = self.context.eval(Source::from_bytes(script));
         let _ = self.context.run_jobs();
@@ -211,19 +215,6 @@ impl BoaRuntime {
 
     pub fn clear_dirty_bits(&self) {
         self.registry.clear_dirty_bits();
-    }
-
-    pub fn set_sync_reflow_callback<F>(&mut self, callback: F)
-    where
-        F: Fn() + 'static,
-    {
-        self.sync_reflow_callback = Some(Box::new(callback));
-    }
-
-    pub fn request_sync_reflow(&self) {
-        if let Some(ref callback) = self.sync_reflow_callback {
-            callback();
-        }
     }
 
     pub fn tick(&mut self, now: Instant) -> bool {

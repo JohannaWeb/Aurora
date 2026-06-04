@@ -18,12 +18,11 @@ fn test_atlas_registration() {
     let mut atlas = GlyphAtlas::new(512, 512);
     let bitmap = vec![255; 16 * 16];
 
-    atlas.register_glyph('A', &bitmap, 16, 16, 0, 0, 10.0, 0, 0);
+    atlas.register_glyph('A', &bitmap, 16, 16, 0, 0, 0, 0);
 
     let metrics = atlas.get_glyph('A');
     assert!(metrics.is_some());
     let m = metrics.unwrap();
     assert_eq!(m.width, 16);
     assert_eq!(m.height, 16);
-    assert_eq!(m.advance_width, 10.0);
 }

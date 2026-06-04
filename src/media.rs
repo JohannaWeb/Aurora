@@ -26,7 +26,6 @@ struct DecodedVideo {
 
 struct VideoFrame {
     at_secs: f64,
-    image: peniko::ImageData,
 }
 
 impl Default for MediaCache {
@@ -87,14 +86,6 @@ impl MediaCache {
             changed |= video.update(elapsed);
         }
         changed
-    }
-
-    pub(crate) fn frame(&self, src: &str) -> Option<&peniko::ImageData> {
-        let src = self.aliases.get(src).map(String::as_str).unwrap_or(src);
-        self.videos
-            .get(src)
-            .and_then(|video| video.frames.get(video.current_frame))
-            .map(|frame| &frame.image)
     }
 
     pub(crate) fn has_active_media(&self) -> bool {
@@ -203,17 +194,6 @@ fn decode_video_file(path: &PathBuf) -> Result<DecodedVideo, String> {
         .decoder()
         .video()
         .map_err(|error| error.to_string())?;
-    let mut scaler = ffmpeg::software::scaling::context::Context::get(
-        decoder.format(),
-        decoder.width(),
-        decoder.height(),
-        ffmpeg::format::Pixel::RGBA,
-        decoder.width(),
-        decoder.height(),
-        ffmpeg::software::scaling::flag::Flags::BILINEAR,
-    )
-    .map_err(|error| error.to_string())?;
-
     let mut frames = Vec::new();
     for (packet_stream, packet) in input.packets() {
         if packet_stream.index() != stream_index {
@@ -222,11 +202,11 @@ fn decode_video_file(path: &PathBuf) -> Result<DecodedVideo, String> {
         decoder
             .send_packet(&packet)
             .map_err(|error| error.to_string())?;
-        receive_frames(&mut decoder, &mut scaler, time_base, &mut frames)?;
+        receive_frames(&mut decoder, time_base, &mut frames)?;
     }
 
     decoder.send_eof().map_err(|error| error.to_string())?;
-    receive_frames(&mut decoder, &mut scaler, time_base, &mut frames)?;
+    receive_frames(&mut decoder, time_base, &mut frames)?;
 
     if frames.is_empty() {
         return Err("no decodable video frames found".to_string());
@@ -248,19 +228,13 @@ fn decode_video_file(path: &PathBuf) -> Result<DecodedVideo, String> {
 #[cfg(feature = "media-ffmpeg")]
 fn receive_frames(
     decoder: &mut ffmpeg::decoder::Video,
-    scaler: &mut ffmpeg::software::scaling::context::Context,
     time_base: ffmpeg::Rational,
     frames: &mut Vec<VideoFrame>,
 ) -> Result<(), String> {
     let mut decoded = ffmpeg::util::frame::Video::empty();
     while decoder.receive_frame(&mut decoded).is_ok() {
-        let mut rgba = ffmpeg::util::frame::Video::empty();
-        scaler
-            .run(&decoded, &mut rgba)
-            .map_err(|error| error.to_string())?;
         frames.push(VideoFrame {
             at_secs: frame_time_secs(&decoded, time_base, frames.len()),
-            image: image_data_from_frame(&rgba),
         });
     }
     Ok(())
@@ -276,28 +250,4 @@ fn frame_time_secs(
         .pts()
         .map(|pts| pts as f64 * time_base.numerator() as f64 / time_base.denominator() as f64)
         .unwrap_or(index as f64 / 30.0)
-}
-
-#[cfg(feature = "media-ffmpeg")]
-fn image_data_from_frame(frame: &ffmpeg::util::frame::Video) -> peniko::ImageData {
-    let width = frame.width();
-    let height = frame.height();
-    let stride = frame.stride(0);
-    let row_len = width as usize * 4;
-    let mut pixels = Vec::with_capacity(row_len * height as usize);
-    let data = frame.data(0);
-
-    for row in 0..height as usize {
-        let start = row * stride;
-        let end = start + row_len;
-        pixels.extend_from_slice(&data[start..end]);
-    }
-
-    peniko::ImageData {
-        data: peniko::Blob::from(pixels),
-        format: peniko::ImageFormat::Rgba8,
-        alpha_type: peniko::ImageAlphaType::Alpha,
-        width,
-        height,
-    }
 }

@@ -2,7 +2,7 @@ use super::fetch_string;
 use super::resolve_relative_url;
 use super::url::{ParsedUrl, Scheme};
 use super::FetchError;
-use crate::identity::{Capability, Identity, IdentityKind};
+use crate::identity::{Capability, Identity};
 
 #[test]
 fn parses_http_urls() {
@@ -71,7 +71,6 @@ fn fetches_data_url_strings_without_network() {
     let identity = Identity::new(
         "did:test:fetch",
         "Fetch Test",
-        IdentityKind::Human,
         [Capability::ReadWorkspace],
     );
 
@@ -84,4 +83,3 @@ fn fetches_data_url_strings_without_network() {
         "hello aurora"
     );
 }
-

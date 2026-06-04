@@ -46,11 +46,6 @@ pub(in crate::layout) enum LayoutKind {
 }
 
 impl LayoutBox {
-    #[allow(dead_code)]
-    pub fn node(&self) -> Option<crate::dom::NodePtr> {
-        self.node.clone()
-    }
-
     pub fn rect(&self) -> Rect {
         self.rect
     }
@@ -63,50 +58,12 @@ impl LayoutBox {
         self.margin.top.to_px() + self.rect.height + self.margin.bottom.to_px()
     }
 
-    #[allow(dead_code)]
-    pub fn padding(&self) -> EdgeSizes {
-        self.padding
-    }
-
-    #[allow(dead_code)]
-    pub fn content_rect(&self) -> Rect {
-        Rect {
-            x: self.rect.x + self.border.left + self.padding.left,
-            y: self.rect.y + self.border.top + self.padding.top,
-            width: (self.rect.width - self.border.horizontal() - self.padding.horizontal())
-                .max(0.0),
-            height: (self.rect.height - self.border.vertical() - self.padding.vertical()).max(0.0),
-        }
-    }
-
-    #[allow(dead_code)]
-    pub fn padding_rect(&self) -> Rect {
-        Rect {
-            x: self.rect.x + self.border.left,
-            y: self.rect.y + self.border.top,
-            width: (self.rect.width - self.border.horizontal()).max(0.0),
-            height: (self.rect.height - self.border.vertical()).max(0.0),
-        }
-    }
-
     pub fn styles(&self) -> &StyleMap {
         &self.styles
     }
 
     pub fn children(&self) -> &[LayoutBox] {
         &self.children
-    }
-
-    #[allow(dead_code)]
-    pub fn tag_name(&self) -> Option<&str> {
-        match &self.kind {
-            LayoutKind::Block { tag_name }
-            | LayoutKind::Inline { tag_name }
-            | LayoutKind::Control { tag_name } => Some(tag_name),
-            LayoutKind::Image { .. } => Some("img"),
-            LayoutKind::Media { .. } => Some("video"),
-            _ => None,
-        }
     }
 
     pub fn text(&self) -> Option<&str> {
@@ -118,14 +75,6 @@ impl LayoutBox {
 
     pub fn is_viewport(&self) -> bool {
         matches!(self.kind, LayoutKind::Viewport)
-    }
-
-    #[allow(dead_code)]
-    pub fn image_alt(&self) -> Option<&str> {
-        match &self.kind {
-            LayoutKind::Image { alt, .. } => alt.as_deref(),
-            _ => None,
-        }
     }
 
     pub fn image_src(&self) -> Option<&str> {
@@ -151,22 +100,6 @@ impl LayoutBox {
             LayoutKind::Media { poster, .. } => poster.as_deref(),
             _ => None,
         }
-    }
-
-    pub fn is_media(&self) -> bool {
-        matches!(self.kind, LayoutKind::Media { .. })
-    }
-
-    pub fn is_svg_element(&self) -> bool {
-        match &self.kind {
-            LayoutKind::Block { tag_name } => tag_name.eq_ignore_ascii_case("svg"),
-            _ => false,
-        }
-    }
-
-    #[allow(dead_code)]
-    pub fn is_control(&self) -> bool {
-        matches!(self.kind, LayoutKind::Control { .. })
     }
 
     pub fn offset(&mut self, dx: f32, dy: f32) {

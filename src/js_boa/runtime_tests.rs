@@ -166,7 +166,7 @@ fn cancel_idle_callback_prevents_callback() {
 #[test]
 fn forced_sync_reflow_via_offset_width() {
     use crate::css::Stylesheet;
-    use crate::identity::{Identity, IdentityKind};
+    use crate::identity::Identity;
     use crate::layout::{LayoutTree, ViewportSize};
     use crate::style::StyleTree;
 
@@ -176,7 +176,7 @@ fn forced_sync_reflow_via_offset_width() {
     .parse_document();
     let mut runtime = BoaRuntime::new(dom.clone());
 
-    let identity = Identity::new("did:human:test", "Test", IdentityKind::Human, []);
+    let identity = Identity::new("did:human:test", "Test", []);
 
     // Setup shared state
     let mut stylesheet_val = Stylesheet::from_dom(&dom, None, &identity);

@@ -1,4 +1,4 @@
-use peniko::Color;
+use vello::peniko::Color;
 use vello::Scene;
 
 use super::text::text;

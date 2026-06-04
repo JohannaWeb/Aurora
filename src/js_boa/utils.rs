@@ -108,7 +108,3 @@ pub(super) fn base64_decode(input: &str) -> Option<String> {
     }
     String::from_utf8(out).ok()
 }
-
-// Unused but kept for API symmetry; silences warnings.
-#[allow(dead_code)]
-pub(super) fn _keep_types_alive(_: ElementNode) {}

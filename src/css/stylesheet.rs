@@ -83,6 +83,7 @@ impl Stylesheet {
         )
     }
 
+    #[cfg(test)]
     pub fn parse(source: &str) -> Self {
         Self::parse_with_origin(source, Origin::Author)
     }
