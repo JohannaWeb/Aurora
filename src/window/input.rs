@@ -116,7 +116,7 @@ impl WindowInput {
 
         // 4. Initialize scripts/runtime
         let scripts = crate::runner::scripts::extract_scripts(&new_dom);
-        let mut new_runtime = if !scripts.is_empty() {
+        let new_runtime = if !scripts.is_empty() {
             println!("Boa: Processing {} scripts...", scripts.len());
             let mut rt = crate::js_boa::BoaRuntime::new(Rc::clone(&new_dom));
             for (source, is_url) in scripts {
