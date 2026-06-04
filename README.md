@@ -7,6 +7,8 @@ Aurora is not Servo, Chromium, WebKit, or a wrapper around an existing browser. 
 ## Rendering Test 
 
 <img width="1437" height="1066" alt="image" src="https://github.com/user-attachments/assets/5d23b17a-3cd4-4aa8-84f9-711e49e8ad69" />
+<img width="1440" height="1059" alt="image" src="https://github.com/user-attachments/assets/caadc2aa-a3d4-4db6-a321-16451d79a404" />
+
 
 ## Mockup
 
