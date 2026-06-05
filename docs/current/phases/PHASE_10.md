@@ -1,4 +1,5 @@
-# Phase 10 — Strategic Direction
+You probably also want incremental and parallel-construct if you don't have them (free performance!)
+Things like WOFF support are also feature flagged.# Phase 10 — Strategic Direction
 
 **Status: Decided ✅**
 

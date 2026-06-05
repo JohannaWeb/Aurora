@@ -14,8 +14,9 @@ rustls = { version = "0.23", features = ["ring"] } # still needed for install_cr
 wgpu = "29.0.3"
 vello = "0.9.0"
 pollster = "0.4.0"
-boa_engine = { git = "https://github.com/boa-dev/boa" }
-boa_gc = { git = "https://github.com/boa-dev/boa" }
+boa_engine = "0.20"
+boa_gc = "0.20"
+boa_runtime = { version = "0.20", features = ["default"] }
 ab_glyph = "0.2"
 rustybuzz = "0.20.1"
 peniko = "0.6"
@@ -35,7 +36,7 @@ reqwest = { version = "0.12", features = ["blocking", "rustls-tls", "gzip", "def
 usvg = "0.47.0"
 winit = "0.30.13"
 url = "2.5.8"
-blitz-dom = "0.3.0-alpha.4"
+blitz-dom = { version = "0.3.0-alpha.4", features = ["custom-widget", "tracing", "svg", "woff", "accessibility", "system_fonts", "autofocus", "floats", "file_input", "parallel-construct", "log_phase_times"] }
 blitz-html = "0.3.0-alpha.4"
 blitz-paint = "0.3.0-alpha.4"
 blitz-traits = "=0.3.0-alpha.4"

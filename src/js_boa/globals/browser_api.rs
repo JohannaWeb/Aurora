@@ -88,10 +88,7 @@ pub(in crate::js_boa) fn install_browser_apis(
     let structured_clone = NativeFunction::from_fn_ptr(|_this, args, ctx| {
         let val = args.get(0).cloned().unwrap_or(JsValue::undefined());
         let json_str = val.to_json(ctx)?;
-        match json_str {
-            Some(s) => JsValue::from_json(&s, ctx),
-            None => Ok(JsValue::undefined()),
-        }
+        JsValue::from_json(&json_str, ctx)
     });
     let _ = global_obj.set(
         js_string!("structuredClone"),
@@ -196,6 +193,8 @@ pub(in crate::js_boa) fn install_browser_apis(
         "localStorage",
         win_cap.storage.clone(),
     );
+    // Register the full set of Web‑API globals (URL, fetch, etc.)
+    let _ = boa_runtime::register(context, boa_runtime::RegisterOptions::new());
     install_storage(
         context,
         &global_obj,

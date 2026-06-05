@@ -28,7 +28,7 @@ pub(in crate::js_boa) fn install_timers(
                     id,
                     deadline: Instant::now() + delay,
                     interval: is_interval.then_some(delay),
-                    callback,
+                    callback: callback.clone(),
                 });
                 Ok(JsValue::from(id))
             },
@@ -53,7 +53,7 @@ pub(in crate::js_boa) fn install_timers(
             if let Some(callback) = args.get(0).and_then(|value| value.as_callable()) {
                 cap.animation_frames
                     .borrow_mut()
-                    .push(AnimationFrameEntry { id, callback });
+                    .push(AnimationFrameEntry { id, callback: callback.clone() });
             }
             Ok(JsValue::from(id))
         },
@@ -117,7 +117,7 @@ pub(in crate::js_boa) fn install_timers(
     let queue_micro = NativeFunction::from_copy_closure_with_captures(
         |_this: &JsValue, args: &[JsValue], cap: &WindowCapture, _ctx: &mut Context| {
             if let Some(callback) = args.get(0).and_then(|value| value.as_callable()) {
-                cap.microtasks.borrow_mut().push(callback);
+                cap.microtasks.borrow_mut().push(callback.clone());
             }
             Ok(JsValue::undefined())
         },

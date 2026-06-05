@@ -115,7 +115,7 @@ pub(in crate::js_boa) fn add_document_factory_methods(
                     0,
                 )
                 .function(
-                    NativeFunction::from_fn_ptr(|_this, _args, ctx| Ok(JsArray::new(ctx)?.into())),
+                    NativeFunction::from_fn_ptr(|_this, _args, ctx| Ok(JsArray::new(ctx).into())),
                     js_string!("getClientRects"),
                     0,
                 )
@@ -180,7 +180,7 @@ pub(in crate::js_boa) fn add_document_factory_methods(
     )
     .function(
         NativeFunction::from_copy_closure_with_captures(
-            |_this, _args, _cap: &DocCapture, ctx| Ok(JsArray::new(ctx)?.into()),
+            |_this, _args, _cap: &DocCapture, ctx| Ok(JsArray::new(ctx).into()),
             doc_cap.clone(),
         ),
         js_string!("elementsFromPoint"),
