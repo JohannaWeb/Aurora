@@ -3,7 +3,7 @@ use crate::blitz_document::BlitzDocument;
 use crate::css::Stylesheet;
 use crate::dom::NodePtr;
 use crate::identity::Identity;
-use crate::js_boa::BoaRuntime;
+use crate::js_engine::JsRuntime;
 use crate::layout::{LayoutTree, ViewportSize};
 use crate::media::MediaCache;
 use crate::style::StyleTree;
@@ -22,7 +22,7 @@ pub struct WindowInput {
     pub images: ImageCache,
     pub svgs: crate::SvgCache,
     pub media: MediaCache,
-    pub runtime: Option<BoaRuntime>,
+    pub runtime: Option<Box<dyn JsRuntime>>,
     // The live window renderer uses Blitz DOM + Blitz Paint.
     pub blitz_doc: Option<BlitzDocument>,
     pub(crate) needs_reflow: bool,
@@ -75,7 +75,7 @@ impl WindowInput {
             
             // Re-serialize the mutated legacy DOM to HTML, then reload it into blitz_doc.
             // This ensures JS mutations are rendered in the blitz-dom / blitz-paint path.
-            let html = crate::js_boa::serialize_outer_html(&self.dom);
+            let html = crate::js_sm::serialize_outer_html(&self.dom);
             *blitz_doc = BlitzDocument::from_html(
                 &html,
                 self.base_url.as_deref(),
@@ -131,7 +131,8 @@ impl WindowInput {
                     .collect();
                 handles.into_iter().map(|h| h.join().unwrap_or(None)).collect()
             };
-            let mut rt = crate::js_boa::BoaRuntime::new(Rc::clone(&new_dom));
+            let mut rt: Box<dyn JsRuntime> =
+                Box::new(crate::js_sm::SmRuntime::new(Rc::clone(&new_dom)));
             for content in fetched.into_iter().flatten() {
                 if let Err(e) = rt.execute(&content) {
                     eprintln!("JS Error: {}", e);

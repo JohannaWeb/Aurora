@@ -8,15 +8,16 @@ edition = "2024"
 default = []
 media-ffmpeg = ["dep:ffmpeg-next"]
 taffy-document = []
+engine-boa = ["dep:boa_engine", "dep:boa_gc"]
 
 [dependencies]
 rustls = { version = "0.23", features = ["ring"] } # still needed for install_crypto_provider()
 wgpu = "29.0.3"
 vello = "0.9.0"
 pollster = "0.4.0"
-boa_engine = "0.20"
-boa_gc = "0.20"
-boa_runtime = { version = "0.20", features = ["default"] }
+mozjs = "0.14"
+boa_engine = { version = "0.19", optional = true }
+boa_gc = { version = "0.19", optional = true }
 ab_glyph = "0.2"
 rustybuzz = "0.20.1"
 peniko = "0.6"

@@ -193,8 +193,10 @@ pub(in crate::js_boa) fn install_browser_apis(
         "localStorage",
         win_cap.storage.clone(),
     );
-    // Register the full set of Web‑API globals (URL, fetch, etc.)
-    let _ = boa_runtime::register(context, boa_runtime::RegisterOptions::new());
+    // Console is already installed; register remaining boa_runtime builtins directly.
+    let _ = boa_runtime::TextDecoder::register(context);
+    let _ = boa_runtime::TextEncoder::register(context);
+    let _ = boa_runtime::url::Url::register(context);
     install_storage(
         context,
         &global_obj,

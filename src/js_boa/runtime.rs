@@ -1,4 +1,6 @@
 use super::*;
+use std::cell::RefCell;
+use std::rc::Rc;
 use std::time::Instant;
 
 pub struct BoaRuntime {
@@ -331,4 +333,43 @@ impl BoaRuntime {
         }
         ran_microtasks
     }
+}
+
+impl crate::js_engine::JsRuntime for BoaRuntime {
+    fn execute(&mut self, script: &str) -> Result<(), String> {
+        BoaRuntime::execute(self, script)
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    }
+
+    fn set_shared_state(
+        &mut self,
+        layout_tree: Rc<RefCell<crate::layout::LayoutTree>>,
+        stylesheet: Rc<RefCell<crate::css::Stylesheet>>,
+        viewport: Rc<RefCell<crate::layout::ViewportSize>>,
+    ) {
+        BoaRuntime::set_shared_state(self, layout_tree, stylesheet, viewport)
+    }
+
+    fn clear_dirty_bits(&mut self) { self.registry.clear_dirty_bits(); }
+    fn has_dirty_bits(&self) -> bool { self.registry.has_dirty_bits() }
+    fn take_needs_reflow(&mut self) -> bool { self.registry.take_needs_reflow() }
+
+    fn tick(&mut self, now: Instant) -> bool { BoaRuntime::tick(self, now) }
+
+    fn drain_animation_frame_callbacks(&mut self, now: Instant) -> bool {
+        BoaRuntime::drain_animation_frame_callbacks(self, now)
+    }
+
+    fn dispatch_event(&mut self, node: &crate::dom::NodePtr, event_type: &str) -> bool {
+        BoaRuntime::dispatch_event(self, node, event_type)
+    }
+
+    fn next_deadline(&self) -> Option<Instant> { BoaRuntime::next_deadline(self) }
+
+    fn has_animation_frame_callbacks(&self) -> bool {
+        BoaRuntime::has_animation_frame_callbacks(self)
+    }
+
+    fn has_ready_work(&self, now: Instant) -> bool { BoaRuntime::has_ready_work(self, now) }
 }

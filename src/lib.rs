@@ -11,6 +11,9 @@ pub(crate) mod fetch;
 pub(crate) mod font;
 pub(crate) mod html;
 pub(crate) mod identity;
+pub(crate) mod js_engine;
+pub(crate) mod js_sm;
+#[cfg(feature = "engine-boa")]
 pub(crate) mod js_boa;
 pub(crate) mod layout;
 pub(crate) mod media;

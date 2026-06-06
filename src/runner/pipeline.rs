@@ -88,20 +88,21 @@ fn viewport_size() -> ViewportSize {
 
 // Scripts larger than this are skipped: Boa has no JIT, so multi-MB bundles
 // take minutes to interpret and always fail on modern syntax anyway.
-const MAX_SCRIPT_BYTES: usize = 512 * 1024; // 512 KB
+const MAX_SCRIPT_BYTES: usize = 256 * 1024; // 256 KB per script
+const MAX_TOTAL_SCRIPT_BYTES: usize = 512 * 1024; // 512 KB across all scripts
 
 fn run_scripts(
     dom: &crate::dom::NodePtr,
     base_url: Option<&str>,
     identity: &Identity,
-) -> Option<crate::js_boa::BoaRuntime> {
+) -> Option<Box<dyn crate::js_engine::JsRuntime>> {
     let scripts = extract_scripts(dom);
     if scripts.is_empty() {
         return None;
     }
 
     let total = scripts.len();
-    println!("Boa: Processing {} scripts...", total);
+    println!("JS: Processing {} scripts...", total);
 
     // Fetch all external scripts in parallel, preserving order for execution.
     let fetched: Vec<Option<String>> = {
@@ -116,8 +117,18 @@ fn run_scripts(
         handles.into_iter().map(|h| h.join().unwrap_or(None)).collect()
     };
 
-    let mut runtime = crate::js_boa::BoaRuntime::new(Rc::clone(dom));
+    let mut runtime: Box<dyn crate::js_engine::JsRuntime> =
+        Box::new(crate::js_sm::SmRuntime::new(Rc::clone(dom)));
+    let mut total_bytes = 0usize;
     for content in fetched.into_iter().flatten() {
+        total_bytes += content.len();
+        if total_bytes > MAX_TOTAL_SCRIPT_BYTES {
+            eprintln!(
+                "JS: total script budget ({}KB) reached, skipping remaining scripts",
+                MAX_TOTAL_SCRIPT_BYTES / 1024
+            );
+            break;
+        }
         if let Err(e) = runtime.execute(&content) {
             eprintln!("JS Error: {}", e);
         }
@@ -190,7 +201,7 @@ fn maybe_open_window(
     images: crate::ImageCache,
     svgs: crate::SvgCache,
     media: crate::MediaCache,
-    runtime: Option<crate::js_boa::BoaRuntime>,
+    runtime: Option<Box<dyn crate::js_engine::JsRuntime>>,
     blitz_doc: BlitzDocument,
 ) {
     let has_screenshot = env::var("AURORA_SCREENSHOT").is_ok();
