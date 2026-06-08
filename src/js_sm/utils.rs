@@ -7,7 +7,7 @@ use mozjs::conversions::jsstr_to_string;
 use mozjs::jsapi::{JSObject, Value};
 use mozjs::jsval::{BooleanValue, DoubleValue, NullValue, ObjectValue, StringValue, UndefinedValue};
 use mozjs::rooted;
-use mozjs::rust::wrappers2;
+use mozjs::rust::{evaluate_script, wrappers2, CompileOptionsWrapper};
 
 use super::state::SmState;
 
@@ -275,6 +275,26 @@ pub(super) unsafe fn delete_callback(
     let name = cb_prop_name(id);
     rooted!(&in(cx) let v = UndefinedValue());
     wrappers2::JS_SetProperty(cx, global, name.as_ptr(), v.handle());
+}
+
+// ── Bootstrap script evaluation ──────────────────────────────────────────────
+
+/// Evaluate a JS source string against `global`. Used during global setup to
+/// install polyfills (constructors, prototype chains) that are far simpler to
+/// express as JS than to build through raw JSAPI calls. Errors are reported to
+/// stderr but not propagated — a broken polyfill must not abort engine setup.
+pub(super) unsafe fn eval_bootstrap(
+    cx: &mut JSContext,
+    global: mozjs::gc::Handle<*mut JSObject>,
+    label: &'static std::ffi::CStr,
+    src: &str,
+) {
+    rooted!(&in(cx) let mut rval = UndefinedValue());
+    let options = CompileOptionsWrapper::new(cx, label.to_str().unwrap_or("bootstrap"), 1);
+    if evaluate_script(cx, global, src, rval.handle_mut(), options).is_err() {
+        let msg = pending_exception_string(cx);
+        eprintln!("JS bootstrap error ({}): {}", label.to_string_lossy(), msg);
+    }
 }
 
 // ── Exception reporting ───────────────────────────────────────────────────────

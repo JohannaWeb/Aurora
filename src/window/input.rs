@@ -117,7 +117,7 @@ impl WindowInput {
         // 4. Initialize scripts/runtime — fetch externals in parallel, skip oversized ones.
         let scripts = crate::runner::scripts::extract_scripts(&new_dom);
         let new_runtime = if !scripts.is_empty() {
-            println!("Boa: Processing {} scripts...", scripts.len());
+            println!("JS: Processing {} scripts...", scripts.len());
             let fetched: Vec<Option<String>> = {
                 let handles: Vec<_> = scripts
                     .into_iter()

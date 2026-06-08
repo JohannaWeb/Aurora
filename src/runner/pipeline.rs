@@ -86,10 +86,11 @@ fn viewport_size() -> ViewportSize {
     }
 }
 
-// Scripts larger than this are skipped: Boa has no JIT, so multi-MB bundles
-// take minutes to interpret and always fail on modern syntax anyway.
-const MAX_SCRIPT_BYTES: usize = 256 * 1024; // 256 KB per script
-const MAX_TOTAL_SCRIPT_BYTES: usize = 512 * 1024; // 512 KB across all scripts
+// Scripts larger than this are skipped as a memory/time safety bound.
+// SpiderMonkey JITs real-world bundles fine, so these budgets are sized for
+// modern multi-MB sites (e.g. YouTube) rather than an interpreter-only engine.
+const MAX_SCRIPT_BYTES: usize = 8 * 1024 * 1024; // 8 MB per script
+const MAX_TOTAL_SCRIPT_BYTES: usize = 32 * 1024 * 1024; // 32 MB across all scripts
 
 fn run_scripts(
     dom: &crate::dom::NodePtr,
@@ -146,7 +147,7 @@ pub fn fetch_script(
         return if source.len() <= MAX_SCRIPT_BYTES {
             Some(source)
         } else {
-            eprintln!("Boa: skipping inline script ({} KB, over limit)", source.len() / 1024);
+            eprintln!("JS: skipping inline script ({} KB, over limit)", source.len() / 1024);
             None
         };
     }
@@ -157,7 +158,7 @@ pub fn fetch_script(
         Err(e) => { eprintln!("Failed to resolve script URL {source}: {e}"); return None; }
     };
 
-    println!("Boa: Fetching external script: {full_url}");
+    println!("JS: Fetching external script: {full_url}");
     let content = match crate::fetch::fetch_string(&full_url, identity) {
         Ok(c) => c,
         Err(e) => { eprintln!("Failed to fetch script {full_url}: {e}"); return None; }
@@ -165,7 +166,7 @@ pub fn fetch_script(
 
     if content.len() > MAX_SCRIPT_BYTES {
         eprintln!(
-            "Boa: skipping {} ({} KB, over {}KB limit — Boa has no JIT)",
+            "JS: skipping {} ({} KB, over {}KB limit)",
             full_url, content.len() / 1024, MAX_SCRIPT_BYTES / 1024
         );
         return None;

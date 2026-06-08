@@ -32,9 +32,10 @@ pub(in crate::js_sm) unsafe fn install_browser_apis(
     let ss = new_storage_object(cx);
     set_prop_obj(cx, global, c"sessionStorage", ss);
 
-    // Minimal event target stubs for CustomEvent / Event constructors
-    define_fn(cx, global, c"CustomEvent", Some(custom_event_ctor), 2);
-    define_fn(cx, global, c"Event", Some(custom_event_ctor), 2);
+    // Event / CustomEvent / Image / trustedTypes / customElements / CSS —
+    // expressed as JS so constructors get real prototype chains (`instanceof`,
+    // inheritance) that YouTube's bootstrap relies on. See install_youtube_polyfills.
+    install_youtube_polyfills(cx, global);
 
     // ResizeObserver / MutationObserver / IntersectionObserver stubs
     for name in &[
@@ -275,21 +276,126 @@ unsafe extern "C" fn storage_key_null(_cx: *mut RawJSContext, _argc: u32, vp: *m
     true
 }
 
-unsafe extern "C" fn custom_event_ctor(cx: *mut RawJSContext, argc: u32, vp: *mut Value) -> bool {
-    let mut cx = JSContext::from_ptr(NonNull::new(cx).unwrap());
-    let args = CallArgs::from_vp(vp, argc);
-    let type_str = arg_to_string(&mut cx, &args, 0);
-    let obj = new_plain_object(&mut cx);
-    rooted!(&in(cx) let obj_root = obj);
-    set_prop_str(&mut cx, obj_root.handle(), c"type", &type_str);
-    set_prop_bool(&mut cx, obj_root.handle(), c"bubbles", false);
-    set_prop_bool(&mut cx, obj_root.handle(), c"cancelable", false);
-    set_prop_bool(&mut cx, obj_root.handle(), c"defaultPrevented", false);
-    define_fn(&mut cx, obj_root.handle(), c"preventDefault", Some(noop), 0);
-    define_fn(&mut cx, obj_root.handle(), c"stopPropagation", Some(noop), 0);
-    define_fn(&mut cx, obj_root.handle(), c"stopImmediatePropagation", Some(noop), 0);
-    args.rval().set(ObjectValue(obj));
-    true
+/// Polyfills YouTube's bootstrap needs that are far simpler to express as JS
+/// than to build through raw JSAPI: real prototype chains for Event/CustomEvent
+/// (so `instanceof` and subclassing work), a Trusted Types stub (YouTube wraps
+/// all HTML/script sinks through it), and a customElements registry (YouTube
+/// defines dozens of custom elements at startup and awaits `whenDefined`).
+unsafe fn install_youtube_polyfills(cx: &mut JSContext, global: mozjs::gc::Handle<*mut JSObject>) {
+    eval_bootstrap(cx, global, c"event-constructors", r#"
+        (function() {
+            globalThis.Image = function Image(width, height) {
+                this.src = ''; this.width = width || 0; this.height = height || 0;
+                this.naturalWidth = 0; this.naturalHeight = 0; this.complete = false;
+                this.onload = null; this.onerror = null; this.crossOrigin = null;
+                this.decoding = 'auto'; this.loading = 'eager';
+                this.addEventListener = function(){}; this.removeEventListener = function(){};
+                this.decode = function(){ return Promise.resolve(); };
+            };
+            globalThis.Image.prototype = Object.create(
+                (typeof HTMLImageElement !== 'undefined') ? HTMLImageElement.prototype : Object.prototype
+            );
+
+            globalThis.Event = function Event(type, init) {
+                var obj = (this instanceof Event) ? this : {};
+                init = init || {};
+                obj.type = type || '';
+                obj.bubbles = !!(init.bubbles);
+                obj.cancelable = !!(init.cancelable);
+                obj.defaultPrevented = false;
+                obj.isTrusted = false;
+                obj.timeStamp = 0;
+                obj.target = null; obj.currentTarget = null;
+                obj.stopPropagation = function(){};
+                obj.stopImmediatePropagation = function(){};
+                obj.preventDefault = function(){ obj.defaultPrevented = true; };
+                obj.composedPath = function(){ return []; };
+                if (!(this instanceof Event)) return obj;
+            };
+
+            globalThis.CustomEvent = function CustomEvent(type, init) {
+                globalThis.Event.call(this, type, init);
+                this.detail = (init && init.detail !== undefined) ? init.detail : null;
+            };
+            globalThis.CustomEvent.prototype = Object.create(globalThis.Event.prototype);
+            globalThis.CustomEvent.prototype.constructor = globalThis.CustomEvent;
+
+            globalThis.ErrorEvent = function ErrorEvent(type, init) {
+                globalThis.Event.call(this, type, init);
+                init = init || {};
+                this.message = init.message || ''; this.error = init.error || null;
+            };
+            globalThis.ErrorEvent.prototype = Object.create(globalThis.Event.prototype);
+
+            globalThis.MessageEvent = function MessageEvent(type, init) {
+                globalThis.Event.call(this, type, init);
+                init = init || {};
+                this.data = init.data !== undefined ? init.data : null;
+                this.origin = init.origin || ''; this.source = init.source || null;
+            };
+            globalThis.MessageEvent.prototype = Object.create(globalThis.Event.prototype);
+
+            globalThis.PromiseRejectionEvent = function PromiseRejectionEvent(type, init) {
+                globalThis.Event.call(this, type, init);
+                init = init || {};
+                this.promise = init.promise || null; this.reason = init.reason;
+            };
+            globalThis.PromiseRejectionEvent.prototype = Object.create(globalThis.Event.prototype);
+        })();
+    "#);
+
+    eval_bootstrap(cx, global, c"trusted-types", r#"
+        (function() {
+            function makeTrusted(val) { return { toString: function(){ return val; } }; }
+            globalThis.trustedTypes = {
+                createPolicy: function(name, rules) {
+                    return {
+                        name: name,
+                        createHTML: function(s) { return makeTrusted(rules && rules.createHTML ? rules.createHTML(s) : s); },
+                        createScript: function(s) { return makeTrusted(rules && rules.createScript ? rules.createScript(s) : s); },
+                        createScriptURL: function(s) { return makeTrusted(rules && rules.createScriptURL ? rules.createScriptURL(s) : s); }
+                    };
+                },
+                getAttributeType: function() { return null; },
+                getPropertyType: function() { return null; },
+                isHTML: function(v) { return v && typeof v === 'object' && 'toString' in v; },
+                isScript: function(v) { return v && typeof v === 'object' && 'toString' in v; },
+                isScriptURL: function(v) { return v && typeof v === 'object' && 'toString' in v; },
+                emptyHTML: makeTrusted(''),
+                emptyScript: makeTrusted(''),
+                defaultPolicy: null
+            };
+        })();
+    "#);
+
+    eval_bootstrap(cx, global, c"custom-elements", r#"
+        (function() {
+            var registry = {};
+            globalThis.customElements = {
+                define: function(name, ctor, opts) { registry[name] = ctor; },
+                get: function(name) { return registry[name]; },
+                whenDefined: function(name) {
+                    return registry[name] ? Promise.resolve(registry[name]) : new Promise(function(res) {
+                        var orig = customElements.define;
+                        customElements.define = function(n, c, o) {
+                            orig.call(customElements, n, c, o);
+                            if (n === name) res(c);
+                        };
+                    });
+                },
+                upgrade: function() {}
+            };
+        })();
+    "#);
+
+    eval_bootstrap(cx, global, c"css-stub", r#"
+        (function() {
+            globalThis.CSS = {
+                supports: function() { return false; },
+                escape: function(s) { return String(s); }
+            };
+        })();
+    "#);
 }
 
 unsafe extern "C" fn observer_ctor(cx: *mut RawJSContext, argc: u32, vp: *mut Value) -> bool {
