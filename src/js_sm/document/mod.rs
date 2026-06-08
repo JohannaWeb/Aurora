@@ -58,6 +58,7 @@ pub(in crate::js_sm) unsafe fn install_document(
     define_fn(cx, doc_root.handle(), c"createDocumentFragment", Some(doc_create_fragment), 0);
     define_fn(cx, doc_root.handle(), c"createEvent", Some(doc_create_event), 1);
     define_fn(cx, doc_root.handle(), c"createRange", Some(doc_create_range), 0);
+    define_fn(cx, doc_root.handle(), c"createTreeWalker", Some(doc_create_tree_walker), 4);
 
     // Event methods
     define_fn(cx, doc_root.handle(), c"addEventListener", Some(doc_add_event_listener), 3);

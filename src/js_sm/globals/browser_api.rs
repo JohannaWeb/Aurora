@@ -25,6 +25,35 @@ pub(in crate::js_sm) unsafe fn install_browser_apis(
     define_fn(cx, global, c"atob", Some(atob), 1);
     define_fn(cx, global, c"btoa", Some(btoa), 1);
     define_fn(cx, global, c"open", Some(window_open), 3);
+    define_fn(cx, global, c"__shady_native_addEventListener", Some(noop), 2);
+    define_fn(cx, global, c"__shady_native_removeEventListener", Some(noop), 2);
+    define_fn(cx, global, c"__shady_native_dispatchEvent", Some(return_true), 1);
+
+    install_promise_stub(cx, global);
+
+    let node_filter = new_plain_object(cx);
+    rooted!(&in(cx) let node_filter_root = node_filter);
+    for (name, val) in [
+        (c"FILTER_ACCEPT", 1),
+        (c"FILTER_REJECT", 2),
+        (c"FILTER_SKIP", 3),
+        (c"SHOW_ALL", -1),
+        (c"SHOW_ELEMENT", 1),
+        (c"SHOW_ATTRIBUTE", 2),
+        (c"SHOW_TEXT", 4),
+        (c"SHOW_CDATA_SECTION", 8),
+        (c"SHOW_ENTITY_REFERENCE", 16),
+        (c"SHOW_ENTITY", 32),
+        (c"SHOW_PROCESSING_INSTRUCTION", 64),
+        (c"SHOW_COMMENT", 128),
+        (c"SHOW_DOCUMENT", 256),
+        (c"SHOW_DOCUMENT_TYPE", 512),
+        (c"SHOW_DOCUMENT_FRAGMENT", 1024),
+        (c"SHOW_NOTATION", 2048),
+    ] {
+        set_prop_i32(cx, node_filter_root.handle(), name, val);
+    }
+    set_prop_obj(cx, global, c"NodeFilter", node_filter);
 
     // Storage — install minimal localStorage / sessionStorage
     let ls = new_storage_object(cx);
@@ -32,9 +61,39 @@ pub(in crate::js_sm) unsafe fn install_browser_apis(
     let ss = new_storage_object(cx);
     set_prop_obj(cx, global, c"sessionStorage", ss);
 
-    // Minimal event target stubs for CustomEvent / Event constructors
-    define_fn(cx, global, c"CustomEvent", Some(custom_event_ctor), 2);
-    define_fn(cx, global, c"Event", Some(custom_event_ctor), 2);
+    // Minimal event target stubs for CustomEvent / Event constructors.
+    // Real constructors carry a `.prototype` object — sites polyfill via
+    // `Event.prototype.foo = ...`, which throws on a bare define_fn function.
+    for name in &[
+        c"CustomEvent",
+        c"Event",
+        c"MouseEvent",
+        c"KeyboardEvent",
+        c"FocusEvent",
+        c"InputEvent",
+        c"UIEvent",
+        c"TouchEvent",
+        c"WheelEvent",
+        c"PointerEvent",
+    ] {
+        let proto = define_ctor_with_prototype(cx, global, name, Some(custom_event_ctor), 2);
+        rooted!(&in(cx) let proto_root = proto);
+        set_prop_str(cx, proto_root.handle(), c"type", "");
+        set_prop_bool(cx, proto_root.handle(), c"bubbles", false);
+        set_prop_bool(cx, proto_root.handle(), c"cancelable", false);
+        set_prop_bool(cx, proto_root.handle(), c"defaultPrevented", false);
+        define_fn(cx, proto_root.handle(), c"initEvent", Some(init_event), 3);
+        define_fn(cx, proto_root.handle(), c"initCustomEvent", Some(init_custom_event), 4);
+        define_fn(cx, proto_root.handle(), c"initMouseEvent", Some(init_mouse_event), 15);
+        define_fn(cx, proto_root.handle(), c"preventDefault", Some(noop), 0);
+        define_fn(cx, proto_root.handle(), c"stopPropagation", Some(noop), 0);
+        define_fn(cx, proto_root.handle(), c"stopImmediatePropagation", Some(noop), 0);
+    }
+
+    install_dom_constructor_prototypes(cx, global);
+
+    // Image — `new Image(width, height)` returns an <img>-like object
+    define_ctor(cx, global, c"Image", Some(image_ctor), 2);
 
     // ResizeObserver / MutationObserver / IntersectionObserver stubs
     for name in &[
@@ -43,35 +102,253 @@ pub(in crate::js_sm) unsafe fn install_browser_apis(
         c"ResizeObserver",
         c"PerformanceObserver",
     ] {
-        define_fn(cx, global, name, Some(observer_ctor), 1);
+        define_ctor(cx, global, name, Some(observer_ctor), 1);
     }
 
     // URL constructor stub
-    define_fn(cx, global, c"URL", Some(url_ctor), 2);
+    define_ctor(cx, global, c"URL", Some(url_ctor), 2);
     // URLSearchParams stub
-    define_fn(cx, global, c"URLSearchParams", Some(url_search_params_ctor), 1);
+    define_ctor(cx, global, c"URLSearchParams", Some(url_search_params_ctor), 1);
+    install_abort_signal(cx, global);
     // AbortController stub
-    define_fn(cx, global, c"AbortController", Some(abort_controller_ctor), 0);
+    define_ctor(cx, global, c"AbortController", Some(abort_controller_ctor), 0);
     // Headers stub
-    define_fn(cx, global, c"Headers", Some(headers_ctor), 1);
+    define_ctor(cx, global, c"Headers", Some(headers_ctor), 1);
     // FormData stub
-    define_fn(cx, global, c"FormData", Some(noop_ctor), 1);
+    define_ctor(cx, global, c"FormData", Some(noop_ctor), 1);
 
     // Blob / File stubs
-    define_fn(cx, global, c"Blob", Some(blob_ctor), 2);
-    define_fn(cx, global, c"File", Some(blob_ctor), 3);
+    define_ctor(cx, global, c"Blob", Some(blob_ctor), 2);
+    define_ctor(cx, global, c"File", Some(blob_ctor), 3);
 
     // Promise-based fetch — returns a rejected promise stub (sync fetch handled by __aurora_fetch_sync__)
     define_fn(cx, global, c"fetch", Some(fetch_stub), 1);
 
     // XHR constructor
-    define_fn(cx, global, c"XMLHttpRequest", Some(xhr_ctor), 0);
+    let xhr_proto = define_ctor_with_prototype(cx, global, c"XMLHttpRequest", Some(xhr_ctor), 0);
+    rooted!(&in(cx) let xhr_proto_root = xhr_proto);
+    install_event_target_methods(cx, xhr_proto_root.handle());
+    install_xhr_methods(cx, xhr_proto_root.handle());
 
     // WebSocket constructor stub
-    define_fn(cx, global, c"WebSocket", Some(websocket_ctor), 2);
+    define_ctor(cx, global, c"WebSocket", Some(websocket_ctor), 2);
+
+    // MessageChannel / MessagePort scheduler stubs
+    define_ctor_with_prototype(cx, global, c"MessageChannel", Some(message_channel_ctor), 0);
+    define_ctor_with_prototype(cx, global, c"MessageEvent", Some(custom_event_ctor), 2);
+
+    let custom_elements = new_plain_object(cx);
+    rooted!(&in(cx) let custom_elements_root = custom_elements);
+    define_fn(cx, custom_elements_root.handle(), c"define", Some(noop), 2);
+    define_fn(cx, custom_elements_root.handle(), c"get", Some(get_selection_null), 1);
+    define_fn(cx, custom_elements_root.handle(), c"upgrade", Some(noop), 1);
+    define_fn(cx, custom_elements_root.handle(), c"whenDefined", Some(resolved_promise_stub), 1);
+    define_fn(
+        cx,
+        custom_elements_root.handle(),
+        c"polyfillWrapFlushCallback",
+        Some(call_first_callback),
+        1,
+    );
+    set_prop_obj(cx, global, c"customElements", custom_elements);
 }
 
 // ── Impl ─────────────────────────────────────────────────────────────────────
+
+unsafe fn install_abort_signal(
+    cx: &mut JSContext,
+    global: mozjs::gc::Handle<*mut JSObject>,
+) {
+    let proto = define_ctor_with_prototype(cx, global, c"AbortSignal", Some(abort_signal_ctor), 0);
+    rooted!(&in(cx) let proto_root = proto);
+    install_event_target_methods(cx, proto_root.handle());
+
+    rooted!(&in(cx) let mut ctor_val = UndefinedValue());
+    if wrappers2::JS_GetProperty(cx, global, c"AbortSignal".as_ptr(), ctor_val.handle_mut())
+        && ctor_val.get().is_object()
+    {
+        let ctor = ctor_val.get().to_object_or_null();
+        rooted!(&in(cx) let ctor_root = ctor);
+        define_fn(cx, ctor_root.handle(), c"abort", Some(abort_signal_ctor), 1);
+        define_fn(cx, ctor_root.handle(), c"timeout", Some(abort_signal_ctor), 1);
+        define_fn(cx, ctor_root.handle(), c"any", Some(abort_signal_ctor), 1);
+    }
+}
+
+unsafe fn install_promise_stub(
+    cx: &mut JSContext,
+    global: mozjs::gc::Handle<*mut JSObject>,
+) {
+    let proto = define_ctor_with_prototype(cx, global, c"Promise", Some(promise_ctor), 1);
+    rooted!(&in(cx) let proto_root = proto);
+    define_fn(cx, proto_root.handle(), c"then", Some(promise_then), 2);
+    define_fn(cx, proto_root.handle(), c"catch", Some(promise_then), 1);
+    define_fn(cx, proto_root.handle(), c"finally", Some(promise_then), 1);
+
+    rooted!(&in(cx) let mut ctor_val = UndefinedValue());
+    if wrappers2::JS_GetProperty(cx, global, c"Promise".as_ptr(), ctor_val.handle_mut())
+        && ctor_val.get().is_object()
+    {
+        let ctor = ctor_val.get().to_object_or_null();
+        rooted!(&in(cx) let ctor_root = ctor);
+        define_fn(cx, ctor_root.handle(), c"resolve", Some(promise_static_resolve), 1);
+        define_fn(cx, ctor_root.handle(), c"reject", Some(promise_static_resolve), 1);
+        define_fn(cx, ctor_root.handle(), c"all", Some(promise_static_resolve), 1);
+        define_fn(cx, ctor_root.handle(), c"race", Some(promise_static_resolve), 1);
+        define_fn(cx, ctor_root.handle(), c"allSettled", Some(promise_static_resolve), 1);
+        define_fn(cx, ctor_root.handle(), c"any", Some(promise_static_resolve), 1);
+    }
+}
+
+unsafe fn install_dom_constructor_prototypes(
+    cx: &mut JSContext,
+    global: mozjs::gc::Handle<*mut JSObject>,
+) {
+    // Modern bundles feature-detect and patch these constructor prototypes even
+    // when Aurora only returns plain DOM wrapper objects internally.
+    let event_target_proto =
+        define_ctor_with_prototype(cx, global, c"EventTarget", Some(noop_ctor), 0);
+    rooted!(&in(cx) let event_target_proto_root = event_target_proto);
+    install_event_target_methods(cx, event_target_proto_root.handle());
+
+    let node_proto = define_ctor_with_prototype(cx, global, c"Node", Some(noop_ctor), 0);
+    rooted!(&in(cx) let node_proto_root = node_proto);
+    install_event_target_methods(cx, node_proto_root.handle());
+    install_node_methods(cx, node_proto_root.handle());
+    set_prop_i32(cx, node_proto_root.handle(), c"ELEMENT_NODE", 1);
+    set_prop_i32(cx, node_proto_root.handle(), c"TEXT_NODE", 3);
+    set_prop_i32(cx, node_proto_root.handle(), c"DOCUMENT_NODE", 9);
+    set_prop_i32(cx, node_proto_root.handle(), c"DOCUMENT_FRAGMENT_NODE", 11);
+
+    let element_proto = define_ctor_with_prototype(cx, global, c"Element", Some(noop_ctor), 0);
+    rooted!(&in(cx) let element_proto_root = element_proto);
+    install_event_target_methods(cx, element_proto_root.handle());
+    install_node_methods(cx, element_proto_root.handle());
+    install_element_methods(cx, element_proto_root.handle());
+
+    for name in &[
+        c"SVGElement",
+        c"SVGGraphicsElement",
+        c"SVGSVGElement",
+        c"SVGPathElement",
+        c"SVGRectElement",
+        c"SVGCircleElement",
+        c"SVGUseElement",
+        c"SVGDefsElement",
+        c"SVGSymbolElement",
+        c"SVGTextElement",
+    ] {
+        let proto = define_ctor_with_prototype(cx, global, name, Some(noop_ctor), 0);
+        rooted!(&in(cx) let proto_root = proto);
+        install_event_target_methods(cx, proto_root.handle());
+        install_node_methods(cx, proto_root.handle());
+        install_element_methods(cx, proto_root.handle());
+    }
+
+    for name in &[
+        c"HTMLElement",
+        c"HTMLAnchorElement",
+        c"HTMLAudioElement",
+        c"HTMLBodyElement",
+        c"HTMLButtonElement",
+        c"HTMLCanvasElement",
+        c"HTMLDivElement",
+        c"HTMLDocument",
+        c"HTMLFormElement",
+        c"HTMLHeadElement",
+        c"HTMLHtmlElement",
+        c"HTMLIFrameElement",
+        c"HTMLImageElement",
+        c"HTMLInputElement",
+        c"HTMLLIElement",
+        c"HTMLLinkElement",
+        c"HTMLMediaElement",
+        c"HTMLMetaElement",
+        c"HTMLParagraphElement",
+        c"HTMLScriptElement",
+        c"HTMLSlotElement",
+        c"HTMLSpanElement",
+        c"HTMLStyleElement",
+        c"HTMLTemplateElement",
+        c"HTMLTextAreaElement",
+        c"HTMLUListElement",
+        c"HTMLUnknownElement",
+        c"HTMLVideoElement",
+        c"Document",
+        c"DocumentFragment",
+        c"DocumentType",
+        c"CharacterData",
+        c"Comment",
+        c"CDATASection",
+        c"ProcessingInstruction",
+        c"Text",
+        c"ShadowRoot",
+        c"Range",
+        c"Window",
+    ] {
+        let proto = define_ctor_with_prototype(cx, global, name, Some(noop_ctor), 0);
+        rooted!(&in(cx) let proto_root = proto);
+        install_event_target_methods(cx, proto_root.handle());
+        install_node_methods(cx, proto_root.handle());
+        install_element_methods(cx, proto_root.handle());
+    }
+
+    define_ctor_with_prototype(cx, global, c"DOMException", Some(dom_exception_ctor), 2);
+}
+
+unsafe fn install_event_target_methods(
+    cx: &mut JSContext,
+    proto: mozjs::gc::Handle<*mut JSObject>,
+) {
+    define_fn(cx, proto, c"addEventListener", Some(noop), 2);
+    define_fn(cx, proto, c"removeEventListener", Some(noop), 2);
+    define_fn(cx, proto, c"dispatchEvent", Some(return_true), 1);
+}
+
+unsafe fn install_node_methods(cx: &mut JSContext, proto: mozjs::gc::Handle<*mut JSObject>) {
+    define_fn(cx, proto, c"appendChild", Some(node_return_first_arg), 1);
+    define_fn(cx, proto, c"insertBefore", Some(node_return_first_arg), 2);
+    define_fn(cx, proto, c"removeChild", Some(node_return_first_arg), 1);
+    define_fn(cx, proto, c"replaceChild", Some(node_return_first_arg), 2);
+    define_fn(cx, proto, c"cloneNode", Some(noop_ctor), 1);
+    define_fn(cx, proto, c"contains", Some(confirm_false), 1);
+    define_fn(cx, proto, c"normalize", Some(noop), 0);
+}
+
+unsafe fn install_element_methods(cx: &mut JSContext, proto: mozjs::gc::Handle<*mut JSObject>) {
+    define_fn(cx, proto, c"getAttribute", Some(get_selection_null), 1);
+    define_fn(cx, proto, c"setAttribute", Some(noop), 2);
+    define_fn(cx, proto, c"removeAttribute", Some(noop), 1);
+    define_fn(cx, proto, c"hasAttribute", Some(confirm_false), 1);
+    define_fn(cx, proto, c"matches", Some(confirm_false), 1);
+    define_fn(cx, proto, c"closest", Some(get_selection_null), 1);
+    define_fn(cx, proto, c"querySelector", Some(get_selection_null), 1);
+    define_fn(cx, proto, c"querySelectorAll", Some(return_empty_array), 1);
+    define_fn(cx, proto, c"getBoundingClientRect", Some(get_bounding_client_rect), 0);
+    define_fn(cx, proto, c"getClientRects", Some(return_empty_array), 0);
+    define_fn(cx, proto, c"scrollIntoView", Some(noop), 1);
+    define_fn(cx, proto, c"focus", Some(noop), 0);
+    define_fn(cx, proto, c"blur", Some(noop), 0);
+    define_fn(cx, proto, c"click", Some(noop), 0);
+    define_fn(cx, proto, c"remove", Some(noop), 0);
+    define_fn(cx, proto, c"append", Some(noop), 1);
+    define_fn(cx, proto, c"prepend", Some(noop), 1);
+    define_fn(cx, proto, c"before", Some(noop), 1);
+    define_fn(cx, proto, c"after", Some(noop), 1);
+}
+
+unsafe fn install_xhr_methods(cx: &mut JSContext, proto: mozjs::gc::Handle<*mut JSObject>) {
+    set_prop_i32(cx, proto, c"status", 0);
+    set_prop_i32(cx, proto, c"readyState", 0);
+    set_prop_str(cx, proto, c"responseText", "");
+    set_prop_str(cx, proto, c"responseURL", "");
+    set_prop_str(cx, proto, c"statusText", "");
+    define_fn(cx, proto, c"open", Some(noop), 5);
+    define_fn(cx, proto, c"send", Some(noop), 1);
+    define_fn(cx, proto, c"abort", Some(noop), 0);
+    define_fn(cx, proto, c"setRequestHeader", Some(noop), 2);
+    define_fn(cx, proto, c"getResponseHeader", Some(storage_get_item), 1);
+}
 
 unsafe extern "C" fn noop(_cx: *mut RawJSContext, _argc: u32, vp: *mut Value) -> bool {
     let args = CallArgs::from_vp(vp, _argc);
@@ -85,9 +362,25 @@ unsafe extern "C" fn confirm_false(_cx: *mut RawJSContext, _argc: u32, vp: *mut 
     true
 }
 
+unsafe extern "C" fn return_true(_cx: *mut RawJSContext, _argc: u32, vp: *mut Value) -> bool {
+    let args = CallArgs::from_vp(vp, _argc);
+    args.rval().set(BooleanValue(true));
+    true
+}
+
 unsafe extern "C" fn prompt_null(_cx: *mut RawJSContext, _argc: u32, vp: *mut Value) -> bool {
     let args = CallArgs::from_vp(vp, _argc);
     args.rval().set(NullValue());
+    true
+}
+
+unsafe extern "C" fn node_return_first_arg(_cx: *mut RawJSContext, argc: u32, vp: *mut Value) -> bool {
+    let args = CallArgs::from_vp(vp, argc);
+    if argc > 0 {
+        args.rval().set(args.get(0).get());
+    } else {
+        args.rval().set(NullValue());
+    }
     true
 }
 
@@ -128,6 +421,12 @@ unsafe extern "C" fn get_computed_style(cx: *mut RawJSContext, argc: u32, vp: *m
     define_fn(&mut cx, obj_root.handle(), c"getPropertyValue", Some(return_empty_string), 1);
     define_fn(&mut cx, obj_root.handle(), c"setProperty", Some(noop), 2);
     define_fn(&mut cx, obj_root.handle(), c"removeProperty", Some(return_empty_string), 1);
+    set_prop_str(&mut cx, obj_root.handle(), c"fontSize", "16px");
+    set_prop_str(&mut cx, obj_root.handle(), c"fontFamily", "Arial, sans-serif");
+    set_prop_str(&mut cx, obj_root.handle(), c"display", "block");
+    set_prop_str(&mut cx, obj_root.handle(), c"position", "static");
+    set_prop_str(&mut cx, obj_root.handle(), c"visibility", "visible");
+    set_prop_str(&mut cx, obj_root.handle(), c"opacity", "1");
 
     args.rval().set(ObjectValue(obj));
     true
@@ -245,6 +544,58 @@ unsafe extern "C" fn window_open(cx: *mut RawJSContext, argc: u32, vp: *mut Valu
     true
 }
 
+unsafe fn new_promise_like(cx: &mut JSContext) -> *mut JSObject {
+    let obj = new_plain_object(cx);
+    rooted!(&in(cx) let obj_root = obj);
+    define_fn(cx, obj_root.handle(), c"then", Some(promise_then), 2);
+    define_fn(cx, obj_root.handle(), c"catch", Some(promise_then), 1);
+    define_fn(cx, obj_root.handle(), c"finally", Some(promise_then), 1);
+    obj
+}
+
+unsafe extern "C" fn promise_ctor(cx: *mut RawJSContext, argc: u32, vp: *mut Value) -> bool {
+    let mut cx = JSContext::from_ptr(NonNull::new(cx).unwrap());
+    let args = CallArgs::from_vp(vp, argc);
+    args.rval().set(ObjectValue(new_promise_like(&mut cx)));
+    true
+}
+
+unsafe extern "C" fn promise_static_resolve(cx: *mut RawJSContext, argc: u32, vp: *mut Value) -> bool {
+    promise_ctor(cx, argc, vp)
+}
+
+unsafe extern "C" fn promise_then(cx: *mut RawJSContext, argc: u32, vp: *mut Value) -> bool {
+    let mut cx = JSContext::from_ptr(NonNull::new(cx).unwrap());
+    let args = CallArgs::from_vp(vp, argc);
+    args.rval().set(ObjectValue(new_promise_like(&mut cx)));
+    true
+}
+
+unsafe fn new_message_port(cx: &mut JSContext) -> *mut JSObject {
+    let port = new_plain_object(cx);
+    rooted!(&in(cx) let port_root = port);
+    define_fn(cx, port_root.handle(), c"postMessage", Some(noop), 1);
+    define_fn(cx, port_root.handle(), c"start", Some(noop), 0);
+    define_fn(cx, port_root.handle(), c"close", Some(noop), 0);
+    define_fn(cx, port_root.handle(), c"addEventListener", Some(noop), 2);
+    define_fn(cx, port_root.handle(), c"removeEventListener", Some(noop), 2);
+    set_prop_null(cx, port_root.handle(), c"onmessage");
+    port
+}
+
+unsafe extern "C" fn message_channel_ctor(cx: *mut RawJSContext, argc: u32, vp: *mut Value) -> bool {
+    let mut cx = JSContext::from_ptr(NonNull::new(cx).unwrap());
+    let args = CallArgs::from_vp(vp, argc);
+    let channel = new_plain_object(&mut cx);
+    rooted!(&in(cx) let channel_root = channel);
+    let port1 = new_message_port(&mut cx);
+    let port2 = new_message_port(&mut cx);
+    set_prop_obj(&mut cx, channel_root.handle(), c"port1", port1);
+    set_prop_obj(&mut cx, channel_root.handle(), c"port2", port2);
+    args.rval().set(ObjectValue(channel));
+    true
+}
+
 unsafe fn new_storage_object(cx: &mut JSContext) -> *mut JSObject {
     let obj = new_plain_object(cx);
     rooted!(&in(cx) let obj_root = obj);
@@ -275,6 +626,151 @@ unsafe extern "C" fn storage_key_null(_cx: *mut RawJSContext, _argc: u32, vp: *m
     true
 }
 
+unsafe extern "C" fn abort_signal_ctor(cx: *mut RawJSContext, argc: u32, vp: *mut Value) -> bool {
+    let mut cx = JSContext::from_ptr(NonNull::new(cx).unwrap());
+    let args = CallArgs::from_vp(vp, argc);
+    let obj = new_plain_object(&mut cx);
+    rooted!(&in(cx) let obj_root = obj);
+    set_prop_bool(&mut cx, obj_root.handle(), c"aborted", false);
+    set_prop_null(&mut cx, obj_root.handle(), c"reason");
+    set_prop_null(&mut cx, obj_root.handle(), c"onabort");
+    define_fn(&mut cx, obj_root.handle(), c"addEventListener", Some(noop), 2);
+    define_fn(&mut cx, obj_root.handle(), c"removeEventListener", Some(noop), 2);
+    define_fn(&mut cx, obj_root.handle(), c"dispatchEvent", Some(return_true), 1);
+    define_fn(&mut cx, obj_root.handle(), c"throwIfAborted", Some(noop), 0);
+    args.rval().set(ObjectValue(obj));
+    true
+}
+
+unsafe extern "C" fn resolved_promise_stub(cx: *mut RawJSContext, argc: u32, vp: *mut Value) -> bool {
+    let mut cx = JSContext::from_ptr(NonNull::new(cx).unwrap());
+    let args = CallArgs::from_vp(vp, argc);
+    let thenable = new_plain_object(&mut cx);
+    rooted!(&in(cx) let thenable_root = thenable);
+    define_fn(&mut cx, thenable_root.handle(), c"then", Some(call_first_callback), 1);
+    define_fn(&mut cx, thenable_root.handle(), c"catch", Some(noop), 1);
+    define_fn(&mut cx, thenable_root.handle(), c"finally", Some(call_first_callback), 1);
+    args.rval().set(ObjectValue(thenable));
+    true
+}
+
+unsafe extern "C" fn call_first_callback(cx: *mut RawJSContext, argc: u32, vp: *mut Value) -> bool {
+    let mut cx = JSContext::from_ptr(NonNull::new(cx).unwrap());
+    let args = CallArgs::from_vp(vp, argc);
+
+    if argc > 0 && args.get(0).get().is_object() {
+        let callback = args.get(0).get();
+        rooted!(&in(cx) let callback_root = callback);
+        rooted!(&in(cx) let mut ignored = UndefinedValue());
+        rooted!(&in(cx) let global = wrappers2::CurrentGlobalOrNull(&mut cx));
+        let _ = wrappers2::JS_CallFunctionValue(
+            &mut cx,
+            global.handle(),
+            callback_root.handle(),
+            &mozjs::jsapi::HandleValueArray::empty(),
+            ignored.handle_mut(),
+        );
+    }
+
+    args.rval().set(args.thisv().get());
+    true
+}
+
+unsafe extern "C" fn init_event(cx: *mut RawJSContext, argc: u32, vp: *mut Value) -> bool {
+    let mut cx = JSContext::from_ptr(NonNull::new(cx).unwrap());
+    let args = CallArgs::from_vp(vp, argc);
+    rooted!(&in(cx) let this_val = args.thisv().get());
+    init_event_object(&mut cx, this_val.handle(), &args, false);
+    args.rval().set(UndefinedValue());
+    true
+}
+
+unsafe extern "C" fn init_custom_event(cx: *mut RawJSContext, argc: u32, vp: *mut Value) -> bool {
+    let mut cx = JSContext::from_ptr(NonNull::new(cx).unwrap());
+    let args = CallArgs::from_vp(vp, argc);
+    rooted!(&in(cx) let this_val = args.thisv().get());
+    init_event_object(&mut cx, this_val.handle(), &args, true);
+    args.rval().set(UndefinedValue());
+    true
+}
+
+unsafe extern "C" fn init_mouse_event(cx: *mut RawJSContext, argc: u32, vp: *mut Value) -> bool {
+    let mut cx = JSContext::from_ptr(NonNull::new(cx).unwrap());
+    let args = CallArgs::from_vp(vp, argc);
+    rooted!(&in(cx) let this_val = args.thisv().get());
+    init_event_object(&mut cx, this_val.handle(), &args, false);
+
+    if this_val.get().is_object() {
+        let obj = this_val.get().to_object_or_null();
+        if !obj.is_null() {
+            rooted!(&in(cx) let obj_root = obj);
+            set_prop_f64(&mut cx, obj_root.handle(), c"screenX", arg_to_f64(&args, 5));
+            set_prop_f64(&mut cx, obj_root.handle(), c"screenY", arg_to_f64(&args, 6));
+            set_prop_f64(&mut cx, obj_root.handle(), c"clientX", arg_to_f64(&args, 7));
+            set_prop_f64(&mut cx, obj_root.handle(), c"clientY", arg_to_f64(&args, 8));
+            set_prop_bool(
+                &mut cx,
+                obj_root.handle(),
+                c"ctrlKey",
+                args.argc_ > 9 && args.get(9).get().to_boolean(),
+            );
+            set_prop_bool(
+                &mut cx,
+                obj_root.handle(),
+                c"altKey",
+                args.argc_ > 10 && args.get(10).get().to_boolean(),
+            );
+            set_prop_bool(
+                &mut cx,
+                obj_root.handle(),
+                c"shiftKey",
+                args.argc_ > 11 && args.get(11).get().to_boolean(),
+            );
+            set_prop_bool(
+                &mut cx,
+                obj_root.handle(),
+                c"metaKey",
+                args.argc_ > 12 && args.get(12).get().to_boolean(),
+            );
+            set_prop_f64(&mut cx, obj_root.handle(), c"button", arg_to_f64(&args, 13));
+        }
+    }
+
+    args.rval().set(UndefinedValue());
+    true
+}
+
+unsafe fn init_event_object(
+    cx: &mut JSContext,
+    this_val: mozjs::gc::Handle<Value>,
+    args: &CallArgs,
+    include_detail: bool,
+) {
+    if !this_val.get().is_object() {
+        return;
+    }
+
+    let obj = this_val.get().to_object_or_null();
+    if obj.is_null() {
+        return;
+    }
+    rooted!(&in(cx) let obj_root = obj);
+
+    let type_str = arg_to_string(cx, args, 0);
+    set_prop_str(cx, obj_root.handle(), c"type", &type_str);
+    set_prop_bool(cx, obj_root.handle(), c"bubbles", args.argc_ > 1 && args.get(1).get().to_boolean());
+    set_prop_bool(
+        cx,
+        obj_root.handle(),
+        c"cancelable",
+        args.argc_ > 2 && args.get(2).get().to_boolean(),
+    );
+    if include_detail && args.argc_ > 3 {
+        rooted!(&in(cx) let detail = args.get(3).get());
+        wrappers2::JS_SetProperty(cx, obj_root.handle(), c"detail".as_ptr(), detail.handle());
+    }
+}
+
 unsafe extern "C" fn custom_event_ctor(cx: *mut RawJSContext, argc: u32, vp: *mut Value) -> bool {
     let mut cx = JSContext::from_ptr(NonNull::new(cx).unwrap());
     let args = CallArgs::from_vp(vp, argc);
@@ -285,9 +781,68 @@ unsafe extern "C" fn custom_event_ctor(cx: *mut RawJSContext, argc: u32, vp: *mu
     set_prop_bool(&mut cx, obj_root.handle(), c"bubbles", false);
     set_prop_bool(&mut cx, obj_root.handle(), c"cancelable", false);
     set_prop_bool(&mut cx, obj_root.handle(), c"defaultPrevented", false);
+    set_prop_null(&mut cx, obj_root.handle(), c"detail");
+    define_fn(&mut cx, obj_root.handle(), c"initEvent", Some(init_event), 3);
+    define_fn(&mut cx, obj_root.handle(), c"initCustomEvent", Some(init_custom_event), 4);
     define_fn(&mut cx, obj_root.handle(), c"preventDefault", Some(noop), 0);
     define_fn(&mut cx, obj_root.handle(), c"stopPropagation", Some(noop), 0);
     define_fn(&mut cx, obj_root.handle(), c"stopImmediatePropagation", Some(noop), 0);
+    args.rval().set(ObjectValue(obj));
+    true
+}
+
+unsafe extern "C" fn dom_exception_ctor(cx: *mut RawJSContext, argc: u32, vp: *mut Value) -> bool {
+    let mut cx = JSContext::from_ptr(NonNull::new(cx).unwrap());
+    let args = CallArgs::from_vp(vp, argc);
+    let message = arg_to_string(&mut cx, &args, 0);
+    let name = if argc > 1 {
+        arg_to_string(&mut cx, &args, 1)
+    } else {
+        "Error".to_string()
+    };
+
+    let obj = new_plain_object(&mut cx);
+    rooted!(&in(cx) let obj_root = obj);
+    set_prop_str(&mut cx, obj_root.handle(), c"message", &message);
+    set_prop_str(&mut cx, obj_root.handle(), c"name", &name);
+    set_prop_i32(&mut cx, obj_root.handle(), c"code", 0);
+    args.rval().set(ObjectValue(obj));
+    true
+}
+
+unsafe extern "C" fn get_bounding_client_rect(cx: *mut RawJSContext, argc: u32, vp: *mut Value) -> bool {
+    let mut cx = JSContext::from_ptr(NonNull::new(cx).unwrap());
+    let args = CallArgs::from_vp(vp, argc);
+    let obj = new_plain_object(&mut cx);
+    rooted!(&in(cx) let obj_root = obj);
+    for name in &[c"x", c"y", c"top", c"left", c"right", c"bottom", c"width", c"height"] {
+        set_prop_f64(&mut cx, obj_root.handle(), name, 0.0);
+    }
+    args.rval().set(ObjectValue(obj));
+    true
+}
+
+unsafe extern "C" fn image_ctor(cx: *mut RawJSContext, argc: u32, vp: *mut Value) -> bool {
+    let mut cx = JSContext::from_ptr(NonNull::new(cx).unwrap());
+    let args = CallArgs::from_vp(vp, argc);
+    let width = arg_to_f64(&args, 0);
+    let height = arg_to_f64(&args, 1);
+
+    let obj = new_plain_object(&mut cx);
+    rooted!(&in(cx) let obj_root = obj);
+    set_prop_str(&mut cx, obj_root.handle(), c"src", "");
+    set_prop_str(&mut cx, obj_root.handle(), c"alt", "");
+    set_prop_f64(&mut cx, obj_root.handle(), c"width", width);
+    set_prop_f64(&mut cx, obj_root.handle(), c"height", height);
+    set_prop_f64(&mut cx, obj_root.handle(), c"naturalWidth", width);
+    set_prop_f64(&mut cx, obj_root.handle(), c"naturalHeight", height);
+    set_prop_bool(&mut cx, obj_root.handle(), c"complete", true);
+    set_prop_null(&mut cx, obj_root.handle(), c"onload");
+    set_prop_null(&mut cx, obj_root.handle(), c"onerror");
+    define_fn(&mut cx, obj_root.handle(), c"addEventListener", Some(noop), 2);
+    define_fn(&mut cx, obj_root.handle(), c"removeEventListener", Some(noop), 2);
+    define_fn(&mut cx, obj_root.handle(), c"setAttribute", Some(noop), 2);
+    define_fn(&mut cx, obj_root.handle(), c"getAttribute", Some(get_selection_null), 1);
     args.rval().set(ObjectValue(obj));
     true
 }
@@ -413,15 +968,11 @@ unsafe extern "C" fn blob_ctor(cx: *mut RawJSContext, argc: u32, vp: *mut Value)
 }
 
 unsafe extern "C" fn fetch_stub(cx: *mut RawJSContext, argc: u32, vp: *mut Value) -> bool {
-    // We don't have async, so return a minimal thenable that always rejects
+    // We don't have async, so return a chainable promise-like that never settles.
+    // Must support indefinite .then().catch().finally() chaining like a real Promise.
     let mut cx = JSContext::from_ptr(NonNull::new(cx).unwrap());
     let args = CallArgs::from_vp(vp, argc);
-    let obj = new_plain_object(&mut cx);
-    rooted!(&in(cx) let obj_root = obj);
-    define_fn(&mut cx, obj_root.handle(), c"then", Some(noop), 2);
-    define_fn(&mut cx, obj_root.handle(), c"catch", Some(noop), 1);
-    define_fn(&mut cx, obj_root.handle(), c"finally", Some(noop), 1);
-    args.rval().set(ObjectValue(obj));
+    args.rval().set(ObjectValue(new_promise_like(&mut cx)));
     true
 }
 
@@ -435,13 +986,9 @@ unsafe extern "C" fn xhr_ctor(cx: *mut RawJSContext, argc: u32, vp: *mut Value) 
     set_prop_str(&mut cx, obj_root.handle(), c"responseText", "");
     set_prop_str(&mut cx, obj_root.handle(), c"responseURL", "");
     set_prop_str(&mut cx, obj_root.handle(), c"statusText", "");
-    define_fn(&mut cx, obj_root.handle(), c"open", Some(noop), 5);
-    define_fn(&mut cx, obj_root.handle(), c"send", Some(noop), 1);
-    define_fn(&mut cx, obj_root.handle(), c"abort", Some(noop), 0);
-    define_fn(&mut cx, obj_root.handle(), c"setRequestHeader", Some(noop), 2);
-    define_fn(&mut cx, obj_root.handle(), c"getResponseHeader", Some(storage_get_item), 1);
     define_fn(&mut cx, obj_root.handle(), c"addEventListener", Some(noop), 2);
     define_fn(&mut cx, obj_root.handle(), c"removeEventListener", Some(noop), 2);
+    install_xhr_methods(&mut cx, obj_root.handle());
     args.rval().set(ObjectValue(obj));
     true
 }

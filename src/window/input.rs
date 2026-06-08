@@ -1,4 +1,3 @@
-use crate::ImageCache;
 use crate::blitz_document::BlitzDocument;
 use crate::css::Stylesheet;
 use crate::dom::NodePtr;
@@ -7,6 +6,7 @@ use crate::js_engine::JsRuntime;
 use crate::layout::{LayoutTree, ViewportSize};
 use crate::media::MediaCache;
 use crate::style::StyleTree;
+use crate::ImageCache;
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -72,7 +72,7 @@ impl WindowInput {
             // Keep the current renderer path in sync with the same content viewport.
             let content_w = content_viewport.width as u32;
             let content_h = content_viewport.height as u32;
-            
+
             // Re-serialize the mutated legacy DOM to HTML, then reload it into blitz_doc.
             // This ensures JS mutations are rendered in the blitz-dom / blitz-paint path.
             let html = crate::js_sm::serialize_outer_html(&self.dom);
@@ -114,10 +114,10 @@ impl WindowInput {
         let mut new_stylesheet = Stylesheet::from_dom(&new_dom, Some(url), &self.identity);
         new_stylesheet.merge(Stylesheet::user_agent_stylesheet());
 
-        // 4. Initialize scripts/runtime — fetch externals in parallel, skip oversized ones.
+        // 4. Initialize scripts/runtime and fetch externals in parallel.
         let scripts = crate::runner::scripts::extract_scripts(&new_dom);
         let new_runtime = if !scripts.is_empty() {
-            println!("Boa: Processing {} scripts...", scripts.len());
+            println!("JS: Processing {} scripts...", scripts.len());
             let fetched: Vec<Option<String>> = {
                 let handles: Vec<_> = scripts
                     .into_iter()
@@ -125,11 +125,19 @@ impl WindowInput {
                         let url_str = url.to_string();
                         let identity = self.identity.clone();
                         std::thread::spawn(move || {
-                            crate::runner::pipeline::fetch_script(source, is_url, Some(&url_str), &identity)
+                            crate::runner::pipeline::fetch_script(
+                                source,
+                                is_url,
+                                Some(&url_str),
+                                &identity,
+                            )
                         })
                     })
                     .collect();
-                handles.into_iter().map(|h| h.join().unwrap_or(None)).collect()
+                handles
+                    .into_iter()
+                    .map(|h| h.join().unwrap_or(None))
+                    .collect()
             };
             let mut rt: Box<dyn JsRuntime> =
                 Box::new(crate::js_sm::SmRuntime::new(Rc::clone(&new_dom)));

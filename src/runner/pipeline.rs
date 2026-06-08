@@ -1,4 +1,4 @@
-use super::cli::{CliOptions, env_f32};
+use super::cli::{env_f32, CliOptions};
 use super::fixtures::demo_html;
 use super::images::{load_images, load_svgs};
 use super::scripts::extract_scripts;
@@ -49,7 +49,8 @@ pub(crate) fn run_browser(cli: CliOptions, identity: Identity) {
 
     let content_w = viewport.width as u32;
     let content_h = (viewport.height - crate::window::BROWSER_CHROME_HEIGHT).max(1.0) as u32;
-    let blitz_doc = BlitzDocument::from_html(&html, base_url.as_deref(), &identity, content_w, content_h);
+    let blitz_doc =
+        BlitzDocument::from_html(&html, base_url.as_deref(), &identity, content_w, content_h);
 
     maybe_open_window(
         dom,
@@ -86,11 +87,6 @@ fn viewport_size() -> ViewportSize {
     }
 }
 
-// Scripts larger than this are skipped: Boa has no JIT, so multi-MB bundles
-// take minutes to interpret and always fail on modern syntax anyway.
-const MAX_SCRIPT_BYTES: usize = 256 * 1024; // 256 KB per script
-const MAX_TOTAL_SCRIPT_BYTES: usize = 512 * 1024; // 512 KB across all scripts
-
 fn run_scripts(
     dom: &crate::dom::NodePtr,
     base_url: Option<&str>,
@@ -114,21 +110,15 @@ fn run_scripts(
                 std::thread::spawn(move || fetch_script(source, is_url, base.as_deref(), &identity))
             })
             .collect();
-        handles.into_iter().map(|h| h.join().unwrap_or(None)).collect()
+        handles
+            .into_iter()
+            .map(|h| h.join().unwrap_or(None))
+            .collect()
     };
 
     let mut runtime: Box<dyn crate::js_engine::JsRuntime> =
         Box::new(crate::js_sm::SmRuntime::new(Rc::clone(dom)));
-    let mut total_bytes = 0usize;
     for content in fetched.into_iter().flatten() {
-        total_bytes += content.len();
-        if total_bytes > MAX_TOTAL_SCRIPT_BYTES {
-            eprintln!(
-                "JS: total script budget ({}KB) reached, skipping remaining scripts",
-                MAX_TOTAL_SCRIPT_BYTES / 1024
-            );
-            break;
-        }
         if let Err(e) = runtime.execute(&content) {
             eprintln!("JS Error: {}", e);
         }
@@ -143,33 +133,26 @@ pub fn fetch_script(
     identity: &Identity,
 ) -> Option<String> {
     if !is_url {
-        return if source.len() <= MAX_SCRIPT_BYTES {
-            Some(source)
-        } else {
-            eprintln!("Boa: skipping inline script ({} KB, over limit)", source.len() / 1024);
-            None
-        };
+        return Some(source);
     }
 
     let base = base_url?;
     let full_url = match crate::fetch::resolve_relative_url(base, &source) {
         Ok(u) => u,
-        Err(e) => { eprintln!("Failed to resolve script URL {source}: {e}"); return None; }
+        Err(e) => {
+            eprintln!("Failed to resolve script URL {source}: {e}");
+            return None;
+        }
     };
 
-    println!("Boa: Fetching external script: {full_url}");
+    println!("JS: Fetching external script: {full_url}");
     let content = match crate::fetch::fetch_string(&full_url, identity) {
         Ok(c) => c,
-        Err(e) => { eprintln!("Failed to fetch script {full_url}: {e}"); return None; }
+        Err(e) => {
+            eprintln!("Failed to fetch script {full_url}: {e}");
+            return None;
+        }
     };
-
-    if content.len() > MAX_SCRIPT_BYTES {
-        eprintln!(
-            "Boa: skipping {} ({} KB, over {}KB limit — Boa has no JIT)",
-            full_url, content.len() / 1024, MAX_SCRIPT_BYTES / 1024
-        );
-        return None;
-    }
 
     Some(content)
 }

@@ -133,6 +133,56 @@ pub(super) unsafe fn define_fn(
     wrappers2::JS_DefineFunction(cx, obj, name.as_ptr(), func, nargs, 0);
 }
 
+/// SpiderMonkey's `JSFUN_CONSTRUCTOR` flag (js/src/jsapi.h: `0x400`). Not
+/// exposed by the mozjs crate's bindgen since it's a C++ `static constexpr`.
+/// Functions defined without it cannot be called with `new` — JS throws
+/// "X is not a constructor" — which is exactly what stub DOM/Web API
+/// constructors (CustomEvent, URL, Blob, Image, ...) need to support.
+const JSFUN_CONSTRUCTOR: u32 = 0x400;
+
+pub(super) unsafe fn define_ctor(
+    cx: &mut JSContext,
+    obj: mozjs::gc::Handle<*mut JSObject>,
+    name: &CStr,
+    func: mozjs::jsapi::JSNative,
+    nargs: u32,
+) {
+    wrappers2::JS_DefineFunction(cx, obj, name.as_ptr(), func, nargs, JSFUN_CONSTRUCTOR);
+}
+
+/// Define a native constructor function and give it a `.prototype` object
+/// (with `.constructor` pointing back at the function), the way real JS
+/// constructors look. Plain `define_fn` produces a function with no
+/// `.prototype`, which throws when polyfills do `Ctor.prototype.foo = ...`.
+/// Returns the prototype object so callers can populate it.
+pub(super) unsafe fn define_ctor_with_prototype(
+    cx: &mut JSContext,
+    obj: mozjs::gc::Handle<*mut JSObject>,
+    name: &CStr,
+    func: mozjs::jsapi::JSNative,
+    nargs: u32,
+) -> *mut JSObject {
+    define_ctor(cx, obj, name, func, nargs);
+
+    rooted!(&in(cx) let mut ctor_val = UndefinedValue());
+    if !wrappers2::JS_GetProperty(cx, obj, name.as_ptr(), ctor_val.handle_mut())
+        || !ctor_val.get().is_object()
+    {
+        return std::ptr::null_mut();
+    }
+    let ctor_obj = ctor_val.get().to_object_or_null();
+    rooted!(&in(cx) let ctor_root = ctor_obj);
+
+    let proto = new_plain_object(cx);
+    rooted!(&in(cx) let proto_root = proto);
+    set_prop_obj(cx, ctor_root.handle(), c"prototype", proto);
+
+    rooted!(&in(cx) let ctor_again = ObjectValue(ctor_obj));
+    wrappers2::JS_SetProperty(cx, proto_root.handle(), c"constructor".as_ptr(), ctor_again.handle());
+
+    proto
+}
+
 pub(super) unsafe fn define_getter(
     cx: &mut JSContext,
     obj: mozjs::gc::Handle<*mut JSObject>,
@@ -282,7 +332,19 @@ pub(super) unsafe fn delete_callback(
 pub(super) unsafe fn pending_exception_string(cx: &mut JSContext) -> String {
     rooted!(&in(cx) let mut exn = UndefinedValue());
     if wrappers2::JS_GetPendingException(cx, exn.handle_mut()) {
-        let s = value_to_string(cx, exn.handle());
+        let mut s = value_to_string(cx, exn.handle());
+        if exn.get().is_object() {
+            let obj = exn.get().to_object_or_null();
+            if !obj.is_null() {
+                rooted!(&in(cx) let obj_root = obj);
+                if let Some(stack) = get_prop_string(cx, obj_root.handle(), c"stack") {
+                    if !stack.is_empty() {
+                        s.push('\n');
+                        s.push_str(&stack);
+                    }
+                }
+            }
+        }
         wrappers2::JS_ClearPendingException(cx);
         s
     } else {

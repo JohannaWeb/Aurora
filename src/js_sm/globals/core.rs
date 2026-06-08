@@ -88,7 +88,55 @@ pub(in crate::js_sm) unsafe fn install_core_globals(
     define_fn(cx, perf_root.handle(), c"getEntriesByName", Some(return_empty_array), 1);
     define_fn(cx, perf_root.handle(), c"getEntries", Some(return_empty_array), 0);
     set_prop_f64(cx, perf_root.handle(), c"timeOrigin", 0.0);
+
+    // performance.timing (Navigation Timing API) — sites read these to compute
+    // load metrics; populate with a single "everything happened now" timestamp
+    // so arithmetic on them produces sane (zero-ish) numbers instead of NaN.
+    let now = epoch_millis();
+    let timing = new_plain_object(cx);
+    rooted!(&in(cx) let timing_root = timing);
+    for name in &[
+        c"navigationStart", c"unloadEventStart", c"unloadEventEnd",
+        c"redirectStart", c"redirectEnd", c"fetchStart",
+        c"domainLookupStart", c"domainLookupEnd",
+        c"connectStart", c"connectEnd", c"secureConnectionStart",
+        c"requestStart", c"responseStart", c"responseEnd",
+        c"domLoading", c"domInteractive",
+        c"domContentLoadedEventStart", c"domContentLoadedEventEnd",
+        c"domComplete", c"loadEventStart", c"loadEventEnd",
+    ] {
+        set_prop_f64(cx, timing_root.handle(), name, now);
+    }
+    set_prop_obj(cx, perf_root.handle(), c"timing", timing);
     set_prop_obj(cx, global, c"performance", perf);
+
+    // navigator
+    let navigator = new_plain_object(cx);
+    rooted!(&in(cx) let nav_root = navigator);
+    set_prop_str(cx, nav_root.handle(), c"userAgent",
+        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Aurora/0.3 Safari/537.36");
+    set_prop_str(cx, nav_root.handle(), c"platform", "Linux x86_64");
+    set_prop_str(cx, nav_root.handle(), c"language", "en-US");
+    set_prop_str(cx, nav_root.handle(), c"vendor", "");
+    set_prop_str(cx, nav_root.handle(), c"appName", "Netscape");
+    set_prop_str(cx, nav_root.handle(), c"appVersion", "5.0 (X11)");
+    set_prop_str(cx, nav_root.handle(), c"product", "Gecko");
+    set_prop_bool(cx, nav_root.handle(), c"onLine", true);
+    set_prop_bool(cx, nav_root.handle(), c"cookieEnabled", true);
+    set_prop_f64(cx, nav_root.handle(), c"hardwareConcurrency", 4.0);
+    set_prop_f64(cx, nav_root.handle(), c"maxTouchPoints", 0.0);
+    define_fn(cx, nav_root.handle(), c"sendBeacon", Some(return_true), 2);
+    define_fn(cx, nav_root.handle(), c"vibrate", Some(return_true), 1);
+    define_fn(cx, nav_root.handle(), c"registerProtocolHandler", Some(noop), 3);
+
+    let geolocation = new_plain_object(cx);
+    rooted!(&in(cx) let geo_root = geolocation);
+    define_fn(cx, geo_root.handle(), c"getCurrentPosition", Some(noop), 3);
+    define_fn(cx, geo_root.handle(), c"watchPosition", Some(noop), 3);
+    define_fn(cx, geo_root.handle(), c"clearWatch", Some(noop), 1);
+    set_prop_obj(cx, nav_root.handle(), c"geolocation", geolocation);
+
+    set_prop_obj(cx, global, c"navigator", navigator);
 
     // crypto stub
     let crypto = new_plain_object(cx);
@@ -107,6 +155,23 @@ pub(in crate::js_sm) unsafe fn install_core_globals(
     define_fn(cx, hist_root.handle(), c"go", Some(noop), 1);
     set_prop_i32(cx, hist_root.handle(), c"length", 1);
     set_prop_obj(cx, global, c"history", history);
+
+    // location
+    let location = new_plain_object(cx);
+    rooted!(&in(cx) let location_root = location);
+    set_prop_str(cx, location_root.handle(), c"href", "https://youtube.com/");
+    set_prop_str(cx, location_root.handle(), c"origin", "https://youtube.com");
+    set_prop_str(cx, location_root.handle(), c"protocol", "https:");
+    set_prop_str(cx, location_root.handle(), c"host", "youtube.com");
+    set_prop_str(cx, location_root.handle(), c"hostname", "youtube.com");
+    set_prop_str(cx, location_root.handle(), c"port", "");
+    set_prop_str(cx, location_root.handle(), c"pathname", "/");
+    set_prop_str(cx, location_root.handle(), c"search", "");
+    set_prop_str(cx, location_root.handle(), c"hash", "");
+    define_fn(cx, location_root.handle(), c"assign", Some(noop), 1);
+    define_fn(cx, location_root.handle(), c"replace", Some(noop), 1);
+    define_fn(cx, location_root.handle(), c"reload", Some(noop), 0);
+    set_prop_obj(cx, global, c"location", location);
 
     // Internal sync fetch helper
     define_fn(cx, global, c"__aurora_fetch_sync__", Some(aurora_fetch_sync), 1);
@@ -166,14 +231,17 @@ unsafe extern "C" fn console_assert(cx: *mut RawJSContext, argc: u32, vp: *mut V
     true
 }
 
-unsafe extern "C" fn perf_now(_cx: *mut RawJSContext, argc: u32, vp: *mut Value) -> bool {
-    let args = CallArgs::from_vp(vp, argc);
-    let ms = std::time::SystemTime::now()
+fn epoch_millis() -> f64 {
+    std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs_f64()
-        * 1000.0;
-    args.rval().set(DoubleValue(ms));
+        * 1000.0
+}
+
+unsafe extern "C" fn perf_now(_cx: *mut RawJSContext, argc: u32, vp: *mut Value) -> bool {
+    let args = CallArgs::from_vp(vp, argc);
+    args.rval().set(DoubleValue(epoch_millis()));
     true
 }
 

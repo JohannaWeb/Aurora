@@ -88,6 +88,26 @@ pub(in crate::js_sm) unsafe fn create_js_node(
             // dataset stub
             let dataset = new_plain_object(cx);
             set_prop_obj(cx, obj_root.handle(), c"dataset", dataset);
+
+            // <canvas> — width/height reflect the element's attributes (default
+            // 300x150 per the HTML spec) and getContext returns a stub 2D/WebGL
+            // context so canvas-drawing app code doesn't throw on first use.
+            if tag_name.eq_ignore_ascii_case("canvas") {
+                let width = el.attributes.get("width").and_then(|v| v.parse::<f64>().ok()).unwrap_or(300.0);
+                let height = el.attributes.get("height").and_then(|v| v.parse::<f64>().ok()).unwrap_or(150.0);
+                set_prop_f64(cx, obj_root.handle(), c"width", width);
+                set_prop_f64(cx, obj_root.handle(), c"height", height);
+                define_fn(cx, obj_root.handle(), c"getContext", Some(canvas_get_context), 2);
+                define_fn(cx, obj_root.handle(), c"toDataURL", Some(canvas_to_data_url), 2);
+                define_fn(cx, obj_root.handle(), c"toBlob", Some(noop_cb), 3);
+                define_fn(cx, obj_root.handle(), c"transferControlToOffscreen", Some(node_return_first_arg), 0);
+            }
+
+            if tag_name.eq_ignore_ascii_case("template") {
+                let content = Node::element("#document-fragment", vec![]);
+                let content_obj = create_js_node(cx, content);
+                set_prop_obj(cx, obj_root.handle(), c"content", content_obj);
+            }
         }
     } else if node_type == 3 {
         // Text node
@@ -459,6 +479,12 @@ unsafe extern "C" fn return_true_cb(_cx: *mut RawJSContext, _argc: u32, vp: *mut
     true
 }
 
+unsafe extern "C" fn return_null_cb(_cx: *mut RawJSContext, _argc: u32, vp: *mut Value) -> bool {
+    let args = CallArgs::from_vp(vp, _argc);
+    args.rval().set(NullValue());
+    true
+}
+
 unsafe extern "C" fn return_empty_array_cb(cx: *mut RawJSContext, argc: u32, vp: *mut Value) -> bool {
     let mut cx = JSContext::from_ptr(NonNull::new(cx).unwrap());
     let args = CallArgs::from_vp(vp, argc);
@@ -478,6 +504,123 @@ unsafe extern "C" fn return_empty_string_cb(cx: *mut RawJSContext, _argc: u32, v
 unsafe extern "C" fn node_return_first_arg(_cx: *mut RawJSContext, argc: u32, vp: *mut Value) -> bool {
     let args = CallArgs::from_vp(vp, argc);
     args.rval().set(if argc > 0 { args.get(0).get() } else { NullValue() });
+    true
+}
+
+// ── <canvas> context stubs ────────────────────────────────────────────────────
+// Aurora doesn't actually rasterize canvas drawing commands, but app code
+// (chart libs, video players, etc.) expects `getContext` to return an object
+// with the full CanvasRenderingContext2D-shaped API. Returning a no-op stub
+// lets that code run instead of throwing on the first `ctx.fillRect(...)`.
+
+unsafe fn build_canvas_2d_context(cx: &mut JSContext) -> *mut JSObject {
+    let ctx = new_plain_object(cx);
+    rooted!(&in(cx) let ctx_root = ctx);
+
+    for name in &[
+        c"save", c"restore", c"scale", c"rotate", c"translate", c"transform", c"setTransform", c"resetTransform",
+        c"clearRect", c"fillRect", c"strokeRect",
+        c"beginPath", c"closePath", c"moveTo", c"lineTo", c"bezierCurveTo", c"quadraticCurveTo",
+        c"arc", c"arcTo", c"ellipse", c"rect", c"roundRect",
+        c"fill", c"stroke", c"clip", c"isPointInPath", c"isPointInStroke",
+        c"fillText", c"strokeText",
+        c"drawImage", c"putImageData", c"drawFocusIfNeeded",
+        c"setLineDash", c"createPattern",
+    ] {
+        define_fn(cx, ctx_root.handle(), name, Some(noop_cb), 2);
+    }
+
+    define_fn(cx, ctx_root.handle(), c"getLineDash", Some(return_empty_array_cb), 0);
+    define_fn(cx, ctx_root.handle(), c"save", Some(noop_cb), 0);
+
+    define_fn(cx, ctx_root.handle(), c"measureText", Some(canvas_measure_text), 1);
+    define_fn(cx, ctx_root.handle(), c"getImageData", Some(canvas_get_image_data), 4);
+    define_fn(cx, ctx_root.handle(), c"createImageData", Some(canvas_get_image_data), 2);
+    define_fn(cx, ctx_root.handle(), c"createLinearGradient", Some(canvas_create_gradient), 4);
+    define_fn(cx, ctx_root.handle(), c"createRadialGradient", Some(canvas_create_gradient), 6);
+    define_fn(cx, ctx_root.handle(), c"createConicGradient", Some(canvas_create_gradient), 3);
+
+    // Style/state properties app code commonly reads back after setting
+    set_prop_str(cx, ctx_root.handle(), c"fillStyle", "#000000");
+    set_prop_str(cx, ctx_root.handle(), c"strokeStyle", "#000000");
+    set_prop_f64(cx, ctx_root.handle(), c"lineWidth", 1.0);
+    set_prop_str(cx, ctx_root.handle(), c"lineCap", "butt");
+    set_prop_str(cx, ctx_root.handle(), c"lineJoin", "miter");
+    set_prop_f64(cx, ctx_root.handle(), c"miterLimit", 10.0);
+    set_prop_f64(cx, ctx_root.handle(), c"globalAlpha", 1.0);
+    set_prop_str(cx, ctx_root.handle(), c"globalCompositeOperation", "source-over");
+    set_prop_str(cx, ctx_root.handle(), c"font", "10px sans-serif");
+    set_prop_str(cx, ctx_root.handle(), c"textAlign", "start");
+    set_prop_str(cx, ctx_root.handle(), c"textBaseline", "alphabetic");
+    set_prop_bool(cx, ctx_root.handle(), c"imageSmoothingEnabled", true);
+
+    ctx
+}
+
+unsafe extern "C" fn canvas_get_context(cx: *mut RawJSContext, argc: u32, vp: *mut Value) -> bool {
+    let mut cx = JSContext::from_ptr(NonNull::new(cx).unwrap());
+    let args = CallArgs::from_vp(vp, argc);
+    let kind = arg_to_string(&mut cx, &args, 0);
+    if kind == "webgl" || kind == "webgl2" || kind == "experimental-webgl" || kind == "bitmaprenderer" {
+        // No software/GPU GL backend — report unsupported like a headless browser would.
+        args.rval().set(NullValue());
+        return true;
+    }
+    let ctx = build_canvas_2d_context(&mut cx);
+    args.rval().set(if ctx.is_null() { UndefinedValue() } else { ObjectValue(ctx) });
+    true
+}
+
+unsafe extern "C" fn canvas_to_data_url(cx: *mut RawJSContext, argc: u32, vp: *mut Value) -> bool {
+    let mut cx = JSContext::from_ptr(NonNull::new(cx).unwrap());
+    let args = CallArgs::from_vp(vp, argc);
+    // 1x1 transparent PNG — enough for code that just needs *a* data URL string.
+    let js_str = new_js_string(&mut cx, "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGNgAAAAAgABc3UBGAAAAABJRU5ErkJggg==");
+    args.rval().set(if js_str.is_null() { UndefinedValue() } else { mozjs::jsval::StringValue(&*js_str) });
+    true
+}
+
+unsafe extern "C" fn canvas_measure_text(cx: *mut RawJSContext, argc: u32, vp: *mut Value) -> bool {
+    let mut cx = JSContext::from_ptr(NonNull::new(cx).unwrap());
+    let args = CallArgs::from_vp(vp, argc);
+    let text = arg_to_string(&mut cx, &args, 0);
+    let metrics = new_plain_object(&mut cx);
+    rooted!(&in(cx) let metrics_root = metrics);
+    // Rough monospace-ish estimate so layout math doesn't divide by zero.
+    let width = text.chars().count() as f64 * 6.0;
+    set_prop_f64(&mut cx, metrics_root.handle(), c"width", width);
+    set_prop_f64(&mut cx, metrics_root.handle(), c"actualBoundingBoxLeft", 0.0);
+    set_prop_f64(&mut cx, metrics_root.handle(), c"actualBoundingBoxRight", width);
+    set_prop_f64(&mut cx, metrics_root.handle(), c"actualBoundingBoxAscent", 0.0);
+    set_prop_f64(&mut cx, metrics_root.handle(), c"actualBoundingBoxDescent", 0.0);
+    set_prop_f64(&mut cx, metrics_root.handle(), c"fontBoundingBoxAscent", 0.0);
+    set_prop_f64(&mut cx, metrics_root.handle(), c"fontBoundingBoxDescent", 0.0);
+    args.rval().set(if metrics.is_null() { UndefinedValue() } else { ObjectValue(metrics) });
+    true
+}
+
+unsafe extern "C" fn canvas_get_image_data(cx: *mut RawJSContext, argc: u32, vp: *mut Value) -> bool {
+    let mut cx = JSContext::from_ptr(NonNull::new(cx).unwrap());
+    let args = CallArgs::from_vp(vp, argc);
+    let w = if argc > 2 { arg_to_f64(&args, 2) } else { 0.0 };
+    let h = if argc > 3 { arg_to_f64(&args, 3) } else { 0.0 };
+    let data_obj = new_plain_object(&mut cx);
+    rooted!(&in(cx) let data_root = data_obj);
+    let arr = wrappers2::NewArrayObject(&mut cx, &HandleValueArray::empty());
+    set_prop_obj(&mut cx, data_root.handle(), c"data", arr);
+    set_prop_f64(&mut cx, data_root.handle(), c"width", w);
+    set_prop_f64(&mut cx, data_root.handle(), c"height", h);
+    args.rval().set(if data_obj.is_null() { UndefinedValue() } else { ObjectValue(data_obj) });
+    true
+}
+
+unsafe extern "C" fn canvas_create_gradient(cx: *mut RawJSContext, argc: u32, vp: *mut Value) -> bool {
+    let mut cx = JSContext::from_ptr(NonNull::new(cx).unwrap());
+    let args = CallArgs::from_vp(vp, argc);
+    let gradient = new_plain_object(&mut cx);
+    rooted!(&in(cx) let gradient_root = gradient);
+    define_fn(&mut cx, gradient_root.handle(), c"addColorStop", Some(noop_cb), 2);
+    args.rval().set(if gradient.is_null() { UndefinedValue() } else { ObjectValue(gradient) });
     true
 }
 
@@ -1095,11 +1238,57 @@ pub(super) unsafe extern "C" fn doc_create_event(cx: *mut RawJSContext, argc: u3
     set_prop_str(&mut cx, obj_root.handle(), c"type", "");
     set_prop_bool(&mut cx, obj_root.handle(), c"bubbles", false);
     set_prop_bool(&mut cx, obj_root.handle(), c"cancelable", false);
-    define_fn(&mut cx, obj_root.handle(), c"initEvent", Some(noop_cb), 3);
+    set_prop_bool(&mut cx, obj_root.handle(), c"defaultPrevented", false);
+    set_prop_null(&mut cx, obj_root.handle(), c"detail");
+    define_fn(&mut cx, obj_root.handle(), c"initEvent", Some(doc_init_event), 3);
+    define_fn(&mut cx, obj_root.handle(), c"initCustomEvent", Some(doc_init_custom_event), 4);
     define_fn(&mut cx, obj_root.handle(), c"preventDefault", Some(noop_cb), 0);
     define_fn(&mut cx, obj_root.handle(), c"stopPropagation", Some(noop_cb), 0);
+    define_fn(&mut cx, obj_root.handle(), c"stopImmediatePropagation", Some(noop_cb), 0);
     args.rval().set(ObjectValue(obj));
     true
+}
+
+unsafe extern "C" fn doc_init_event(cx: *mut RawJSContext, argc: u32, vp: *mut Value) -> bool {
+    let mut cx = JSContext::from_ptr(NonNull::new(cx).unwrap());
+    let args = CallArgs::from_vp(vp, argc);
+    rooted!(&in(cx) let this_val = args.thisv().get());
+    init_created_event(&mut cx, this_val.handle(), &args, false);
+    args.rval().set(UndefinedValue());
+    true
+}
+
+unsafe extern "C" fn doc_init_custom_event(cx: *mut RawJSContext, argc: u32, vp: *mut Value) -> bool {
+    let mut cx = JSContext::from_ptr(NonNull::new(cx).unwrap());
+    let args = CallArgs::from_vp(vp, argc);
+    rooted!(&in(cx) let this_val = args.thisv().get());
+    init_created_event(&mut cx, this_val.handle(), &args, true);
+    args.rval().set(UndefinedValue());
+    true
+}
+
+unsafe fn init_created_event(
+    cx: &mut JSContext,
+    this_val: mozjs::gc::Handle<Value>,
+    args: &CallArgs,
+    include_detail: bool,
+) {
+    if !this_val.get().is_object() {
+        return;
+    }
+    let obj = this_val.get().to_object_or_null();
+    if obj.is_null() {
+        return;
+    }
+    rooted!(&in(cx) let obj_root = obj);
+    let event_type = arg_to_string(cx, args, 0);
+    set_prop_str(cx, obj_root.handle(), c"type", &event_type);
+    set_prop_bool(cx, obj_root.handle(), c"bubbles", args.argc_ > 1 && args.get(1).get().to_boolean());
+    set_prop_bool(cx, obj_root.handle(), c"cancelable", args.argc_ > 2 && args.get(2).get().to_boolean());
+    if include_detail && args.argc_ > 3 {
+        rooted!(&in(cx) let detail = args.get(3).get());
+        wrappers2::JS_SetProperty(cx, obj_root.handle(), c"detail".as_ptr(), detail.handle());
+    }
 }
 
 pub(super) unsafe extern "C" fn doc_create_range(cx: *mut RawJSContext, argc: u32, vp: *mut Value) -> bool {
@@ -1119,6 +1308,30 @@ pub(super) unsafe extern "C" fn doc_create_range(cx: *mut RawJSContext, argc: u3
     }
     define_fn(&mut cx, obj_root.handle(), c"getBoundingClientRect", Some(node_get_bounding_rect), 0);
     define_fn(&mut cx, obj_root.handle(), c"getClientRects", Some(return_empty_array_cb), 0);
+    args.rval().set(ObjectValue(obj));
+    true
+}
+
+pub(super) unsafe extern "C" fn doc_create_tree_walker(cx: *mut RawJSContext, argc: u32, vp: *mut Value) -> bool {
+    let mut cx = JSContext::from_ptr(NonNull::new(cx).unwrap());
+    let args = CallArgs::from_vp(vp, argc);
+    let obj = new_plain_object(&mut cx);
+    rooted!(&in(cx) let obj_root = obj);
+    if argc > 0 {
+        rooted!(&in(cx) let root = args.get(0).get());
+        wrappers2::JS_SetProperty(&mut cx, obj_root.handle(), c"root".as_ptr(), root.handle());
+        wrappers2::JS_SetProperty(&mut cx, obj_root.handle(), c"currentNode".as_ptr(), root.handle());
+    } else {
+        set_prop_null(&mut cx, obj_root.handle(), c"root");
+        set_prop_null(&mut cx, obj_root.handle(), c"currentNode");
+    }
+    define_fn(&mut cx, obj_root.handle(), c"parentNode", Some(return_null_cb), 0);
+    define_fn(&mut cx, obj_root.handle(), c"firstChild", Some(return_null_cb), 0);
+    define_fn(&mut cx, obj_root.handle(), c"lastChild", Some(return_null_cb), 0);
+    define_fn(&mut cx, obj_root.handle(), c"previousSibling", Some(return_null_cb), 0);
+    define_fn(&mut cx, obj_root.handle(), c"nextSibling", Some(return_null_cb), 0);
+    define_fn(&mut cx, obj_root.handle(), c"previousNode", Some(return_null_cb), 0);
+    define_fn(&mut cx, obj_root.handle(), c"nextNode", Some(return_null_cb), 0);
     args.rval().set(ObjectValue(obj));
     true
 }

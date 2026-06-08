@@ -105,11 +105,16 @@ impl SmRuntime {
             rooted!(&in(cx) let global = global_raw);
             rooted!(&in(cx) let mut rval = UndefinedValue());
             let options = CompileOptionsWrapper::new(cx, "inline", 1);
-            let result = evaluate_script(cx, global.handle(), script, rval.handle_mut(), options);
+            // Keep the realm entered across both evaluation and exception
+            // retrieval: `evaluate_script` exits its own realm guard on return,
+            // so fetching the pending exception afterwards (with no realm
+            // entered) segfaults inside JS_GetPendingException.
+            let mut realm = AutoRealm::new_from_handle(cx, global.handle());
+            let result = evaluate_script(&mut realm, global.handle(), script, rval.handle_mut(), options);
             match result {
                 Ok(_) => Ok(()),
                 Err(()) => {
-                    let msg = pending_exception_string(cx);
+                    let msg = pending_exception_string(&mut realm);
                     Err(msg)
                 }
             }
@@ -171,6 +176,8 @@ impl SmRuntime {
         unsafe {
             let cx = self.rt.cx();
             rooted!(&in(cx) let global = global_raw);
+            let mut realm = AutoRealm::new_from_handle(cx, global.handle());
+            let (global_handle, realm_ref) = realm.global_and_reborrow();
 
             // Drain microtasks first
             for _ in 0..1000 {
@@ -178,23 +185,21 @@ impl SmRuntime {
                 if ids.is_empty() { break; }
                 fired = true;
                 for id in ids {
-                    rooted!(&in(cx) let mut rval = UndefinedValue());
-                    call_stored_callback(cx, global.handle(), id, &[]);
-                    delete_callback(cx, global.handle(), id);
-                    clear_pending_exception(cx);
+                    call_stored_callback(realm_ref, global_handle, id, &[]);
+                    delete_callback(realm_ref, global_handle, id);
+                    clear_pending_exception(realm_ref);
                 }
             }
 
             // Fire ready timers
             for entry in &ready {
                 let id = entry.id;
-                rooted!(&in(cx) let mut rval = UndefinedValue());
-                call_stored_callback(cx, global.handle(), id, &[]);
-                clear_pending_exception(cx);
+                call_stored_callback(realm_ref, global_handle, id, &[]);
+                clear_pending_exception(realm_ref);
                 fired = true;
 
                 if entry.interval.is_none() {
-                    delete_callback(cx, global.handle(), id);
+                    delete_callback(realm_ref, global_handle, id);
                 }
             }
         }
@@ -229,11 +234,12 @@ impl SmRuntime {
         unsafe {
             let cx = self.rt.cx();
             rooted!(&in(cx) let global = global_raw);
+            let mut realm = AutoRealm::new_from_handle(cx, global.handle());
+            let (global_handle, realm_ref) = realm.global_and_reborrow();
             for entry in &frames {
-                rooted!(&in(cx) let mut rval = UndefinedValue());
-                call_stored_callback(cx, global.handle(), entry.id, &[ts_val]);
-                delete_callback(cx, global.handle(), entry.id);
-                clear_pending_exception(cx);
+                call_stored_callback(realm_ref, global_handle, entry.id, &[ts_val]);
+                delete_callback(realm_ref, global_handle, entry.id);
+                clear_pending_exception(realm_ref);
             }
         }
 
@@ -258,13 +264,15 @@ impl SmRuntime {
         unsafe {
             let cx = self.rt.cx();
             rooted!(&in(cx) let global = global_raw);
+            let mut realm = AutoRealm::new_from_handle(cx, global.handle());
+            let (global_handle, realm_ref) = realm.global_and_reborrow();
 
-            let event_obj = make_event_object(cx, event_type);
+            let event_obj = make_event_object(realm_ref, event_type);
             let event_val = mozjs::jsval::ObjectValue(event_obj);
 
             for id in &all_ids {
-                call_stored_callback(cx, global.handle(), *id, &[event_val]);
-                clear_pending_exception(cx);
+                call_stored_callback(realm_ref, global_handle, *id, &[event_val]);
+                clear_pending_exception(realm_ref);
             }
         }
 
@@ -280,11 +288,13 @@ impl SmRuntime {
         unsafe {
             let cx = self.rt.cx();
             rooted!(&in(cx) let global = global_raw);
-            let event_obj = make_event_object(cx, "DOMContentLoaded");
+            let mut realm = AutoRealm::new_from_handle(cx, global.handle());
+            let (global_handle, realm_ref) = realm.global_and_reborrow();
+            let event_obj = make_event_object(realm_ref, "DOMContentLoaded");
             let event_val = mozjs::jsval::ObjectValue(event_obj);
             for id in &ids {
-                call_stored_callback(cx, global.handle(), *id, &[event_val]);
-                clear_pending_exception(cx);
+                call_stored_callback(realm_ref, global_handle, *id, &[event_val]);
+                clear_pending_exception(realm_ref);
             }
         }
     }
