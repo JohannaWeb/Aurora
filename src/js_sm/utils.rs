@@ -267,6 +267,32 @@ pub(super) unsafe fn call_stored_callback(
     }
 }
 
+/// Look up a function stored as a named property on `global` (e.g. a helper
+/// installed by a JS bootstrap polyfill) and call it with a single argument.
+/// Used by native code that needs to hand a freshly-created JS object to a
+/// JS-side "decorator" — e.g. `__aurora_install_media_element__` turning a
+/// plain `<video>`/`<audio>` element object into an `HTMLMediaElement`-shaped
+/// one. Silently does nothing if the named property isn't a callable function,
+/// so call sites don't need to special-case "polyfill not installed yet".
+pub(super) unsafe fn call_named_global_fn(
+    cx: &mut JSContext,
+    global: mozjs::gc::Handle<*mut JSObject>,
+    name: &CStr,
+    arg: Value,
+) {
+    rooted!(&in(cx) let mut fn_val = UndefinedValue());
+    if !wrappers2::JS_GetProperty(cx, global, name.as_ptr(), fn_val.handle_mut())
+        || !fn_val.get().is_object()
+    {
+        return;
+    }
+    rooted!(&in(cx) let mut rval = UndefinedValue());
+    let arr = mozjs::jsapi::HandleValueArray::from(unsafe {
+        mozjs::jsapi::Handle::from_marked_location(&arg as *const Value)
+    });
+    wrappers2::JS_CallFunctionValue(cx, global, fn_val.handle(), &arr, rval.handle_mut());
+}
+
 pub(super) unsafe fn delete_callback(
     cx: &mut JSContext,
     global: mozjs::gc::Handle<*mut JSObject>,

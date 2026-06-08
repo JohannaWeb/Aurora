@@ -8,7 +8,7 @@ use mozjs::jsapi::{OnNewGlobalHookOption, Value};
 use mozjs::jsval::{DoubleValue, UndefinedValue};
 use mozjs::realm::AutoRealm;
 use mozjs::rooted;
-use mozjs::rust::wrappers2::{JS_NewGlobalObject, JS_SetContextPrivate};
+use mozjs::rust::wrappers2::{JS_NewGlobalObject, JS_SetContextPrivate, RunJobs, UseInternalJobQueues};
 use mozjs::rust::{
     evaluate_script, CompileOptionsWrapper, RealmOptions, Runtime, SIMPLE_GLOBAL_CLASS,
 };
@@ -37,6 +37,15 @@ impl SmRuntime {
     pub fn new(document: NodePtr) -> Self {
         let handle = get_engine_handle();
         let mut rt = Runtime::new(handle);
+
+        // Native Promise reactions (`.then`/`.catch`/async-await continuations)
+        // are queued as jobs that SpiderMonkey never runs on its own — the
+        // embedder owns the event loop. Without this, every native Promise is
+        // permanently pending: `fetch(...).then(cb)` would never call `cb`.
+        // `RunJobs` (called from `tick`) drains this queue.
+        unsafe {
+            let _ = UseInternalJobQueues(rt.cx());
+        }
 
         let state = Box::new(SmState {
             document: document.clone(),
@@ -101,7 +110,7 @@ impl SmRuntime {
             return Err("No global object".into());
         }
 
-        unsafe {
+        let result = unsafe {
             rooted!(&in(cx) let global = global_raw);
             rooted!(&in(cx) let mut rval = UndefinedValue());
             let options = CompileOptionsWrapper::new(cx, "inline", 1);
@@ -113,7 +122,14 @@ impl SmRuntime {
                     Err(msg)
                 }
             }
-        }
+        };
+
+        // Perform a microtask checkpoint: run any Promise reaction jobs queued
+        // while the script ran, so synchronously-settled promises (e.g.
+        // `Promise.resolve(x).then(cb)`) deliver before the next script/tick.
+        unsafe { RunJobs(cx) };
+
+        result
     }
 
     pub fn set_shared_state(
@@ -197,6 +213,10 @@ impl SmRuntime {
                     delete_callback(cx, global.handle(), id);
                 }
             }
+
+            // Drain native Promise reaction jobs queued by the callbacks above
+            // (e.g. a timer firing `fetch(...).then(cb)`).
+            RunJobs(cx);
         }
 
         // Re-register interval timers with new deadlines
@@ -235,6 +255,8 @@ impl SmRuntime {
                 delete_callback(cx, global.handle(), entry.id);
                 clear_pending_exception(cx);
             }
+
+            RunJobs(cx);
         }
 
         self.state.registry.has_dirty_bits()
@@ -266,6 +288,8 @@ impl SmRuntime {
                 call_stored_callback(cx, global.handle(), *id, &[event_val]);
                 clear_pending_exception(cx);
             }
+
+            RunJobs(cx);
         }
 
         true
@@ -286,6 +310,8 @@ impl SmRuntime {
                 call_stored_callback(cx, global.handle(), *id, &[event_val]);
                 clear_pending_exception(cx);
             }
+
+            RunJobs(cx);
         }
     }
 
