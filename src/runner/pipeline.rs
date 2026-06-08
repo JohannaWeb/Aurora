@@ -87,6 +87,12 @@ fn viewport_size() -> ViewportSize {
     }
 }
 
+// Scripts larger than this are skipped as a memory/time safety bound.
+// SpiderMonkey JITs real-world bundles fine, so these budgets are sized for
+// modern multi-MB sites (e.g. YouTube) rather than an interpreter-only engine.
+const MAX_SCRIPT_BYTES: usize = 8 * 1024 * 1024; // 8 MB per script
+const MAX_TOTAL_SCRIPT_BYTES: usize = 32 * 1024 * 1024; // 32 MB across all scripts
+
 fn run_scripts(
     dom: &crate::dom::NodePtr,
     base_url: Option<&str>,
@@ -133,7 +139,12 @@ pub fn fetch_script(
     identity: &Identity,
 ) -> Option<String> {
     if !is_url {
-        return Some(source);
+        return if source.len() <= MAX_SCRIPT_BYTES {
+            Some(source)
+        } else {
+            eprintln!("JS: skipping inline script ({} KB, over limit)", source.len() / 1024);
+            None
+        };
     }
 
     let base = base_url?;
@@ -153,6 +164,14 @@ pub fn fetch_script(
             return None;
         }
     };
+
+    if content.len() > MAX_SCRIPT_BYTES {
+        eprintln!(
+            "JS: skipping {} ({} KB, over {}KB limit)",
+            full_url, content.len() / 1024, MAX_SCRIPT_BYTES / 1024
+        );
+        return None;
+    }
 
     Some(content)
 }

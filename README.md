@@ -1,6 +1,6 @@
 # Aurora
 
-A from-scratch Rust browser engine with GPU rendering, HTTPS fetch, and an embedded Boa-based JavaScript DOM/BOM runtime bridge.
+A from-scratch Rust browser engine with GPU rendering, HTTPS fetch, and an embedded SpiderMonkey-based JavaScript DOM/BOM runtime bridge.
 
 Aurora is not Servo, Chromium, WebKit, or a wrapper around an existing browser. It is an experimental browser engine written in Rust as part of the broader Bastion sovereign stack.
 
@@ -31,14 +31,14 @@ Aurora currently focuses on the core pieces of a browser engine:
 * local `file://` fetch support gated by identity/capability checks
 * placeholder rendering for remote images using `<img>` layout and alt text
 * optional `<video>` frame playback through **ffmpeg-next**
-* embedded **Boa** JavaScript runtime
+* embedded **SpiderMonkey** JavaScript runtime
 * live Rust DOM/BOM bridge exposed to JavaScript
 
 Aurora is now more than a static renderer. It has an experimental runtime surface that allows many modern scripts to initialize without immediately crashing, even though large parts of the Web Platform are still partial or stubbed.
 
 ## JavaScript Runtime
 
-Aurora embeds **Boa** as its JavaScript engine and exposes a live DOM/BOM bridge.
+Aurora embeds **SpiderMonkey** as its JavaScript engine and exposes a live DOM/BOM bridge.
 
 Each JavaScript node object carries a `__node_id` that points back into a Rust-side `NodeRegistry`. Methods recover the underlying Rust `NodePtr` from the registry on each call, so mutations from the parser, renderer, or JavaScript bridge remain visible through the same JS handle.
 
@@ -86,7 +86,7 @@ Aurora uses a GPU-backed rendering pipeline:
 4. **Text Shaping**: `rustybuzz` converts UTF-8 strings into positioned glyphs, sampled from a pre-baked glyph atlas texture.
 5. **Rasterization**: `vello::Renderer` compiles the scene and executes GPU compute work through `wgpu`.
 6. **Presentation**: the final texture is presented to the window surface.
-7. **Runtime Bridge**: embedded Boa JavaScript can inspect and mutate the Rust DOM through the live DOM/BOM bridge.
+7. **Runtime Bridge**: embedded SpiderMonkey JavaScript can inspect and mutate the Rust DOM through the live DOM/BOM bridge.
 
 ## Networking and Fetching
 

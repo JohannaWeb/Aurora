@@ -1,3 +1,4 @@
+
 #![allow(unsafe_op_in_unsafe_fn)]
 use std::ptr::NonNull;
 
@@ -61,12 +62,11 @@ pub(in crate::js_sm) unsafe fn install_browser_apis(
     let ss = new_storage_object(cx);
     set_prop_obj(cx, global, c"sessionStorage", ss);
 
-    // Minimal event target stubs for CustomEvent / Event constructors.
+    // Minimal event target stubs for the Event subtypes that
+    // install_youtube_polyfills's JS-based Event/CustomEvent don't cover.
     // Real constructors carry a `.prototype` object — sites polyfill via
     // `Event.prototype.foo = ...`, which throws on a bare define_fn function.
     for name in &[
-        c"CustomEvent",
-        c"Event",
         c"MouseEvent",
         c"KeyboardEvent",
         c"FocusEvent",
@@ -92,8 +92,10 @@ pub(in crate::js_sm) unsafe fn install_browser_apis(
 
     install_dom_constructor_prototypes(cx, global);
 
-    // Image — `new Image(width, height)` returns an <img>-like object
-    define_ctor(cx, global, c"Image", Some(image_ctor), 2);
+    // Event / CustomEvent / Image / trustedTypes / customElements / CSS —
+    // expressed as JS so constructors get real prototype chains (`instanceof`,
+    // inheritance) that YouTube's bootstrap relies on. See install_youtube_polyfills.
+    install_youtube_polyfills(cx, global);
 
     // ResizeObserver / MutationObserver / IntersectionObserver stubs
     for name in &[
@@ -121,36 +123,29 @@ pub(in crate::js_sm) unsafe fn install_browser_apis(
     define_ctor(cx, global, c"Blob", Some(blob_ctor), 2);
     define_ctor(cx, global, c"File", Some(blob_ctor), 3);
 
-    // Promise-based fetch — returns a rejected promise stub (sync fetch handled by __aurora_fetch_sync__)
-    define_fn(cx, global, c"fetch", Some(fetch_stub), 1);
+    // fetch — performs the request synchronously through __aurora_fetch_sync__
+    // (already wired to the real HTTP client) and wraps the result in a real
+    // Promise/Response, settled immediately. Real async would need a non-blocking
+    // fetch path; this at least delivers data instead of hanging forever.
+    install_fetch(cx, global);
 
-    // XHR constructor
-    let xhr_proto = define_ctor_with_prototype(cx, global, c"XMLHttpRequest", Some(xhr_ctor), 0);
-    rooted!(&in(cx) let xhr_proto_root = xhr_proto);
-    install_event_target_methods(cx, xhr_proto_root.handle());
-    install_xhr_methods(cx, xhr_proto_root.handle());
+    // XHR — like fetch, built in JS over __aurora_fetch_sync__ so it actually
+    // delivers data (deferred to a microtask so listeners attached right after
+    // `send()` — the standard pattern — are present when it fires).
+    install_xhr(cx, global);
 
-    // WebSocket constructor stub
+    // WebSocket — define_ctor sets JSFUN_CONSTRUCTOR so `new WebSocket(...)`
+    // works (plain define_fn produces an uncallable-with-`new` function).
     define_ctor(cx, global, c"WebSocket", Some(websocket_ctor), 2);
 
-    // MessageChannel / MessagePort scheduler stubs
+    // MessageChannel / MessagePort scheduler stub. MessageEvent itself comes
+    // from install_youtube_polyfills's JS Event/CustomEvent prototype chain.
     define_ctor_with_prototype(cx, global, c"MessageChannel", Some(message_channel_ctor), 0);
-    define_ctor_with_prototype(cx, global, c"MessageEvent", Some(custom_event_ctor), 2);
 
-    let custom_elements = new_plain_object(cx);
-    rooted!(&in(cx) let custom_elements_root = custom_elements);
-    define_fn(cx, custom_elements_root.handle(), c"define", Some(noop), 2);
-    define_fn(cx, custom_elements_root.handle(), c"get", Some(get_selection_null), 1);
-    define_fn(cx, custom_elements_root.handle(), c"upgrade", Some(noop), 1);
-    define_fn(cx, custom_elements_root.handle(), c"whenDefined", Some(resolved_promise_stub), 1);
-    define_fn(
-        cx,
-        custom_elements_root.handle(),
-        c"polyfillWrapFlushCallback",
-        Some(call_first_callback),
-        1,
-    );
-    set_prop_obj(cx, global, c"customElements", custom_elements);
+    // MediaSource / SourceBuffer / HTMLMediaElement surface — gives YouTube's
+    // player a real (if non-functional-decode) object graph to drive instead
+    // of crashing on `undefined.addSourceBuffer`. See install_media_polyfills.
+    install_media_polyfills(cx, global);
 }
 
 // ── Impl ─────────────────────────────────────────────────────────────────────
@@ -337,19 +332,6 @@ unsafe fn install_element_methods(cx: &mut JSContext, proto: mozjs::gc::Handle<*
     define_fn(cx, proto, c"after", Some(noop), 1);
 }
 
-unsafe fn install_xhr_methods(cx: &mut JSContext, proto: mozjs::gc::Handle<*mut JSObject>) {
-    set_prop_i32(cx, proto, c"status", 0);
-    set_prop_i32(cx, proto, c"readyState", 0);
-    set_prop_str(cx, proto, c"responseText", "");
-    set_prop_str(cx, proto, c"responseURL", "");
-    set_prop_str(cx, proto, c"statusText", "");
-    define_fn(cx, proto, c"open", Some(noop), 5);
-    define_fn(cx, proto, c"send", Some(noop), 1);
-    define_fn(cx, proto, c"abort", Some(noop), 0);
-    define_fn(cx, proto, c"setRequestHeader", Some(noop), 2);
-    define_fn(cx, proto, c"getResponseHeader", Some(storage_get_item), 1);
-}
-
 unsafe extern "C" fn noop(_cx: *mut RawJSContext, _argc: u32, vp: *mut Value) -> bool {
     let args = CallArgs::from_vp(vp, _argc);
     args.rval().set(UndefinedValue());
@@ -444,9 +426,43 @@ unsafe extern "C" fn return_empty_string(cx: *mut RawJSContext, _argc: u32, vp: 
     true
 }
 
-unsafe extern "C" fn get_selection_null(_cx: *mut RawJSContext, _argc: u32, vp: *mut Value) -> bool {
+/// `window.getSelection()` — YouTube reads `.anchorNode`/`.focusNode`/etc.
+/// straight off the result without a null check, so returning `null` throws.
+/// Return a minimal empty-selection object instead.
+unsafe extern "C" fn get_selection_null(cx: *mut RawJSContext, _argc: u32, vp: *mut Value) -> bool {
+    let mut cx = JSContext::from_ptr(NonNull::new(cx).unwrap());
+    let args = CallArgs::from_vp(vp, _argc);
+
+    let obj = new_plain_object(&mut cx);
+    rooted!(&in(cx) let obj_root = obj);
+    set_prop_null(&mut cx, obj_root.handle(), c"anchorNode");
+    set_prop_null(&mut cx, obj_root.handle(), c"focusNode");
+    set_prop_i32(&mut cx, obj_root.handle(), c"anchorOffset", 0);
+    set_prop_i32(&mut cx, obj_root.handle(), c"focusOffset", 0);
+    set_prop_i32(&mut cx, obj_root.handle(), c"rangeCount", 0);
+    set_prop_bool(&mut cx, obj_root.handle(), c"isCollapsed", true);
+    set_prop_str(&mut cx, obj_root.handle(), c"type", "None");
+    define_fn(&mut cx, obj_root.handle(), c"removeAllRanges", Some(noop), 0);
+    define_fn(&mut cx, obj_root.handle(), c"collapse", Some(noop), 2);
+    define_fn(&mut cx, obj_root.handle(), c"addRange", Some(noop), 1);
+    define_fn(&mut cx, obj_root.handle(), c"getRangeAt", Some(get_selection_null_returner), 1);
+    define_fn(&mut cx, obj_root.handle(), c"toString", Some(empty_string_returner), 0);
+
+    args.rval().set(ObjectValue(obj));
+    true
+}
+
+unsafe extern "C" fn get_selection_null_returner(_cx: *mut RawJSContext, _argc: u32, vp: *mut Value) -> bool {
     let args = CallArgs::from_vp(vp, _argc);
     args.rval().set(NullValue());
+    true
+}
+
+unsafe extern "C" fn empty_string_returner(cx: *mut RawJSContext, _argc: u32, vp: *mut Value) -> bool {
+    let mut cx = JSContext::from_ptr(NonNull::new(cx).unwrap());
+    let args = CallArgs::from_vp(vp, _argc);
+    let js_str = new_js_string(&mut cx, "");
+    args.rval().set(if js_str.is_null() { UndefinedValue() } else { mozjs::jsval::StringValue(&*js_str) });
     true
 }
 
@@ -642,40 +658,6 @@ unsafe extern "C" fn abort_signal_ctor(cx: *mut RawJSContext, argc: u32, vp: *mu
     true
 }
 
-unsafe extern "C" fn resolved_promise_stub(cx: *mut RawJSContext, argc: u32, vp: *mut Value) -> bool {
-    let mut cx = JSContext::from_ptr(NonNull::new(cx).unwrap());
-    let args = CallArgs::from_vp(vp, argc);
-    let thenable = new_plain_object(&mut cx);
-    rooted!(&in(cx) let thenable_root = thenable);
-    define_fn(&mut cx, thenable_root.handle(), c"then", Some(call_first_callback), 1);
-    define_fn(&mut cx, thenable_root.handle(), c"catch", Some(noop), 1);
-    define_fn(&mut cx, thenable_root.handle(), c"finally", Some(call_first_callback), 1);
-    args.rval().set(ObjectValue(thenable));
-    true
-}
-
-unsafe extern "C" fn call_first_callback(cx: *mut RawJSContext, argc: u32, vp: *mut Value) -> bool {
-    let mut cx = JSContext::from_ptr(NonNull::new(cx).unwrap());
-    let args = CallArgs::from_vp(vp, argc);
-
-    if argc > 0 && args.get(0).get().is_object() {
-        let callback = args.get(0).get();
-        rooted!(&in(cx) let callback_root = callback);
-        rooted!(&in(cx) let mut ignored = UndefinedValue());
-        rooted!(&in(cx) let global = wrappers2::CurrentGlobalOrNull(&mut cx));
-        let _ = wrappers2::JS_CallFunctionValue(
-            &mut cx,
-            global.handle(),
-            callback_root.handle(),
-            &mozjs::jsapi::HandleValueArray::empty(),
-            ignored.handle_mut(),
-        );
-    }
-
-    args.rval().set(args.thisv().get());
-    true
-}
-
 unsafe extern "C" fn init_event(cx: *mut RawJSContext, argc: u32, vp: *mut Value) -> bool {
     let mut cx = JSContext::from_ptr(NonNull::new(cx).unwrap());
     let args = CallArgs::from_vp(vp, argc);
@@ -791,6 +773,600 @@ unsafe extern "C" fn custom_event_ctor(cx: *mut RawJSContext, argc: u32, vp: *mu
     true
 }
 
+/// Polyfills YouTube's bootstrap needs that are far simpler to express as JS
+/// than to build through raw JSAPI: real prototype chains for Event/CustomEvent
+/// (so `instanceof` and subclassing work), a Trusted Types stub (YouTube wraps
+/// all HTML/script sinks through it), and a customElements registry (YouTube
+/// defines dozens of custom elements at startup and awaits `whenDefined`).
+unsafe fn install_youtube_polyfills(cx: &mut JSContext, global: mozjs::gc::Handle<*mut JSObject>) {
+    eval_bootstrap(cx, global, c"event-constructors", r#"
+        (function() {
+            globalThis.Image = function Image(width, height) {
+                this.src = ''; this.width = width || 0; this.height = height || 0;
+                this.naturalWidth = 0; this.naturalHeight = 0; this.complete = false;
+                this.onload = null; this.onerror = null; this.crossOrigin = null;
+                this.decoding = 'auto'; this.loading = 'eager';
+                this.addEventListener = function(){}; this.removeEventListener = function(){};
+                this.decode = function(){ return Promise.resolve(); };
+            };
+            globalThis.Image.prototype = Object.create(
+                (typeof HTMLImageElement !== 'undefined') ? HTMLImageElement.prototype : Object.prototype
+            );
+
+            globalThis.Event = function Event(type, init) {
+                var obj = (this instanceof Event) ? this : {};
+                init = init || {};
+                obj.type = type || '';
+                obj.bubbles = !!(init.bubbles);
+                obj.cancelable = !!(init.cancelable);
+                obj.defaultPrevented = false;
+                obj.isTrusted = false;
+                obj.timeStamp = 0;
+                obj.target = null; obj.currentTarget = null;
+                obj.stopPropagation = function(){};
+                obj.stopImmediatePropagation = function(){};
+                obj.preventDefault = function(){ obj.defaultPrevented = true; };
+                obj.composedPath = function(){ return []; };
+                if (!(this instanceof Event)) return obj;
+            };
+
+            globalThis.CustomEvent = function CustomEvent(type, init) {
+                globalThis.Event.call(this, type, init);
+                this.detail = (init && init.detail !== undefined) ? init.detail : null;
+            };
+            globalThis.CustomEvent.prototype = Object.create(globalThis.Event.prototype);
+            globalThis.CustomEvent.prototype.constructor = globalThis.CustomEvent;
+
+            globalThis.ErrorEvent = function ErrorEvent(type, init) {
+                globalThis.Event.call(this, type, init);
+                init = init || {};
+                this.message = init.message || ''; this.error = init.error || null;
+            };
+            globalThis.ErrorEvent.prototype = Object.create(globalThis.Event.prototype);
+
+            globalThis.MessageEvent = function MessageEvent(type, init) {
+                globalThis.Event.call(this, type, init);
+                init = init || {};
+                this.data = init.data !== undefined ? init.data : null;
+                this.origin = init.origin || ''; this.source = init.source || null;
+            };
+            globalThis.MessageEvent.prototype = Object.create(globalThis.Event.prototype);
+
+            globalThis.PromiseRejectionEvent = function PromiseRejectionEvent(type, init) {
+                globalThis.Event.call(this, type, init);
+                init = init || {};
+                this.promise = init.promise || null; this.reason = init.reason;
+            };
+            globalThis.PromiseRejectionEvent.prototype = Object.create(globalThis.Event.prototype);
+        })();
+    "#);
+
+    eval_bootstrap(cx, global, c"trusted-types", r#"
+        (function() {
+            function makeTrusted(val) { return { toString: function(){ return val; } }; }
+            globalThis.trustedTypes = {
+                createPolicy: function(name, rules) {
+                    return {
+                        name: name,
+                        createHTML: function(s) { return makeTrusted(rules && rules.createHTML ? rules.createHTML(s) : s); },
+                        createScript: function(s) { return makeTrusted(rules && rules.createScript ? rules.createScript(s) : s); },
+                        createScriptURL: function(s) { return makeTrusted(rules && rules.createScriptURL ? rules.createScriptURL(s) : s); }
+                    };
+                },
+                getAttributeType: function() { return null; },
+                getPropertyType: function() { return null; },
+                isHTML: function(v) { return v && typeof v === 'object' && 'toString' in v; },
+                isScript: function(v) { return v && typeof v === 'object' && 'toString' in v; },
+                isScriptURL: function(v) { return v && typeof v === 'object' && 'toString' in v; },
+                emptyHTML: makeTrusted(''),
+                emptyScript: makeTrusted(''),
+                defaultPolicy: null
+            };
+        })();
+    "#);
+
+    eval_bootstrap(cx, global, c"custom-elements", r#"
+        (function() {
+            var registry = {};
+            var patchedCreateElement = false;
+
+            // Upgrade: swap the plain stub element's prototype to the
+            // registered class/constructor's prototype and run it bound to
+            // the element, then fire connectedCallback. This is exactly what
+            // function-style definitions (`function MyEl(){...}`) expect.
+            // ES6 `class X extends HTMLElement` constructors throw "class
+            // constructor cannot be invoked without 'new'" when called this
+            // way — caught below, leaving the element as a plain (but at
+            // least present and styleable) stub rather than crashing the page.
+            function tryUpgrade(el) {
+                if (!el || el.nodeType !== 1 || el.__ce_upgraded__) return;
+                var name = el.localName || (el.tagName ? el.tagName.toLowerCase() : '');
+                var ctor = registry[name];
+                if (!ctor) return;
+                el.__ce_upgraded__ = true;
+                try {
+                    Object.setPrototypeOf(el, ctor.prototype);
+                    ctor.call(el);
+                } catch (e) {
+                    return;
+                }
+                if (typeof el.connectedCallback === 'function') {
+                    try { el.connectedCallback(); } catch (e) {}
+                }
+            }
+
+            function upgradeTree(root) {
+                if (!root) return;
+                try {
+                    tryUpgrade(root);
+                    if (typeof root.querySelectorAll === 'function') {
+                        var all = root.querySelectorAll('*');
+                        for (var i = 0; i < all.length; i++) { tryUpgrade(all[i]); }
+                    }
+                } catch (e) {}
+            }
+
+            // Newly created elements (`document.createElement('ytd-app')`)
+            // need upgrading too — patch it in lazily once `document` exists
+            // (it doesn't yet at globals-install time).
+            function ensureCreateElementPatch() {
+                if (patchedCreateElement) return;
+                if (typeof document === 'undefined' || typeof document.createElement !== 'function') return;
+                patchedCreateElement = true;
+                var orig = document.createElement.bind(document);
+                document.createElement = function(tagName, options) {
+                    var el = orig(tagName, options);
+                    tryUpgrade(el);
+                    return el;
+                };
+            }
+
+            globalThis.customElements = {
+                define: function(name, ctor, opts) {
+                    registry[name] = ctor;
+                    ensureCreateElementPatch();
+                    if (typeof document !== 'undefined' && typeof document.querySelectorAll === 'function') {
+                        try {
+                            var existing = document.querySelectorAll(name);
+                            for (var i = 0; i < existing.length; i++) { tryUpgrade(existing[i]); }
+                        } catch (e) {}
+                    }
+                },
+                get: function(name) { return registry[name]; },
+                whenDefined: function(name) {
+                    return registry[name] ? Promise.resolve(registry[name]) : new Promise(function(res) {
+                        var orig = customElements.define;
+                        customElements.define = function(n, c, o) {
+                            orig.call(customElements, n, c, o);
+                            if (n === name) res(c);
+                        };
+                    });
+                },
+                upgrade: function(root) { upgradeTree(root); }
+            };
+        })();
+    "#);
+
+    eval_bootstrap(cx, global, c"css-stub", r#"
+        (function() {
+            globalThis.CSS = {
+                supports: function() { return false; },
+                escape: function(s) { return String(s); }
+            };
+        })();
+    "#);
+}
+
+/// `MediaSource` / `SourceBuffer` / `HTMLMediaElement` surface for YouTube's
+/// player. Aurora has no streaming demux/decode pipeline yet (see `src/media.rs`
+/// — it decodes whole files upfront, nothing like MSE's incremental
+/// `appendBuffer` model), so none of this actually feeds bytes to a decoder.
+/// What it provides is *shape*: real constructors, prototype chains, event
+/// ordering (`loadstart` → `loadedmetadata` → `canplay` → `playing` →
+/// `timeupdate`/`seeked`, `sourceopen`, `updateend`, ...) and state machines
+/// (`readyState`/`networkState`/`updating`) so player bootstrap code that
+/// gates on these — which all of them do — proceeds instead of throwing on
+/// `undefined.addSourceBuffer` or hanging forever waiting for an event that
+/// never fires. Wiring this to real decoded frames/audio is the next step
+/// once a streaming pipeline exists.
+unsafe fn install_media_polyfills(cx: &mut JSContext, global: mozjs::gc::Handle<*mut JSObject>) {
+    eval_bootstrap(cx, global, c"media-source", r#"
+        (function() {
+            if (typeof globalThis.DOMException === 'undefined') {
+                globalThis.DOMException = function DOMException(message, name) {
+                    var err = new Error(message || '');
+                    err.name = name || 'Error';
+                    err.code = 0;
+                    return err;
+                };
+            }
+
+            function TimeRanges(ranges) {
+                this._ranges = ranges || [];
+            }
+            Object.defineProperty(TimeRanges.prototype, 'length', {
+                get: function() { return this._ranges.length; }
+            });
+            TimeRanges.prototype.start = function(i) {
+                if (!this._ranges[i]) throw new DOMException('Index out of range', 'IndexSizeError');
+                return this._ranges[i][0];
+            };
+            TimeRanges.prototype.end = function(i) {
+                if (!this._ranges[i]) throw new DOMException('Index out of range', 'IndexSizeError');
+                return this._ranges[i][1];
+            };
+            globalThis.__aurora_TimeRanges__ = TimeRanges;
+
+            function makeEventTarget(obj) {
+                obj._listeners = {};
+                obj.addEventListener = function(type, cb) {
+                    if (typeof cb !== 'function') return;
+                    (obj._listeners[type] = obj._listeners[type] || []).push(cb);
+                };
+                obj.removeEventListener = function(type, cb) {
+                    var l = obj._listeners[type];
+                    if (!l) return;
+                    var i = l.indexOf(cb);
+                    if (i >= 0) l.splice(i, 1);
+                };
+                obj._dispatch = function(type, init) {
+                    var ev = Object.assign({ type: type, target: obj, currentTarget: obj,
+                        bubbles: false, cancelable: false, defaultPrevented: false,
+                        preventDefault: function(){}, stopPropagation: function(){},
+                        stopImmediatePropagation: function(){} }, init || {});
+                    var handler = obj['on' + type];
+                    if (typeof handler === 'function') { try { handler.call(obj, ev); } catch (e) {} }
+                    var l = obj._listeners[type];
+                    if (l) { var copy = l.slice(); for (var i = 0; i < copy.length; i++) { try { copy[i].call(obj, ev); } catch (e) {} } }
+                };
+            }
+
+            function SourceBuffer(mediaSource, mimeType) {
+                makeEventTarget(this);
+                this.mediaSource = mediaSource;
+                this.mode = 'segments';
+                this.updating = false;
+                this.timestampOffset = 0;
+                this.appendWindowStart = 0;
+                this.appendWindowEnd = Infinity;
+                this.trackDefaults = null;
+                this._mimeType = mimeType || '';
+                this._buffered = [];
+            }
+            Object.defineProperty(SourceBuffer.prototype, 'buffered', {
+                get: function() { return new TimeRanges(this._buffered); }
+            });
+            function bufferAppendOp(self, fn) {
+                if (self.updating) {
+                    self._dispatch('error');
+                    throw new DOMException('SourceBuffer is updating', 'InvalidStateError');
+                }
+                self.updating = true;
+                self._dispatch('updatestart');
+                queueMicrotask(function() {
+                    try { fn(); } catch (e) {}
+                    self.updating = false;
+                    self._dispatch('update');
+                    self._dispatch('updateend');
+                    if (self.mediaSource) self.mediaSource._onBufferUpdated();
+                });
+            }
+            SourceBuffer.prototype.appendBuffer = function(data) {
+                var self = this;
+                bufferAppendOp(self, function() {
+                    var dur = self.mediaSource ? self.mediaSource._duration : NaN;
+                    var lastEnd = self._buffered.length ? self._buffered[self._buffered.length - 1][1] : self.timestampOffset;
+                    var end = (isFinite(dur) && dur > lastEnd) ? dur : (lastEnd + 10);
+                    self._buffered.push([self.timestampOffset, end]);
+                });
+            };
+            SourceBuffer.prototype.appendStream = SourceBuffer.prototype.appendBuffer;
+            SourceBuffer.prototype.abort = function() {
+                this.updating = false;
+            };
+            SourceBuffer.prototype.remove = function(start, end) {
+                var self = this;
+                bufferAppendOp(self, function() {
+                    self._buffered = self._buffered
+                        .map(function(r) {
+                            if (end <= r[0] || start >= r[1]) return [r];
+                            var parts = [];
+                            if (start > r[0]) parts.push([r[0], start]);
+                            if (end < r[1]) parts.push([end, r[1]]);
+                            return parts;
+                        })
+                        .reduce(function(acc, parts) { return acc.concat(parts); }, []);
+                });
+            };
+            SourceBuffer.prototype.changeType = function() {};
+
+            function MediaSource() {
+                makeEventTarget(this);
+                this.readyState = 'closed';
+                this.sourceBuffers = [];
+                this.activeSourceBuffers = [];
+                this._duration = NaN;
+                this.__isMediaSource__ = true;
+            }
+            MediaSource.isTypeSupported = function(type) {
+                // Be permissive: claiming support for the containers/codecs
+                // YouTube actually serves lets the player pick a stream and
+                // proceed, instead of bailing into "your browser can't play
+                // this video" because nothing reports as supported.
+                return typeof type === 'string' && /^(video|audio)\/(mp4|webm|ogg)/i.test(type);
+            };
+            Object.defineProperty(MediaSource.prototype, 'duration', {
+                get: function() { return this._duration; },
+                set: function(v) {
+                    this._duration = v;
+                    this._dispatch('durationchange');
+                    if (this._mediaElement) this._mediaElement.__fireMediaEvent__('durationchange');
+                }
+            });
+            MediaSource.prototype.addSourceBuffer = function(mimeType) {
+                if (this.readyState !== 'open') {
+                    throw new DOMException('MediaSource is not open', 'InvalidStateError');
+                }
+                var sb = new SourceBuffer(this, mimeType);
+                this.sourceBuffers.push(sb);
+                this.activeSourceBuffers.push(sb);
+                return sb;
+            };
+            MediaSource.prototype.removeSourceBuffer = function(sb) {
+                var i = this.sourceBuffers.indexOf(sb);
+                if (i >= 0) this.sourceBuffers.splice(i, 1);
+                i = this.activeSourceBuffers.indexOf(sb);
+                if (i >= 0) this.activeSourceBuffers.splice(i, 1);
+            };
+            MediaSource.prototype.endOfStream = function(error) {
+                this.readyState = 'ended';
+                this._dispatch('sourceended');
+                if (this._mediaElement) {
+                    if (!error && isNaN(this._duration)) {
+                        var maxEnd = 0;
+                        this.sourceBuffers.forEach(function(sb) {
+                            sb._buffered.forEach(function(r) { if (r[1] > maxEnd) maxEnd = r[1]; });
+                        });
+                        this.duration = maxEnd;
+                    }
+                    this._mediaElement._onSourceEnded();
+                }
+            };
+            MediaSource.prototype.clearLiveSeekableRange = function() {};
+            MediaSource.prototype.setLiveSeekableRange = function() {};
+            MediaSource.prototype._open = function() {
+                if (this.readyState !== 'closed') return;
+                this.readyState = 'open';
+                this._dispatch('sourceopen');
+                if (this._mediaElement) this._mediaElement.__fireMediaEvent__('sourceopen');
+            };
+            MediaSource.prototype._onBufferUpdated = function() {
+                if (this._mediaElement) this._mediaElement._onSourceBufferUpdated();
+            };
+
+            globalThis.MediaSource = MediaSource;
+            globalThis.ManagedMediaSource = MediaSource;
+
+            // `URL.createObjectURL(mediaSource)` is how player code attaches a
+            // MediaSource to a <video>: it sets `video.src = URL.createObjectURL(ms)`.
+            // We can't resolve that URL to real bytes, but we *can* recognize
+            // that the object behind it is a MediaSource and wire it directly to
+            // the element — see __aurora_install_media_element__'s `src` setter.
+            if (typeof globalThis.URL === 'function') {
+                var objectUrls = {};
+                var urlCounter = 0;
+                globalThis.URL.createObjectURL = function(obj) {
+                    var url = 'blob:aurora://' + (++urlCounter);
+                    objectUrls[url] = obj;
+                    return url;
+                };
+                globalThis.URL.revokeObjectURL = function(url) {
+                    delete objectUrls[url];
+                };
+                globalThis.__aurora_resolve_object_url__ = function(url) {
+                    return Object.prototype.hasOwnProperty.call(objectUrls, url) ? objectUrls[url] : null;
+                };
+            }
+        })();
+    "#);
+
+    eval_bootstrap(cx, global, c"media-element", r#"
+        (function() {
+            // Decorates a freshly-created <video>/<audio> element object (a
+            // plain object backed by a real DOM node — see create_js_node) with
+            // HTMLMediaElement's state machine, properties and methods. Called
+            // natively right after the element object is built.
+            //
+            // There's no real decoder feeding this — see install_media_polyfills'
+            // doc comment — so playback is simulated: `play()` flips `paused`
+            // and fires `playing`, a `setInterval` advances `currentTime` against
+            // `duration` so progress-watching code (scrubbers, analytics, "next
+            // video" triggers) sees plausible motion, and loading a `src` walks
+            // through the spec's readiness events so gating code unblocks.
+            globalThis.__aurora_install_media_element__ = function(el) {
+                if (!el || el.__media_installed__) return;
+                el.__media_installed__ = true;
+
+                var listeners = {};
+                var nativeAdd = el.addEventListener;
+                var nativeRemove = el.removeEventListener;
+                el.addEventListener = function(type, cb, opts) {
+                    if (typeof cb === 'function') {
+                        (listeners[type] = listeners[type] || []).push(cb);
+                    }
+                    try { nativeAdd.call(el, type, cb, opts); } catch (e) {}
+                };
+                el.removeEventListener = function(type, cb, opts) {
+                    var l = listeners[type];
+                    if (l) { var i = l.indexOf(cb); if (i >= 0) l.splice(i, 1); }
+                    try { nativeRemove.call(el, type, cb, opts); } catch (e) {}
+                };
+                el.__fireMediaEvent__ = function(type) {
+                    var ev = { type: type, target: el, currentTarget: el, bubbles: false,
+                        cancelable: false, defaultPrevented: false, preventDefault: function(){},
+                        stopPropagation: function(){}, stopImmediatePropagation: function(){} };
+                    var handler = el['on' + type];
+                    if (typeof handler === 'function') { try { handler.call(el, ev); } catch (e) {} }
+                    var l = listeners[type];
+                    if (l) { var copy = l.slice(); for (var i = 0; i < copy.length; i++) { try { copy[i].call(el, ev); } catch (e) {} } }
+                };
+                var fire = el.__fireMediaEvent__;
+
+                el.HAVE_NOTHING = 0; el.HAVE_METADATA = 1; el.HAVE_CURRENT_DATA = 2;
+                el.HAVE_FUTURE_DATA = 3; el.HAVE_ENOUGH_DATA = 4;
+                el.NETWORK_EMPTY = 0; el.NETWORK_IDLE = 1; el.NETWORK_LOADING = 2; el.NETWORK_NO_SOURCE = 3;
+
+                var s = {
+                    duration: NaN, paused: true, ended: false, seeking: false,
+                    readyState: 0, networkState: 0, volume: 1, muted: false,
+                    defaultMuted: false, playbackRate: 1, defaultPlaybackRate: 1,
+                    autoplay: false, loop: false, controls: false, preload: 'metadata',
+                    crossOrigin: null, currentSrc: '', error: null, srcObject: null,
+                    videoWidth: el.tagName === 'VIDEO' ? 640 : 0,
+                    videoHeight: el.tagName === 'VIDEO' ? 360 : 0,
+                    textTracks: [], _mediaSource: null, _timer: null, _currentTime: 0
+                };
+
+                Object.keys(s).forEach(function(key) {
+                    if (key.charAt(0) === '_') return;
+                    Object.defineProperty(el, key, {
+                        get: function() { return s[key]; },
+                        set: function(v) { s[key] = v; },
+                        configurable: true, enumerable: true
+                    });
+                });
+
+                Object.defineProperty(el, 'buffered', { get: function() { return new globalThis.__aurora_TimeRanges__([]); } });
+                Object.defineProperty(el, 'played', { get: function() { return new globalThis.__aurora_TimeRanges__(s._currentTime > 0 ? [[0, s._currentTime]] : []); } });
+                Object.defineProperty(el, 'seekable', {
+                    get: function() { return new globalThis.__aurora_TimeRanges__(isFinite(s.duration) ? [[0, s.duration]] : []); }
+                });
+
+                function stopTicker() {
+                    if (s._timer !== null) { clearInterval(s._timer); s._timer = null; }
+                }
+                function startTicker() {
+                    stopTicker();
+                    s._timer = setInterval(function() {
+                        if (s.paused || s.ended) return;
+                        s._currentTime += 0.25 * s.playbackRate;
+                        if (isFinite(s.duration) && s._currentTime >= s.duration) {
+                            s._currentTime = s.duration;
+                            s.paused = true;
+                            s.ended = true;
+                            stopTicker();
+                            fire('timeupdate');
+                            fire('ended');
+                            return;
+                        }
+                        fire('timeupdate');
+                    }, 250);
+                }
+
+                function finishLoading() {
+                    if (isNaN(s.duration)) s.duration = 0;
+                    s.readyState = 1; fire('durationchange'); fire('loadedmetadata');
+                    s.readyState = 2; fire('loadeddata');
+                    s.readyState = 4; s.networkState = 1;
+                    fire('progress'); fire('canplay'); fire('canplaythrough');
+                    if (s.autoplay) { el.play(); }
+                }
+
+                function startLoading(srcUrl) {
+                    if (!srcUrl) return;
+                    stopTicker();
+                    s._currentTime = 0; s.ended = false; s.readyState = 0;
+                    s.networkState = 2; s.currentSrc = srcUrl;
+                    fire('emptied'); fire('loadstart');
+
+                    // `src` pointing at a MediaSource object URL: hand the
+                    // element to the MediaSource and let *it* drive readiness
+                    // via `sourceopen`/buffered ranges rather than faking a
+                    // fixed timeline immediately.
+                    var resolved = (typeof globalThis.__aurora_resolve_object_url__ === 'function')
+                        ? globalThis.__aurora_resolve_object_url__(srcUrl) : null;
+                    if (resolved && resolved.__isMediaSource__) {
+                        s._mediaSource = resolved;
+                        resolved._mediaElement = el;
+                        queueMicrotask(function() { resolved._open(); });
+                        return;
+                    }
+
+                    queueMicrotask(finishLoading);
+                }
+
+                el._onSourceBufferUpdated = function() {
+                    // A SourceBuffer gained data: treat that as "enough to play",
+                    // matching the spirit of `canplay`/`canplaythrough` gating.
+                    if (s.readyState < 4) finishLoading();
+                };
+                el._onSourceEnded = function() {
+                    if (isNaN(s.duration) && s._mediaSource) s.duration = s._mediaSource._duration;
+                };
+
+                var srcAttr = el.getAttribute ? el.getAttribute('src') : '';
+                Object.defineProperty(el, 'src', {
+                    get: function() { return s.currentSrc || srcAttr || ''; },
+                    set: function(v) { srcAttr = String(v); startLoading(srcAttr); },
+                    configurable: true, enumerable: true
+                });
+                Object.defineProperty(el, 'currentTime', {
+                    get: function() { return s._currentTime; },
+                    set: function(v) {
+                        s._currentTime = Number(v) || 0;
+                        s.seeking = true;
+                        fire('seeking');
+                        queueMicrotask(function() {
+                            s.seeking = false;
+                            fire('timeupdate');
+                            fire('seeked');
+                        });
+                    },
+                    configurable: true, enumerable: true
+                });
+
+                el.load = function() {
+                    stopTicker();
+                    s.readyState = 0; s.networkState = 0; s.error = null;
+                    if (srcAttr) startLoading(srcAttr);
+                };
+                el.canPlayType = function(type) {
+                    return (typeof type === 'string' && /^(video|audio)\/(mp4|webm|ogg)/i.test(type)) ? 'probably' : '';
+                };
+                el.play = function() {
+                    if (!s.paused) return Promise.resolve();
+                    s.paused = false; s.ended = false;
+                    fire('play');
+                    startTicker();
+                    fire('playing');
+                    return Promise.resolve();
+                };
+                el.pause = function() {
+                    if (s.paused) return;
+                    s.paused = true;
+                    stopTicker();
+                    fire('pause');
+                };
+                el.fastSeek = function(t) { el.currentTime = t; };
+                el.addTextTrack = function(kind, label, lang) {
+                    var track = { kind: kind || 'subtitles', label: label || '', language: lang || '',
+                        mode: 'disabled', cues: [], activeCues: [],
+                        addEventListener: function(){}, removeEventListener: function(){},
+                        addCue: function(){}, removeCue: function(){} };
+                    s.textTracks.push(track);
+                    return track;
+                };
+                el.captureStream = function() {
+                    return { getTracks: function(){ return []; }, getAudioTracks: function(){ return []; },
+                        getVideoTracks: function(){ return []; }, addTrack: function(){}, removeTrack: function(){} };
+                };
+
+                if (srcAttr) startLoading(srcAttr);
+            };
+        })();
+    "#);
+}
+
 unsafe extern "C" fn dom_exception_ctor(cx: *mut RawJSContext, argc: u32, vp: *mut Value) -> bool {
     let mut cx = JSContext::from_ptr(NonNull::new(cx).unwrap());
     let args = CallArgs::from_vp(vp, argc);
@@ -818,31 +1394,6 @@ unsafe extern "C" fn get_bounding_client_rect(cx: *mut RawJSContext, argc: u32, 
     for name in &[c"x", c"y", c"top", c"left", c"right", c"bottom", c"width", c"height"] {
         set_prop_f64(&mut cx, obj_root.handle(), name, 0.0);
     }
-    args.rval().set(ObjectValue(obj));
-    true
-}
-
-unsafe extern "C" fn image_ctor(cx: *mut RawJSContext, argc: u32, vp: *mut Value) -> bool {
-    let mut cx = JSContext::from_ptr(NonNull::new(cx).unwrap());
-    let args = CallArgs::from_vp(vp, argc);
-    let width = arg_to_f64(&args, 0);
-    let height = arg_to_f64(&args, 1);
-
-    let obj = new_plain_object(&mut cx);
-    rooted!(&in(cx) let obj_root = obj);
-    set_prop_str(&mut cx, obj_root.handle(), c"src", "");
-    set_prop_str(&mut cx, obj_root.handle(), c"alt", "");
-    set_prop_f64(&mut cx, obj_root.handle(), c"width", width);
-    set_prop_f64(&mut cx, obj_root.handle(), c"height", height);
-    set_prop_f64(&mut cx, obj_root.handle(), c"naturalWidth", width);
-    set_prop_f64(&mut cx, obj_root.handle(), c"naturalHeight", height);
-    set_prop_bool(&mut cx, obj_root.handle(), c"complete", true);
-    set_prop_null(&mut cx, obj_root.handle(), c"onload");
-    set_prop_null(&mut cx, obj_root.handle(), c"onerror");
-    define_fn(&mut cx, obj_root.handle(), c"addEventListener", Some(noop), 2);
-    define_fn(&mut cx, obj_root.handle(), c"removeEventListener", Some(noop), 2);
-    define_fn(&mut cx, obj_root.handle(), c"setAttribute", Some(noop), 2);
-    define_fn(&mut cx, obj_root.handle(), c"getAttribute", Some(get_selection_null), 1);
     args.rval().set(ObjectValue(obj));
     true
 }
@@ -967,30 +1518,181 @@ unsafe extern "C" fn blob_ctor(cx: *mut RawJSContext, argc: u32, vp: *mut Value)
     true
 }
 
-unsafe extern "C" fn fetch_stub(cx: *mut RawJSContext, argc: u32, vp: *mut Value) -> bool {
-    // We don't have async, so return a chainable promise-like that never settles.
-    // Must support indefinite .then().catch().finally() chaining like a real Promise.
-    let mut cx = JSContext::from_ptr(NonNull::new(cx).unwrap());
-    let args = CallArgs::from_vp(vp, argc);
-    args.rval().set(ObjectValue(new_promise_like(&mut cx)));
-    true
+/// `fetch()` — built in JS over the native `__aurora_fetch_sync__` helper so it
+/// can return a real `Promise<Response>`. The underlying request is blocking
+/// (Aurora has no non-blocking I/O wired into the JS runtime), but a Promise
+/// that resolves immediately still beats one that never resolves: callers doing
+/// `fetch(url).then(r => r.json()).then(...)` or `await fetch(url)` now actually
+/// receive data instead of hanging forever.
+unsafe fn install_fetch(cx: &mut JSContext, global: mozjs::gc::Handle<*mut JSObject>) {
+    eval_bootstrap(cx, global, c"fetch", r#"
+        (function() {
+            function makeHeaders(raw) {
+                return {
+                    get: function(name) {
+                        var key = String(name).toLowerCase();
+                        return (raw && raw.headers && raw.headers[key] !== undefined) ? raw.headers[key] : null;
+                    },
+                    has: function(name) {
+                        var key = String(name).toLowerCase();
+                        return !!(raw && raw.headers && raw.headers[key] !== undefined);
+                    },
+                    forEach: function() {},
+                    entries: function() { return [][Symbol.iterator](); }
+                };
+            }
+
+            function makeResponse(raw, url) {
+                var status = raw.ok ? (raw.status || 200) : (raw.status || 0);
+                var ok = raw.ok && status >= 200 && status < 300;
+                var bodyText = raw.body || '';
+                var used = false;
+                function consume() {
+                    if (used) return Promise.reject(new TypeError('Body has already been read'));
+                    used = true;
+                    return Promise.resolve(bodyText);
+                }
+                var response = {
+                    ok: ok,
+                    status: status,
+                    statusText: ok ? 'OK' : (raw.error || ''),
+                    url: url,
+                    redirected: false,
+                    type: 'basic',
+                    bodyUsed: false,
+                    headers: makeHeaders(raw),
+                    json: function() { return consume().then(function(t) { return JSON.parse(t); }); },
+                    text: function() { return consume(); },
+                    arrayBuffer: function() { return consume().then(function(t) {
+                        var buf = new ArrayBuffer(t.length);
+                        var view = new Uint8Array(buf);
+                        for (var i = 0; i < t.length; i++) { view[i] = t.charCodeAt(i) & 0xFF; }
+                        return buf;
+                    }); },
+                    blob: function() { return consume().then(function(t) {
+                        return (typeof Blob !== 'undefined') ? new Blob([t]) : { size: t.length, type: '' };
+                    }); },
+                    clone: function() { return makeResponse(raw, url); }
+                };
+                return response;
+            }
+
+            globalThis.fetch = function fetch(input, init) {
+                var url = (typeof input === 'string') ? input
+                    : (input && (input.url || input.href)) || String(input);
+                try {
+                    var raw = __aurora_fetch_sync__(url);
+                    if (raw && raw.ok) {
+                        return Promise.resolve(makeResponse(raw, url));
+                    }
+                    return Promise.reject(new TypeError('Failed to fetch: ' + url +
+                        (raw && raw.error ? (' (' + raw.error + ')') : '')));
+                } catch (e) {
+                    return Promise.reject(e);
+                }
+            };
+        })();
+    "#);
 }
 
-unsafe extern "C" fn xhr_ctor(cx: *mut RawJSContext, argc: u32, vp: *mut Value) -> bool {
-    let mut cx = JSContext::from_ptr(NonNull::new(cx).unwrap());
-    let args = CallArgs::from_vp(vp, argc);
-    let obj = new_plain_object(&mut cx);
-    rooted!(&in(cx) let obj_root = obj);
-    set_prop_i32(&mut cx, obj_root.handle(), c"status", 0);
-    set_prop_i32(&mut cx, obj_root.handle(), c"readyState", 0);
-    set_prop_str(&mut cx, obj_root.handle(), c"responseText", "");
-    set_prop_str(&mut cx, obj_root.handle(), c"responseURL", "");
-    set_prop_str(&mut cx, obj_root.handle(), c"statusText", "");
-    define_fn(&mut cx, obj_root.handle(), c"addEventListener", Some(noop), 2);
-    define_fn(&mut cx, obj_root.handle(), c"removeEventListener", Some(noop), 2);
-    install_xhr_methods(&mut cx, obj_root.handle());
-    args.rval().set(ObjectValue(obj));
-    true
+/// `XMLHttpRequest` — JS-level polyfill over `__aurora_fetch_sync__`. The
+/// request itself runs synchronously inside `send()`, but result delivery is
+/// deferred via `queueMicrotask` so listeners attached immediately after
+/// `send()` (universal in real-world code) are registered before it fires.
+unsafe fn install_xhr(cx: &mut JSContext, global: mozjs::gc::Handle<*mut JSObject>) {
+    eval_bootstrap(cx, global, c"xhr", r#"
+        (function() {
+            function XMLHttpRequest() {
+                this.readyState = 0;
+                this.status = 0;
+                this.statusText = '';
+                this.responseText = '';
+                this.response = '';
+                this.responseURL = '';
+                this.responseType = '';
+                this.timeout = 0;
+                this.withCredentials = false;
+                this.onreadystatechange = null;
+                this.onload = null;
+                this.onloadend = null;
+                this.onerror = null;
+                this.onabort = null;
+                this.ontimeout = null;
+                this.upload = { addEventListener: function(){}, removeEventListener: function(){} };
+                this._listeners = {};
+                this._method = 'GET';
+                this._url = '';
+            }
+            XMLHttpRequest.UNSENT = 0;
+            XMLHttpRequest.OPENED = 1;
+            XMLHttpRequest.HEADERS_RECEIVED = 2;
+            XMLHttpRequest.LOADING = 3;
+            XMLHttpRequest.DONE = 4;
+            XMLHttpRequest.prototype.open = function(method, url) {
+                this._method = method ? String(method) : 'GET';
+                this._url = url ? String(url) : '';
+                this.readyState = 1;
+                this._dispatch('readystatechange');
+            };
+            XMLHttpRequest.prototype.setRequestHeader = function() {};
+            XMLHttpRequest.prototype.getResponseHeader = function() { return null; };
+            XMLHttpRequest.prototype.getAllResponseHeaders = function() { return ''; };
+            XMLHttpRequest.prototype.overrideMimeType = function() {};
+            XMLHttpRequest.prototype.addEventListener = function(type, cb) {
+                if (typeof cb !== 'function') return;
+                (this._listeners[type] = this._listeners[type] || []).push(cb);
+            };
+            XMLHttpRequest.prototype.removeEventListener = function(type, cb) {
+                var l = this._listeners[type];
+                if (!l) return;
+                var i = l.indexOf(cb);
+                if (i >= 0) l.splice(i, 1);
+            };
+            XMLHttpRequest.prototype._dispatch = function(type) {
+                var ev = { type: type, target: this, currentTarget: this };
+                var handler = this['on' + type];
+                if (typeof handler === 'function') { try { handler.call(this, ev); } catch (e) {} }
+                var l = this._listeners[type];
+                if (l) { for (var i = 0; i < l.length; i++) { try { l[i].call(this, ev); } catch (e) {} } }
+            };
+            XMLHttpRequest.prototype.abort = function() {
+                this.readyState = 0;
+                this.status = 0;
+                this._dispatch('abort');
+                this._dispatch('loadend');
+            };
+            XMLHttpRequest.prototype.send = function(body) {
+                var self = this;
+                queueMicrotask(function() {
+                    if (self.readyState === 0) return; // aborted before send landed
+                    var raw;
+                    try {
+                        raw = __aurora_fetch_sync__(self._url);
+                    } catch (e) {
+                        raw = { ok: false, status: 0, body: '', error: String(e) };
+                    }
+                    self.readyState = 4;
+                    if (raw && raw.ok) {
+                        self.status = raw.status || 200;
+                        self.statusText = 'OK';
+                        self.responseText = raw.body || '';
+                        self.response = self.responseText;
+                        self.responseURL = self._url;
+                        self._dispatch('readystatechange');
+                        self._dispatch('load');
+                        self._dispatch('loadend');
+                    } else {
+                        self.status = 0;
+                        self.statusText = '';
+                        self._dispatch('readystatechange');
+                        self._dispatch('error');
+                        self._dispatch('loadend');
+                    }
+                });
+            };
+            globalThis.XMLHttpRequest = XMLHttpRequest;
+        })();
+    "#);
 }
 
 unsafe extern "C" fn websocket_ctor(cx: *mut RawJSContext, argc: u32, vp: *mut Value) -> bool {

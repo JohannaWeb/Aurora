@@ -108,6 +108,28 @@ pub(in crate::js_sm) unsafe fn create_js_node(
                 let content_obj = create_js_node(cx, content);
                 set_prop_obj(cx, obj_root.handle(), c"content", content_obj);
             }
+
+            // Shadow DOM — see element_attach_shadow for how this maps onto
+            // the host's own NodePtr.
+            define_fn(cx, obj_root.handle(), c"attachShadow", Some(element_attach_shadow), 1);
+            set_prop_null(cx, obj_root.handle(), c"shadowRoot");
+            define_fn(cx, obj_root.handle(), c"getRootNode", Some(node_return_first_arg_or_this), 1);
+        }
+
+        // <video>/<audio> — decorate with the HTMLMediaElement surface
+        // (currentTime/duration/play/pause/MediaSource wiring/event ordering)
+        // installed as `__aurora_install_media_element__` by
+        // install_media_polyfills. Heavy state-machine logic lives in JS, same
+        // as the custom-elements upgrade pipeline, because expressing
+        // promise/event-ordering rules in raw JSAPI is painful and JS does it
+        // for free. Done outside the `node.borrow()` above since the installer
+        // calls back into native node methods (e.g. `getAttribute`) that take
+        // their own borrow — fine for shared borrows, but best not to nest.
+        if tag_name.eq_ignore_ascii_case("video") || tag_name.eq_ignore_ascii_case("audio") {
+            let state = &mut *get_state_ptr(cx);
+            let global_raw = state.global;
+            rooted!(&in(cx) let global = global_raw);
+            call_named_global_fn(cx, global.handle(), c"__aurora_install_media_element__", ObjectValue(obj));
         }
     } else if node_type == 3 {
         // Text node
@@ -621,6 +643,76 @@ unsafe extern "C" fn canvas_create_gradient(cx: *mut RawJSContext, argc: u32, vp
     rooted!(&in(cx) let gradient_root = gradient);
     define_fn(&mut cx, gradient_root.handle(), c"addColorStop", Some(noop_cb), 2);
     args.rval().set(if gradient.is_null() { UndefinedValue() } else { ObjectValue(gradient) });
+    true
+}
+
+/// `node.getRootNode()` — spec returns the shadow root or document containing
+/// the node. We don't track tree membership precisely enough to compute that,
+/// so return `this`; callers mostly use it for `instanceof ShadowRoot` checks
+/// or to walk back up, neither of which we can satisfy exactly anyway.
+unsafe extern "C" fn node_return_first_arg_or_this(_cx: *mut RawJSContext, argc: u32, vp: *mut Value) -> bool {
+    let args = CallArgs::from_vp(vp, argc);
+    args.rval().set(args.thisv().get());
+    true
+}
+
+/// `element.attachShadow({mode})` — Aurora's renderer has no concept of shadow
+/// trees, so a spec-correct encapsulated shadow root would render nothing. This
+/// returns a "shadow root" that proxies directly onto the host element's own
+/// NodePtr through the existing native node methods: `shadowRoot.appendChild`/
+/// `innerHTML` writes land as real children of the host in the live DOM and so
+/// actually paint. That breaks encapsulation (no `:host`, no slotting, light DOM
+/// and shadow DOM merge) — but for a custom-element-heavy site like YouTube,
+/// "the content shows up, just not perfectly isolated" beats "nothing renders
+/// because attachShadow doesn't exist."
+unsafe extern "C" fn element_attach_shadow(cx: *mut RawJSContext, argc: u32, vp: *mut Value) -> bool {
+    let mut cx = JSContext::from_ptr(NonNull::new(cx).unwrap());
+    let args = CallArgs::from_vp(vp, argc);
+
+    let node_id = match node_id_from_this(&mut cx, &args) {
+        Some(id) => id,
+        None => { args.rval().set(NullValue()); return true; }
+    };
+
+    let mode = if argc > 0 && args.get(0).get().is_object() {
+        let opts = args.get(0).get().to_object_or_null();
+        rooted!(&in(cx) let opts_root = opts);
+        get_prop_string(&mut cx, opts_root.handle(), c"mode").unwrap_or_else(|| "open".to_string())
+    } else {
+        "open".to_string()
+    };
+
+    let sr = new_plain_object(&mut cx);
+    rooted!(&in(cx) let sr_root = sr);
+    set_prop_i32(&mut cx, sr_root.handle(), c"__node_id__", node_id as i32);
+    set_prop_i32(&mut cx, sr_root.handle(), c"nodeType", 11);
+    set_prop_str(&mut cx, sr_root.handle(), c"nodeName", "#document-fragment");
+    set_prop_str(&mut cx, sr_root.handle(), c"mode", &mode);
+    set_prop_bool(&mut cx, sr_root.handle(), c"delegatesFocus", false);
+    define_accessor(&mut cx, sr_root.handle(), c"innerHTML", Some(get_inner_html), Some(set_inner_html));
+    define_accessor(&mut cx, sr_root.handle(), c"textContent", Some(get_text_content), Some(set_text_content));
+    define_fn(&mut cx, sr_root.handle(), c"appendChild", Some(node_append_child), 1);
+    define_fn(&mut cx, sr_root.handle(), c"insertBefore", Some(node_insert_before), 2);
+    define_fn(&mut cx, sr_root.handle(), c"removeChild", Some(node_remove_child), 1);
+    define_fn(&mut cx, sr_root.handle(), c"append", Some(node_append_child), 1);
+    define_fn(&mut cx, sr_root.handle(), c"querySelector", Some(node_query_selector), 1);
+    define_fn(&mut cx, sr_root.handle(), c"querySelectorAll", Some(node_query_selector_all), 1);
+    define_fn(&mut cx, sr_root.handle(), c"addEventListener", Some(node_add_event_listener), 3);
+    define_fn(&mut cx, sr_root.handle(), c"removeEventListener", Some(node_remove_event_listener), 3);
+    define_getter(&mut cx, sr_root.handle(), c"firstChild", Some(get_first_child));
+    define_getter(&mut cx, sr_root.handle(), c"children", Some(get_children));
+    define_getter(&mut cx, sr_root.handle(), c"childNodes", Some(get_child_nodes));
+
+    // host <-> shadowRoot back-references
+    rooted!(&in(cx) let host_val = args.thisv().get());
+    wrappers2::JS_SetProperty(&mut cx, sr_root.handle(), c"host".as_ptr(), host_val.handle());
+    if host_val.get().is_object() {
+        let host_obj = host_val.get().to_object_or_null();
+        rooted!(&in(cx) let host_root = host_obj);
+        set_prop_obj(&mut cx, host_root.handle(), c"shadowRoot", sr);
+    }
+
+    args.rval().set(ObjectValue(sr));
     true
 }
 
