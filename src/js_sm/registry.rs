@@ -1,6 +1,6 @@
+use crate::css::Stylesheet;
 use crate::dom::NodePtr;
 use crate::layout::{LayoutTree, ViewportSize};
-use crate::css::Stylesheet;
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::rc::Rc;
@@ -112,9 +112,12 @@ impl NodeRegistry {
 
     pub(super) fn perform_sync_reflow(&self) {
         // Trigger layout recalc if shared layout tree is available.
-        if let (Some(lt), Some(ss), Some(vp), Some(doc)) =
-            (&self.layout_tree, &self.stylesheet, &self.viewport, &self.document)
-        {
+        if let (Some(lt), Some(ss), Some(vp), Some(doc)) = (
+            &self.layout_tree,
+            &self.stylesheet,
+            &self.viewport,
+            &self.document,
+        ) {
             let viewport_size = *vp.borrow();
             let style_tree = crate::style::StyleTree::from_dom(doc, &ss.borrow());
             *lt.borrow_mut() = crate::layout::LayoutTree::from_style_tree_with_viewport(

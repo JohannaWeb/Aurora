@@ -1,4 +1,4 @@
-use super::cli::{env_f32, CliOptions};
+use super::cli::{CliOptions, env_f32};
 use super::fixtures::demo_html;
 use super::images::{load_images, load_svgs};
 use super::scripts::extract_scripts;
@@ -90,7 +90,7 @@ fn viewport_size() -> ViewportSize {
 // Scripts larger than this are skipped as a memory/time safety bound.
 // SpiderMonkey JITs real-world bundles fine, so these budgets are sized for
 // modern multi-MB sites (e.g. YouTube) rather than an interpreter-only engine.
-const MAX_SCRIPT_BYTES: usize = 8 * 1024 * 1024; // 8 MB per script
+const MAX_SCRIPT_BYTES: usize = 16 * 1024 * 1024; // 16 MB per script
 const MAX_TOTAL_SCRIPT_BYTES: usize = 32 * 1024 * 1024; // 32 MB across all scripts
 
 fn run_scripts(
@@ -124,11 +124,23 @@ fn run_scripts(
 
     let mut runtime: Box<dyn crate::js_engine::JsRuntime> =
         Box::new(crate::js_sm::SmRuntime::new(Rc::clone(dom)));
+    let mut total_script_bytes = 0usize;
     for content in fetched.into_iter().flatten() {
+        if total_script_bytes + content.len() > MAX_TOTAL_SCRIPT_BYTES {
+            eprintln!(
+                "JS: skipping script ({} KB, over {}KB total limit)",
+                content.len() / 1024,
+                MAX_TOTAL_SCRIPT_BYTES / 1024
+            );
+            continue;
+        }
+        total_script_bytes += content.len();
         if let Err(e) = runtime.execute(&content) {
             eprintln!("JS Error: {}", e);
         }
     }
+    runtime.fire_dom_content_loaded();
+    runtime.fire_load();
     Some(runtime)
 }
 
@@ -142,7 +154,10 @@ pub fn fetch_script(
         return if source.len() <= MAX_SCRIPT_BYTES {
             Some(source)
         } else {
-            eprintln!("JS: skipping inline script ({} KB, over limit)", source.len() / 1024);
+            eprintln!(
+                "JS: skipping inline script ({} KB, over limit)",
+                source.len() / 1024
+            );
             None
         };
     }
@@ -168,7 +183,9 @@ pub fn fetch_script(
     if content.len() > MAX_SCRIPT_BYTES {
         eprintln!(
             "JS: skipping {} ({} KB, over {}KB limit)",
-            full_url, content.len() / 1024, MAX_SCRIPT_BYTES / 1024
+            full_url,
+            content.len() / 1024,
+            MAX_SCRIPT_BYTES / 1024
         );
         return None;
     }

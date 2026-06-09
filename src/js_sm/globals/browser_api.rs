@@ -1,4 +1,3 @@
-
 #![allow(unsafe_op_in_unsafe_fn)]
 use std::ptr::NonNull;
 
@@ -26,9 +25,39 @@ pub(in crate::js_sm) unsafe fn install_browser_apis(
     define_fn(cx, global, c"atob", Some(atob), 1);
     define_fn(cx, global, c"btoa", Some(btoa), 1);
     define_fn(cx, global, c"open", Some(window_open), 3);
-    define_fn(cx, global, c"__shady_native_addEventListener", Some(noop), 2);
-    define_fn(cx, global, c"__shady_native_removeEventListener", Some(noop), 2);
-    define_fn(cx, global, c"__shady_native_dispatchEvent", Some(return_true), 1);
+    define_fn(
+        cx,
+        global,
+        c"__shady_native_addEventListener",
+        Some(noop),
+        2,
+    );
+    define_fn(
+        cx,
+        global,
+        c"__shady_native_removeEventListener",
+        Some(noop),
+        2,
+    );
+    define_fn(
+        cx,
+        global,
+        c"__shady_native_dispatchEvent",
+        Some(return_true),
+        1,
+    );
+    set_prop_bool(
+        cx,
+        global,
+        c"__aurora_debug_youtube__",
+        debug_youtube_enabled(),
+    );
+    set_prop_bool(
+        cx,
+        global,
+        c"__aurora_debug_youtube_verbose__",
+        debug_youtube_verbose_enabled(),
+    );
 
     install_promise_stub(cx, global);
 
@@ -83,11 +112,29 @@ pub(in crate::js_sm) unsafe fn install_browser_apis(
         set_prop_bool(cx, proto_root.handle(), c"cancelable", false);
         set_prop_bool(cx, proto_root.handle(), c"defaultPrevented", false);
         define_fn(cx, proto_root.handle(), c"initEvent", Some(init_event), 3);
-        define_fn(cx, proto_root.handle(), c"initCustomEvent", Some(init_custom_event), 4);
-        define_fn(cx, proto_root.handle(), c"initMouseEvent", Some(init_mouse_event), 15);
+        define_fn(
+            cx,
+            proto_root.handle(),
+            c"initCustomEvent",
+            Some(init_custom_event),
+            4,
+        );
+        define_fn(
+            cx,
+            proto_root.handle(),
+            c"initMouseEvent",
+            Some(init_mouse_event),
+            15,
+        );
         define_fn(cx, proto_root.handle(), c"preventDefault", Some(noop), 0);
         define_fn(cx, proto_root.handle(), c"stopPropagation", Some(noop), 0);
-        define_fn(cx, proto_root.handle(), c"stopImmediatePropagation", Some(noop), 0);
+        define_fn(
+            cx,
+            proto_root.handle(),
+            c"stopImmediatePropagation",
+            Some(noop),
+            0,
+        );
     }
 
     install_dom_constructor_prototypes(cx, global);
@@ -110,10 +157,22 @@ pub(in crate::js_sm) unsafe fn install_browser_apis(
     // URL constructor stub
     define_ctor(cx, global, c"URL", Some(url_ctor), 2);
     // URLSearchParams stub
-    define_ctor(cx, global, c"URLSearchParams", Some(url_search_params_ctor), 1);
+    define_ctor(
+        cx,
+        global,
+        c"URLSearchParams",
+        Some(url_search_params_ctor),
+        1,
+    );
     install_abort_signal(cx, global);
     // AbortController stub
-    define_ctor(cx, global, c"AbortController", Some(abort_controller_ctor), 0);
+    define_ctor(
+        cx,
+        global,
+        c"AbortController",
+        Some(abort_controller_ctor),
+        0,
+    );
     // Headers stub
     define_ctor(cx, global, c"Headers", Some(headers_ctor), 1);
     // FormData stub
@@ -150,10 +209,7 @@ pub(in crate::js_sm) unsafe fn install_browser_apis(
 
 // ── Impl ─────────────────────────────────────────────────────────────────────
 
-unsafe fn install_abort_signal(
-    cx: &mut JSContext,
-    global: mozjs::gc::Handle<*mut JSObject>,
-) {
+unsafe fn install_abort_signal(cx: &mut JSContext, global: mozjs::gc::Handle<*mut JSObject>) {
     let proto = define_ctor_with_prototype(cx, global, c"AbortSignal", Some(abort_signal_ctor), 0);
     rooted!(&in(cx) let proto_root = proto);
     install_event_target_methods(cx, proto_root.handle());
@@ -165,34 +221,193 @@ unsafe fn install_abort_signal(
         let ctor = ctor_val.get().to_object_or_null();
         rooted!(&in(cx) let ctor_root = ctor);
         define_fn(cx, ctor_root.handle(), c"abort", Some(abort_signal_ctor), 1);
-        define_fn(cx, ctor_root.handle(), c"timeout", Some(abort_signal_ctor), 1);
+        define_fn(
+            cx,
+            ctor_root.handle(),
+            c"timeout",
+            Some(abort_signal_ctor),
+            1,
+        );
         define_fn(cx, ctor_root.handle(), c"any", Some(abort_signal_ctor), 1);
     }
 }
 
-unsafe fn install_promise_stub(
-    cx: &mut JSContext,
-    global: mozjs::gc::Handle<*mut JSObject>,
-) {
-    let proto = define_ctor_with_prototype(cx, global, c"Promise", Some(promise_ctor), 1);
-    rooted!(&in(cx) let proto_root = proto);
-    define_fn(cx, proto_root.handle(), c"then", Some(promise_then), 2);
-    define_fn(cx, proto_root.handle(), c"catch", Some(promise_then), 1);
-    define_fn(cx, proto_root.handle(), c"finally", Some(promise_then), 1);
+unsafe fn install_promise_stub(cx: &mut JSContext, global: mozjs::gc::Handle<*mut JSObject>) {
+    eval_bootstrap(
+        cx,
+        global,
+        c"promise",
+        r#"
+        (function() {
+            function asap(fn) {
+                queueMicrotask(fn);
+            }
 
-    rooted!(&in(cx) let mut ctor_val = UndefinedValue());
-    if wrappers2::JS_GetProperty(cx, global, c"Promise".as_ptr(), ctor_val.handle_mut())
-        && ctor_val.get().is_object()
-    {
-        let ctor = ctor_val.get().to_object_or_null();
-        rooted!(&in(cx) let ctor_root = ctor);
-        define_fn(cx, ctor_root.handle(), c"resolve", Some(promise_static_resolve), 1);
-        define_fn(cx, ctor_root.handle(), c"reject", Some(promise_static_resolve), 1);
-        define_fn(cx, ctor_root.handle(), c"all", Some(promise_static_resolve), 1);
-        define_fn(cx, ctor_root.handle(), c"race", Some(promise_static_resolve), 1);
-        define_fn(cx, ctor_root.handle(), c"allSettled", Some(promise_static_resolve), 1);
-        define_fn(cx, ctor_root.handle(), c"any", Some(promise_static_resolve), 1);
-    }
+            function SimplePromise(executor) {
+                if (!(this instanceof SimplePromise)) {
+                    return new SimplePromise(executor);
+                }
+
+                var self = this;
+                self._state = 'pending';
+                self._value = undefined;
+                self._handlers = [];
+
+                function settle(state, value) {
+                    if (self._state !== 'pending') return;
+                    if (state === 'fulfilled' && value === self) {
+                        state = 'rejected';
+                        value = new TypeError('Promise resolved with itself');
+                    }
+                    if (state === 'fulfilled' && value && typeof value.then === 'function') {
+                        try {
+                            value.then(resolve, reject);
+                        } catch (e) {
+                            reject(e);
+                        }
+                        return;
+                    }
+                    self._state = state;
+                    self._value = value;
+                    asap(function() {
+                        var handlers = self._handlers.splice(0);
+                        for (var i = 0; i < handlers.length; i++) {
+                            runHandler(self, handlers[i]);
+                        }
+                    });
+                }
+
+                function resolve(value) { settle('fulfilled', value); }
+                function reject(reason) { settle('rejected', reason); }
+
+                if (typeof executor === 'function') {
+                    try {
+                        executor(resolve, reject);
+                    } catch (e) {
+                        reject(e);
+                    }
+                } else {
+                    resolve(executor);
+                }
+            }
+
+            function runHandler(promise, handler) {
+                var cb = promise._state === 'fulfilled' ? handler.onFulfilled : handler.onRejected;
+                if (typeof cb !== 'function') {
+                    (promise._state === 'fulfilled' ? handler.resolve : handler.reject)(promise._value);
+                    return;
+                }
+                try {
+                    handler.resolve(cb(promise._value));
+                } catch (e) {
+                    handler.reject(e);
+                }
+            }
+
+            SimplePromise.prototype.then = function(onFulfilled, onRejected) {
+                var parent = this;
+                return new SimplePromise(function(resolve, reject) {
+                    var handler = {
+                        onFulfilled: onFulfilled,
+                        onRejected: onRejected,
+                        resolve: resolve,
+                        reject: reject
+                    };
+                    if (parent._state === 'pending') {
+                        parent._handlers.push(handler);
+                    } else {
+                        asap(function() { runHandler(parent, handler); });
+                    }
+                });
+            };
+
+            SimplePromise.prototype.catch = function(onRejected) {
+                return this.then(undefined, onRejected);
+            };
+
+            SimplePromise.prototype.finally = function(onFinally) {
+                return this.then(function(value) {
+                    if (typeof onFinally === 'function') onFinally();
+                    return value;
+                }, function(reason) {
+                    if (typeof onFinally === 'function') onFinally();
+                    throw reason;
+                });
+            };
+
+            SimplePromise.resolve = function(value) {
+                return value instanceof SimplePromise ? value : new SimplePromise(function(resolve) {
+                    resolve(value);
+                });
+            };
+
+            SimplePromise.reject = function(reason) {
+                return new SimplePromise(function(resolve, reject) {
+                    reject(reason);
+                });
+            };
+
+            SimplePromise.all = function(values) {
+                return new SimplePromise(function(resolve, reject) {
+                    values = Array.prototype.slice.call(values || []);
+                    if (values.length === 0) {
+                        resolve([]);
+                        return;
+                    }
+                    var out = new Array(values.length);
+                    var remaining = values.length;
+                    values.forEach(function(value, index) {
+                        SimplePromise.resolve(value).then(function(resolved) {
+                            out[index] = resolved;
+                            remaining -= 1;
+                            if (remaining === 0) resolve(out);
+                        }, reject);
+                    });
+                });
+            };
+
+            SimplePromise.race = function(values) {
+                return new SimplePromise(function(resolve, reject) {
+                    Array.prototype.slice.call(values || []).forEach(function(value) {
+                        SimplePromise.resolve(value).then(resolve, reject);
+                    });
+                });
+            };
+
+            SimplePromise.allSettled = function(values) {
+                values = Array.prototype.slice.call(values || []);
+                return SimplePromise.all(values.map(function(value) {
+                    return SimplePromise.resolve(value).then(function(resolved) {
+                        return { status: 'fulfilled', value: resolved };
+                    }, function(reason) {
+                        return { status: 'rejected', reason: reason };
+                    });
+                }));
+            };
+
+            SimplePromise.any = function(values) {
+                values = Array.prototype.slice.call(values || []);
+                return new SimplePromise(function(resolve, reject) {
+                    if (values.length === 0) {
+                        reject(new Error('No promises were resolved'));
+                        return;
+                    }
+                    var remaining = values.length;
+                    var errors = [];
+                    values.forEach(function(value, index) {
+                        SimplePromise.resolve(value).then(resolve, function(reason) {
+                            errors[index] = reason;
+                            remaining -= 1;
+                            if (remaining === 0) reject(errors);
+                        });
+                    });
+                });
+            };
+
+            globalThis.Promise = SimplePromise;
+        })();
+    "#,
+    );
 }
 
 unsafe fn install_dom_constructor_prototypes(
@@ -319,7 +534,13 @@ unsafe fn install_element_methods(cx: &mut JSContext, proto: mozjs::gc::Handle<*
     define_fn(cx, proto, c"closest", Some(get_selection_null), 1);
     define_fn(cx, proto, c"querySelector", Some(get_selection_null), 1);
     define_fn(cx, proto, c"querySelectorAll", Some(return_empty_array), 1);
-    define_fn(cx, proto, c"getBoundingClientRect", Some(get_bounding_client_rect), 0);
+    define_fn(
+        cx,
+        proto,
+        c"getBoundingClientRect",
+        Some(get_bounding_client_rect),
+        0,
+    );
     define_fn(cx, proto, c"getClientRects", Some(return_empty_array), 0);
     define_fn(cx, proto, c"scrollIntoView", Some(noop), 1);
     define_fn(cx, proto, c"focus", Some(noop), 0);
@@ -356,7 +577,11 @@ unsafe extern "C" fn prompt_null(_cx: *mut RawJSContext, _argc: u32, vp: *mut Va
     true
 }
 
-unsafe extern "C" fn node_return_first_arg(_cx: *mut RawJSContext, argc: u32, vp: *mut Value) -> bool {
+unsafe extern "C" fn node_return_first_arg(
+    _cx: *mut RawJSContext,
+    argc: u32,
+    vp: *mut Value,
+) -> bool {
     let args = CallArgs::from_vp(vp, argc);
     if argc > 0 {
         args.rval().set(args.get(0).get());
@@ -387,8 +612,20 @@ unsafe extern "C" fn match_media(cx: *mut RawJSContext, argc: u32, vp: *mut Valu
     set_prop_str(&mut cx, obj_root.handle(), c"media", &media);
     define_fn(&mut cx, obj_root.handle(), c"addListener", Some(noop), 1);
     define_fn(&mut cx, obj_root.handle(), c"removeListener", Some(noop), 1);
-    define_fn(&mut cx, obj_root.handle(), c"addEventListener", Some(noop), 2);
-    define_fn(&mut cx, obj_root.handle(), c"removeEventListener", Some(noop), 2);
+    define_fn(
+        &mut cx,
+        obj_root.handle(),
+        c"addEventListener",
+        Some(noop),
+        2,
+    );
+    define_fn(
+        &mut cx,
+        obj_root.handle(),
+        c"removeEventListener",
+        Some(noop),
+        2,
+    );
 
     args.rval().set(ObjectValue(obj));
     true
@@ -400,11 +637,28 @@ unsafe extern "C" fn get_computed_style(cx: *mut RawJSContext, argc: u32, vp: *m
 
     let obj = new_plain_object(&mut cx);
     rooted!(&in(cx) let obj_root = obj);
-    define_fn(&mut cx, obj_root.handle(), c"getPropertyValue", Some(return_empty_string), 1);
+    define_fn(
+        &mut cx,
+        obj_root.handle(),
+        c"getPropertyValue",
+        Some(return_empty_string),
+        1,
+    );
     define_fn(&mut cx, obj_root.handle(), c"setProperty", Some(noop), 2);
-    define_fn(&mut cx, obj_root.handle(), c"removeProperty", Some(return_empty_string), 1);
+    define_fn(
+        &mut cx,
+        obj_root.handle(),
+        c"removeProperty",
+        Some(return_empty_string),
+        1,
+    );
     set_prop_str(&mut cx, obj_root.handle(), c"fontSize", "16px");
-    set_prop_str(&mut cx, obj_root.handle(), c"fontFamily", "Arial, sans-serif");
+    set_prop_str(
+        &mut cx,
+        obj_root.handle(),
+        c"fontFamily",
+        "Arial, sans-serif",
+    );
     set_prop_str(&mut cx, obj_root.handle(), c"display", "block");
     set_prop_str(&mut cx, obj_root.handle(), c"position", "static");
     set_prop_str(&mut cx, obj_root.handle(), c"visibility", "visible");
@@ -414,14 +668,19 @@ unsafe extern "C" fn get_computed_style(cx: *mut RawJSContext, argc: u32, vp: *m
     true
 }
 
-unsafe extern "C" fn return_empty_string(cx: *mut RawJSContext, _argc: u32, vp: *mut Value) -> bool {
+unsafe extern "C" fn return_empty_string(
+    cx: *mut RawJSContext,
+    _argc: u32,
+    vp: *mut Value,
+) -> bool {
     let mut cx = JSContext::from_ptr(NonNull::new(cx).unwrap());
     let args = CallArgs::from_vp(vp, _argc);
     let js_str = new_js_string(&mut cx, "");
     if js_str.is_null() {
         args.rval().set(UndefinedValue());
     } else {
-        args.rval().set(mozjs::jsval::StringValue(unsafe { &*js_str }));
+        args.rval()
+            .set(mozjs::jsval::StringValue(unsafe { &*js_str }));
     }
     true
 }
@@ -442,27 +701,57 @@ unsafe extern "C" fn get_selection_null(cx: *mut RawJSContext, _argc: u32, vp: *
     set_prop_i32(&mut cx, obj_root.handle(), c"rangeCount", 0);
     set_prop_bool(&mut cx, obj_root.handle(), c"isCollapsed", true);
     set_prop_str(&mut cx, obj_root.handle(), c"type", "None");
-    define_fn(&mut cx, obj_root.handle(), c"removeAllRanges", Some(noop), 0);
+    define_fn(
+        &mut cx,
+        obj_root.handle(),
+        c"removeAllRanges",
+        Some(noop),
+        0,
+    );
     define_fn(&mut cx, obj_root.handle(), c"collapse", Some(noop), 2);
     define_fn(&mut cx, obj_root.handle(), c"addRange", Some(noop), 1);
-    define_fn(&mut cx, obj_root.handle(), c"getRangeAt", Some(get_selection_null_returner), 1);
-    define_fn(&mut cx, obj_root.handle(), c"toString", Some(empty_string_returner), 0);
+    define_fn(
+        &mut cx,
+        obj_root.handle(),
+        c"getRangeAt",
+        Some(get_selection_null_returner),
+        1,
+    );
+    define_fn(
+        &mut cx,
+        obj_root.handle(),
+        c"toString",
+        Some(empty_string_returner),
+        0,
+    );
 
     args.rval().set(ObjectValue(obj));
     true
 }
 
-unsafe extern "C" fn get_selection_null_returner(_cx: *mut RawJSContext, _argc: u32, vp: *mut Value) -> bool {
+unsafe extern "C" fn get_selection_null_returner(
+    _cx: *mut RawJSContext,
+    _argc: u32,
+    vp: *mut Value,
+) -> bool {
     let args = CallArgs::from_vp(vp, _argc);
     args.rval().set(NullValue());
     true
 }
 
-unsafe extern "C" fn empty_string_returner(cx: *mut RawJSContext, _argc: u32, vp: *mut Value) -> bool {
+unsafe extern "C" fn empty_string_returner(
+    cx: *mut RawJSContext,
+    _argc: u32,
+    vp: *mut Value,
+) -> bool {
     let mut cx = JSContext::from_ptr(NonNull::new(cx).unwrap());
     let args = CallArgs::from_vp(vp, _argc);
     let js_str = new_js_string(&mut cx, "");
-    args.rval().set(if js_str.is_null() { UndefinedValue() } else { mozjs::jsval::StringValue(&*js_str) });
+    args.rval().set(if js_str.is_null() {
+        UndefinedValue()
+    } else {
+        mozjs::jsval::StringValue(&*js_str)
+    });
     true
 }
 
@@ -482,7 +771,10 @@ unsafe extern "C" fn atob(cx: *mut RawJSContext, argc: u32, vp: *mut Value) -> b
     let args = CallArgs::from_vp(vp, argc);
     let encoded = arg_to_string(&mut cx, &args, 0);
     // Strip whitespace as per spec
-    let cleaned: String = encoded.chars().filter(|c| !c.is_ascii_whitespace()).collect();
+    let cleaned: String = encoded
+        .chars()
+        .filter(|c| !c.is_ascii_whitespace())
+        .collect();
     let decoded = base64_decode(&cleaned);
     let js_str = new_js_string(&mut cx, &decoded);
     if js_str.is_null() {
@@ -516,8 +808,16 @@ fn base64_encode(bytes: &[u8]) -> String {
         let b2 = *chunk.get(2).unwrap_or(&0);
         out.push(TABLE[(b0 >> 2) as usize] as char);
         out.push(TABLE[((b0 & 3) << 4 | b1 >> 4) as usize] as char);
-        out.push(if chunk.len() > 1 { TABLE[((b1 & 15) << 2 | b2 >> 6) as usize] as char } else { '=' });
-        out.push(if chunk.len() > 2 { TABLE[(b2 & 63) as usize] as char } else { '=' });
+        out.push(if chunk.len() > 1 {
+            TABLE[((b1 & 15) << 2 | b2 >> 6) as usize] as char
+        } else {
+            '='
+        });
+        out.push(if chunk.len() > 2 {
+            TABLE[(b2 & 63) as usize] as char
+        } else {
+            '='
+        });
     }
     out
 }
@@ -527,7 +827,10 @@ fn base64_decode(s: &str) -> String {
         let mut t = [-1i8; 256];
         let enc = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
         let mut i = 0usize;
-        while i < enc.len() { t[enc[i] as usize] = i as i8; i += 1; }
+        while i < enc.len() {
+            t[enc[i] as usize] = i as i8;
+            i += 1;
+        }
         t
     };
     let bytes: Vec<u8> = s.bytes().collect();
@@ -535,13 +838,19 @@ fn base64_decode(s: &str) -> String {
     let mut i = 0;
     while i + 3 < bytes.len() {
         let a = TABLE[bytes[i] as usize];
-        let b = TABLE[bytes[i+1] as usize];
-        let c = TABLE[bytes[i+2] as usize];
-        let d = TABLE[bytes[i+3] as usize];
-        if a < 0 || b < 0 { break; }
+        let b = TABLE[bytes[i + 1] as usize];
+        let c = TABLE[bytes[i + 2] as usize];
+        let d = TABLE[bytes[i + 3] as usize];
+        if a < 0 || b < 0 {
+            break;
+        }
         out.push(((a as u8) << 2) | ((b as u8) >> 4));
-        if c >= 0 { out.push(((b as u8) << 4) | ((c as u8) >> 2)); }
-        if d >= 0 { out.push(((c as u8) << 6) | d as u8); }
+        if c >= 0 {
+            out.push(((b as u8) << 4) | ((c as u8) >> 2));
+        }
+        if d >= 0 {
+            out.push(((c as u8) << 6) | d as u8);
+        }
         i += 4;
     }
     String::from_utf8_lossy(&out).into_owned()
@@ -560,33 +869,6 @@ unsafe extern "C" fn window_open(cx: *mut RawJSContext, argc: u32, vp: *mut Valu
     true
 }
 
-unsafe fn new_promise_like(cx: &mut JSContext) -> *mut JSObject {
-    let obj = new_plain_object(cx);
-    rooted!(&in(cx) let obj_root = obj);
-    define_fn(cx, obj_root.handle(), c"then", Some(promise_then), 2);
-    define_fn(cx, obj_root.handle(), c"catch", Some(promise_then), 1);
-    define_fn(cx, obj_root.handle(), c"finally", Some(promise_then), 1);
-    obj
-}
-
-unsafe extern "C" fn promise_ctor(cx: *mut RawJSContext, argc: u32, vp: *mut Value) -> bool {
-    let mut cx = JSContext::from_ptr(NonNull::new(cx).unwrap());
-    let args = CallArgs::from_vp(vp, argc);
-    args.rval().set(ObjectValue(new_promise_like(&mut cx)));
-    true
-}
-
-unsafe extern "C" fn promise_static_resolve(cx: *mut RawJSContext, argc: u32, vp: *mut Value) -> bool {
-    promise_ctor(cx, argc, vp)
-}
-
-unsafe extern "C" fn promise_then(cx: *mut RawJSContext, argc: u32, vp: *mut Value) -> bool {
-    let mut cx = JSContext::from_ptr(NonNull::new(cx).unwrap());
-    let args = CallArgs::from_vp(vp, argc);
-    args.rval().set(ObjectValue(new_promise_like(&mut cx)));
-    true
-}
-
 unsafe fn new_message_port(cx: &mut JSContext) -> *mut JSObject {
     let port = new_plain_object(cx);
     rooted!(&in(cx) let port_root = port);
@@ -594,12 +876,22 @@ unsafe fn new_message_port(cx: &mut JSContext) -> *mut JSObject {
     define_fn(cx, port_root.handle(), c"start", Some(noop), 0);
     define_fn(cx, port_root.handle(), c"close", Some(noop), 0);
     define_fn(cx, port_root.handle(), c"addEventListener", Some(noop), 2);
-    define_fn(cx, port_root.handle(), c"removeEventListener", Some(noop), 2);
+    define_fn(
+        cx,
+        port_root.handle(),
+        c"removeEventListener",
+        Some(noop),
+        2,
+    );
     set_prop_null(cx, port_root.handle(), c"onmessage");
     port
 }
 
-unsafe extern "C" fn message_channel_ctor(cx: *mut RawJSContext, argc: u32, vp: *mut Value) -> bool {
+unsafe extern "C" fn message_channel_ctor(
+    cx: *mut RawJSContext,
+    argc: u32,
+    vp: *mut Value,
+) -> bool {
     let mut cx = JSContext::from_ptr(NonNull::new(cx).unwrap());
     let args = CallArgs::from_vp(vp, argc);
     let channel = new_plain_object(&mut cx);
@@ -650,9 +942,27 @@ unsafe extern "C" fn abort_signal_ctor(cx: *mut RawJSContext, argc: u32, vp: *mu
     set_prop_bool(&mut cx, obj_root.handle(), c"aborted", false);
     set_prop_null(&mut cx, obj_root.handle(), c"reason");
     set_prop_null(&mut cx, obj_root.handle(), c"onabort");
-    define_fn(&mut cx, obj_root.handle(), c"addEventListener", Some(noop), 2);
-    define_fn(&mut cx, obj_root.handle(), c"removeEventListener", Some(noop), 2);
-    define_fn(&mut cx, obj_root.handle(), c"dispatchEvent", Some(return_true), 1);
+    define_fn(
+        &mut cx,
+        obj_root.handle(),
+        c"addEventListener",
+        Some(noop),
+        2,
+    );
+    define_fn(
+        &mut cx,
+        obj_root.handle(),
+        c"removeEventListener",
+        Some(noop),
+        2,
+    );
+    define_fn(
+        &mut cx,
+        obj_root.handle(),
+        c"dispatchEvent",
+        Some(return_true),
+        1,
+    );
     define_fn(&mut cx, obj_root.handle(), c"throwIfAborted", Some(noop), 0);
     args.rval().set(ObjectValue(obj));
     true
@@ -740,7 +1050,12 @@ unsafe fn init_event_object(
 
     let type_str = arg_to_string(cx, args, 0);
     set_prop_str(cx, obj_root.handle(), c"type", &type_str);
-    set_prop_bool(cx, obj_root.handle(), c"bubbles", args.argc_ > 1 && args.get(1).get().to_boolean());
+    set_prop_bool(
+        cx,
+        obj_root.handle(),
+        c"bubbles",
+        args.argc_ > 1 && args.get(1).get().to_boolean(),
+    );
     set_prop_bool(
         cx,
         obj_root.handle(),
@@ -764,11 +1079,35 @@ unsafe extern "C" fn custom_event_ctor(cx: *mut RawJSContext, argc: u32, vp: *mu
     set_prop_bool(&mut cx, obj_root.handle(), c"cancelable", false);
     set_prop_bool(&mut cx, obj_root.handle(), c"defaultPrevented", false);
     set_prop_null(&mut cx, obj_root.handle(), c"detail");
-    define_fn(&mut cx, obj_root.handle(), c"initEvent", Some(init_event), 3);
-    define_fn(&mut cx, obj_root.handle(), c"initCustomEvent", Some(init_custom_event), 4);
+    define_fn(
+        &mut cx,
+        obj_root.handle(),
+        c"initEvent",
+        Some(init_event),
+        3,
+    );
+    define_fn(
+        &mut cx,
+        obj_root.handle(),
+        c"initCustomEvent",
+        Some(init_custom_event),
+        4,
+    );
     define_fn(&mut cx, obj_root.handle(), c"preventDefault", Some(noop), 0);
-    define_fn(&mut cx, obj_root.handle(), c"stopPropagation", Some(noop), 0);
-    define_fn(&mut cx, obj_root.handle(), c"stopImmediatePropagation", Some(noop), 0);
+    define_fn(
+        &mut cx,
+        obj_root.handle(),
+        c"stopPropagation",
+        Some(noop),
+        0,
+    );
+    define_fn(
+        &mut cx,
+        obj_root.handle(),
+        c"stopImmediatePropagation",
+        Some(noop),
+        0,
+    );
     args.rval().set(ObjectValue(obj));
     true
 }
@@ -779,7 +1118,11 @@ unsafe extern "C" fn custom_event_ctor(cx: *mut RawJSContext, argc: u32, vp: *mu
 /// all HTML/script sinks through it), and a customElements registry (YouTube
 /// defines dozens of custom elements at startup and awaits `whenDefined`).
 unsafe fn install_youtube_polyfills(cx: &mut JSContext, global: mozjs::gc::Handle<*mut JSObject>) {
-    eval_bootstrap(cx, global, c"event-constructors", r#"
+    eval_bootstrap(
+        cx,
+        global,
+        c"event-constructors",
+        r#"
         (function() {
             globalThis.Image = function Image(width, height) {
                 this.src = ''; this.width = width || 0; this.height = height || 0;
@@ -839,9 +1182,14 @@ unsafe fn install_youtube_polyfills(cx: &mut JSContext, global: mozjs::gc::Handl
             };
             globalThis.PromiseRejectionEvent.prototype = Object.create(globalThis.Event.prototype);
         })();
-    "#);
+    "#,
+    );
 
-    eval_bootstrap(cx, global, c"trusted-types", r#"
+    eval_bootstrap(
+        cx,
+        global,
+        c"trusted-types",
+        r#"
         (function() {
             function makeTrusted(val) { return { toString: function(){ return val; } }; }
             globalThis.trustedTypes = {
@@ -863,12 +1211,35 @@ unsafe fn install_youtube_polyfills(cx: &mut JSContext, global: mozjs::gc::Handl
                 defaultPolicy: null
             };
         })();
-    "#);
+    "#,
+    );
 
-    eval_bootstrap(cx, global, c"custom-elements", r#"
+    eval_bootstrap(
+        cx,
+        global,
+        c"custom-elements",
+        r#"
         (function() {
             var registry = {};
             var patchedCreateElement = false;
+            function trace(msg) {
+                if (globalThis.__aurora_debug_youtube__) console.log('[yt-life] ' + msg);
+            }
+            function shouldTraceName(name) {
+                return globalThis.__aurora_debug_youtube_verbose__ ||
+                    name === 'ytd-app' ||
+                    name === 'ytd-masthead' ||
+                    name === 'ytd-page-manager' ||
+                    name === 'ytd-browse' ||
+                    name === 'ytd-search' ||
+                    name === 'iron-meta';
+            }
+            function traceError(where, error) {
+                if (!globalThis.__aurora_debug_youtube__) return;
+                var message = error && (error.name || 'Error') + ': ' + (error.message || '');
+                var stack = error && error.stack ? ('\n' + error.stack) : '';
+                console.log('[yt-life] ' + where + ' threw: ' + (message || String(error)) + stack);
+            }
 
             // Upgrade: swap the plain stub element's prototype to the
             // registered class/constructor's prototype and run it bound to
@@ -876,32 +1247,79 @@ unsafe fn install_youtube_polyfills(cx: &mut JSContext, global: mozjs::gc::Handl
             // function-style definitions (`function MyEl(){...}`) expect.
             // ES6 `class X extends HTMLElement` constructors throw "class
             // constructor cannot be invoked without 'new'" when called this
-            // way — caught below, leaving the element as a plain (but at
-            // least present and styleable) stub rather than crashing the page.
-            function tryUpgrade(el) {
+            // way. Keep the prototype swap and still fire connectedCallback;
+            // most framework element work happens there, and skipping it
+            // leaves upgraded nodes inert.
+            function tryUpgrade(el, connect) {
                 if (!el || el.nodeType !== 1 || el.__ce_upgraded__) return;
                 var name = el.localName || (el.tagName ? el.tagName.toLowerCase() : '');
                 var ctor = registry[name];
                 if (!ctor) return;
                 el.__ce_upgraded__ = true;
+                if (shouldTraceName(name)) trace('upgrade ' + name + ' connect=' + (connect !== false));
                 try {
                     Object.setPrototypeOf(el, ctor.prototype);
-                    ctor.call(el);
+                    var hadObjectInitializeProperties =
+                        Object.prototype.hasOwnProperty.call(Object.prototype, '_initializeProperties');
+                    var oldObjectInitializeProperties = Object.prototype._initializeProperties;
+                    if (typeof el._initializeProperties !== 'function') {
+                        try {
+                            Object.defineProperty(el, '_initializeProperties', {
+                                value: function(){},
+                                configurable: true,
+                                writable: true
+                            });
+                        } catch (e) {
+                            el._initializeProperties = function(){};
+                        }
+                    }
+                    if (typeof Object.prototype._initializeProperties !== 'function') {
+                        Object.defineProperty(Object.prototype, '_initializeProperties', {
+                            value: function(){},
+                            configurable: true,
+                            writable: true
+                        });
+                    }
+                    var oldHTMLElement = globalThis.HTMLElement;
+                    if (typeof oldHTMLElement === 'function') {
+                        var HTMLElementDuringUpgrade = function HTMLElement() {};
+                        HTMLElementDuringUpgrade.prototype = oldHTMLElement.prototype;
+                        try { Object.setPrototypeOf(HTMLElementDuringUpgrade, oldHTMLElement); } catch (e) {}
+                        globalThis.HTMLElement = HTMLElementDuringUpgrade;
+                    }
+                    try {
+                        ctor.call(el);
+                    } finally {
+                        if (typeof oldHTMLElement === 'function') {
+                            globalThis.HTMLElement = oldHTMLElement;
+                        }
+                        if (hadObjectInitializeProperties) {
+                            Object.prototype._initializeProperties = oldObjectInitializeProperties;
+                        } else {
+                            delete Object.prototype._initializeProperties;
+                        }
+                    }
                 } catch (e) {
-                    return;
+                    traceError('constructor ' + name, e);
                 }
-                if (typeof el.connectedCallback === 'function') {
-                    try { el.connectedCallback(); } catch (e) {}
+                if (connect !== false && typeof el.connectedCallback === 'function') {
+                    try {
+                        if (!el.__ce_connected__) {
+                            el.__ce_connected__ = true;
+                            if (shouldTraceName(name)) trace('connectedCallback ' + name);
+                            el.connectedCallback();
+                        }
+                    } catch (e) { traceError('connectedCallback ' + name, e); }
                 }
             }
 
             function upgradeTree(root) {
                 if (!root) return;
                 try {
-                    tryUpgrade(root);
+                    tryUpgrade(root, true);
                     if (typeof root.querySelectorAll === 'function') {
                         var all = root.querySelectorAll('*');
-                        for (var i = 0; i < all.length; i++) { tryUpgrade(all[i]); }
+                        for (var i = 0; i < all.length; i++) { tryUpgrade(all[i], true); }
                     }
                 } catch (e) {}
             }
@@ -916,20 +1334,22 @@ unsafe fn install_youtube_polyfills(cx: &mut JSContext, global: mozjs::gc::Handl
                 var orig = document.createElement.bind(document);
                 document.createElement = function(tagName, options) {
                     var el = orig(tagName, options);
-                    tryUpgrade(el);
+                    if (String(tagName).indexOf('-') >= 0 && shouldTraceName(String(tagName))) trace('createElement ' + tagName);
+                    tryUpgrade(el, false);
                     return el;
                 };
             }
 
             globalThis.customElements = {
                 define: function(name, ctor, opts) {
+                    if (shouldTraceName(name)) trace('define ' + name);
                     registry[name] = ctor;
                     ensureCreateElementPatch();
                     if (typeof document !== 'undefined' && typeof document.querySelectorAll === 'function') {
                         try {
                             var existing = document.querySelectorAll(name);
-                            for (var i = 0; i < existing.length; i++) { tryUpgrade(existing[i]); }
-                        } catch (e) {}
+                            for (var i = 0; i < existing.length; i++) { tryUpgrade(existing[i], true); }
+                        } catch (e) { traceError('upgrade existing ' + name, e); }
                     }
                 },
                 get: function(name) { return registry[name]; },
@@ -942,19 +1362,25 @@ unsafe fn install_youtube_polyfills(cx: &mut JSContext, global: mozjs::gc::Handl
                         };
                     });
                 },
-                upgrade: function(root) { upgradeTree(root); }
+                upgrade: function(root) { trace('customElements.upgrade'); upgradeTree(root); }
             };
         })();
-    "#);
+    "#,
+    );
 
-    eval_bootstrap(cx, global, c"css-stub", r#"
+    eval_bootstrap(
+        cx,
+        global,
+        c"css-stub",
+        r#"
         (function() {
             globalThis.CSS = {
                 supports: function() { return false; },
                 escape: function(s) { return String(s); }
             };
         })();
-    "#);
+    "#,
+    );
 }
 
 /// `MediaSource` / `SourceBuffer` / `HTMLMediaElement` surface for YouTube's
@@ -970,7 +1396,11 @@ unsafe fn install_youtube_polyfills(cx: &mut JSContext, global: mozjs::gc::Handl
 /// never fires. Wiring this to real decoded frames/audio is the next step
 /// once a streaming pipeline exists.
 unsafe fn install_media_polyfills(cx: &mut JSContext, global: mozjs::gc::Handle<*mut JSObject>) {
-    eval_bootstrap(cx, global, c"media-source", r#"
+    eval_bootstrap(
+        cx,
+        global,
+        c"media-source",
+        r#"
         (function() {
             if (typeof globalThis.DOMException === 'undefined') {
                 globalThis.DOMException = function DOMException(message, name) {
@@ -1168,9 +1598,14 @@ unsafe fn install_media_polyfills(cx: &mut JSContext, global: mozjs::gc::Handle<
                 };
             }
         })();
-    "#);
+    "#,
+    );
 
-    eval_bootstrap(cx, global, c"media-element", r#"
+    eval_bootstrap(
+        cx,
+        global,
+        c"media-element",
+        r#"
         (function() {
             // Decorates a freshly-created <video>/<audio> element object (a
             // plain object backed by a real DOM node — see create_js_node) with
@@ -1364,7 +1799,8 @@ unsafe fn install_media_polyfills(cx: &mut JSContext, global: mozjs::gc::Handle<
                 if (srcAttr) startLoading(srcAttr);
             };
         })();
-    "#);
+    "#,
+    );
 }
 
 unsafe extern "C" fn dom_exception_ctor(cx: *mut RawJSContext, argc: u32, vp: *mut Value) -> bool {
@@ -1386,12 +1822,18 @@ unsafe extern "C" fn dom_exception_ctor(cx: *mut RawJSContext, argc: u32, vp: *m
     true
 }
 
-unsafe extern "C" fn get_bounding_client_rect(cx: *mut RawJSContext, argc: u32, vp: *mut Value) -> bool {
+unsafe extern "C" fn get_bounding_client_rect(
+    cx: *mut RawJSContext,
+    argc: u32,
+    vp: *mut Value,
+) -> bool {
     let mut cx = JSContext::from_ptr(NonNull::new(cx).unwrap());
     let args = CallArgs::from_vp(vp, argc);
     let obj = new_plain_object(&mut cx);
     rooted!(&in(cx) let obj_root = obj);
-    for name in &[c"x", c"y", c"top", c"left", c"right", c"bottom", c"width", c"height"] {
+    for name in &[
+        c"x", c"y", c"top", c"left", c"right", c"bottom", c"width", c"height",
+    ] {
         set_prop_f64(&mut cx, obj_root.handle(), name, 0.0);
     }
     args.rval().set(ObjectValue(obj));
@@ -1406,7 +1848,13 @@ unsafe extern "C" fn observer_ctor(cx: *mut RawJSContext, argc: u32, vp: *mut Va
     define_fn(&mut cx, obj_root.handle(), c"observe", Some(noop), 2);
     define_fn(&mut cx, obj_root.handle(), c"unobserve", Some(noop), 1);
     define_fn(&mut cx, obj_root.handle(), c"disconnect", Some(noop), 0);
-    define_fn(&mut cx, obj_root.handle(), c"takeRecords", Some(return_empty_array), 0);
+    define_fn(
+        &mut cx,
+        obj_root.handle(),
+        c"takeRecords",
+        Some(return_empty_array),
+        0,
+    );
     args.rval().set(ObjectValue(obj));
     true
 }
@@ -1415,7 +1863,11 @@ unsafe extern "C" fn return_empty_array(cx: *mut RawJSContext, argc: u32, vp: *m
     let mut cx = JSContext::from_ptr(NonNull::new(cx).unwrap());
     let args = CallArgs::from_vp(vp, argc);
     let arr = wrappers2::NewArrayObject(&mut cx, &mozjs::jsapi::HandleValueArray::empty());
-    args.rval().set(if arr.is_null() { UndefinedValue() } else { ObjectValue(arr) });
+    args.rval().set(if arr.is_null() {
+        UndefinedValue()
+    } else {
+        ObjectValue(arr)
+    });
     true
 }
 
@@ -1435,7 +1887,13 @@ unsafe extern "C" fn url_ctor(cx: *mut RawJSContext, argc: u32, vp: *mut Value) 
     set_prop_str(&mut cx, obj_root.handle(), c"pathname", "/");
     set_prop_str(&mut cx, obj_root.handle(), c"search", "");
     set_prop_str(&mut cx, obj_root.handle(), c"hash", "");
-    define_fn(&mut cx, obj_root.handle(), c"toString", Some(url_to_string), 0);
+    define_fn(
+        &mut cx,
+        obj_root.handle(),
+        c"toString",
+        Some(url_to_string),
+        0,
+    );
 
     args.rval().set(ObjectValue(obj));
     true
@@ -1453,28 +1911,54 @@ unsafe extern "C" fn url_to_string(cx: *mut RawJSContext, _argc: u32, vp: *mut V
     true
 }
 
-unsafe extern "C" fn url_search_params_ctor(cx: *mut RawJSContext, argc: u32, vp: *mut Value) -> bool {
+unsafe extern "C" fn url_search_params_ctor(
+    cx: *mut RawJSContext,
+    argc: u32,
+    vp: *mut Value,
+) -> bool {
     let mut cx = JSContext::from_ptr(NonNull::new(cx).unwrap());
     let args = CallArgs::from_vp(vp, argc);
     let obj = new_plain_object(&mut cx);
     rooted!(&in(cx) let obj_root = obj);
-    define_fn(&mut cx, obj_root.handle(), c"get", Some(storage_get_item), 1);
+    define_fn(
+        &mut cx,
+        obj_root.handle(),
+        c"get",
+        Some(storage_get_item),
+        1,
+    );
     define_fn(&mut cx, obj_root.handle(), c"set", Some(noop), 2);
     define_fn(&mut cx, obj_root.handle(), c"append", Some(noop), 2);
     define_fn(&mut cx, obj_root.handle(), c"delete", Some(noop), 1);
     define_fn(&mut cx, obj_root.handle(), c"has", Some(confirm_false), 1);
-    define_fn(&mut cx, obj_root.handle(), c"toString", Some(return_empty_string), 0);
+    define_fn(
+        &mut cx,
+        obj_root.handle(),
+        c"toString",
+        Some(return_empty_string),
+        0,
+    );
     args.rval().set(ObjectValue(obj));
     true
 }
 
-unsafe extern "C" fn abort_controller_ctor(cx: *mut RawJSContext, argc: u32, vp: *mut Value) -> bool {
+unsafe extern "C" fn abort_controller_ctor(
+    cx: *mut RawJSContext,
+    argc: u32,
+    vp: *mut Value,
+) -> bool {
     let mut cx = JSContext::from_ptr(NonNull::new(cx).unwrap());
     let args = CallArgs::from_vp(vp, argc);
     let signal = new_plain_object(&mut cx);
     rooted!(&in(cx) let sig_root = signal);
     set_prop_bool(&mut cx, sig_root.handle(), c"aborted", false);
-    define_fn(&mut cx, sig_root.handle(), c"addEventListener", Some(noop), 2);
+    define_fn(
+        &mut cx,
+        sig_root.handle(),
+        c"addEventListener",
+        Some(noop),
+        2,
+    );
 
     let obj = new_plain_object(&mut cx);
     rooted!(&in(cx) let obj_root = obj);
@@ -1490,7 +1974,13 @@ unsafe extern "C" fn headers_ctor(cx: *mut RawJSContext, argc: u32, vp: *mut Val
     let args = CallArgs::from_vp(vp, argc);
     let obj = new_plain_object(&mut cx);
     rooted!(&in(cx) let obj_root = obj);
-    define_fn(&mut cx, obj_root.handle(), c"get", Some(storage_get_item), 1);
+    define_fn(
+        &mut cx,
+        obj_root.handle(),
+        c"get",
+        Some(storage_get_item),
+        1,
+    );
     define_fn(&mut cx, obj_root.handle(), c"set", Some(noop), 2);
     define_fn(&mut cx, obj_root.handle(), c"append", Some(noop), 2);
     define_fn(&mut cx, obj_root.handle(), c"delete", Some(noop), 1);
@@ -1502,8 +1992,18 @@ unsafe extern "C" fn headers_ctor(cx: *mut RawJSContext, argc: u32, vp: *mut Val
 unsafe extern "C" fn noop_ctor(cx: *mut RawJSContext, argc: u32, vp: *mut Value) -> bool {
     let mut cx = JSContext::from_ptr(NonNull::new(cx).unwrap());
     let args = CallArgs::from_vp(vp, argc);
-    let obj = new_plain_object(&mut cx);
-    args.rval().set(ObjectValue(obj));
+    if !args.is_constructing() {
+        args.rval().set(UndefinedValue());
+        return true;
+    }
+
+    let this = args.thisv().get();
+    if this.is_object() {
+        args.rval().set(this);
+    } else {
+        let obj = new_plain_object(&mut cx);
+        args.rval().set(ObjectValue(obj));
+    }
     true
 }
 
@@ -1525,8 +2025,20 @@ unsafe extern "C" fn blob_ctor(cx: *mut RawJSContext, argc: u32, vp: *mut Value)
 /// `fetch(url).then(r => r.json()).then(...)` or `await fetch(url)` now actually
 /// receive data instead of hanging forever.
 unsafe fn install_fetch(cx: &mut JSContext, global: mozjs::gc::Handle<*mut JSObject>) {
-    eval_bootstrap(cx, global, c"fetch", r#"
+    eval_bootstrap(
+        cx,
+        global,
+        c"fetch",
+        r#"
         (function() {
+            function trace(msg) {
+                if (globalThis.__aurora_debug_youtube__) console.log('[yt-fetch] ' + msg);
+            }
+            function traceError(where, error) {
+                if (!globalThis.__aurora_debug_youtube__) return;
+                var detail = error && (error.stack || error.message) || String(error);
+                console.log('[yt-fetch] ' + where + ' threw: ' + detail);
+            }
             function makeHeaders(raw) {
                 return {
                     get: function(name) {
@@ -1561,7 +2073,15 @@ unsafe fn install_fetch(cx: &mut JSContext, global: mozjs::gc::Handle<*mut JSObj
                     type: 'basic',
                     bodyUsed: false,
                     headers: makeHeaders(raw),
-                    json: function() { return consume().then(function(t) { return JSON.parse(t); }); },
+                    json: function() { return consume().then(function(t) {
+                        trace('json ' + url + ' bytes=' + t.length);
+                        try {
+                            return JSON.parse(t);
+                        } catch (e) {
+                            traceError('json ' + url, e);
+                            throw e;
+                        }
+                    }); },
                     text: function() { return consume(); },
                     arrayBuffer: function() { return consume().then(function(t) {
                         var buf = new ArrayBuffer(t.length);
@@ -1580,19 +2100,25 @@ unsafe fn install_fetch(cx: &mut JSContext, global: mozjs::gc::Handle<*mut JSObj
             globalThis.fetch = function fetch(input, init) {
                 var url = (typeof input === 'string') ? input
                     : (input && (input.url || input.href)) || String(input);
+                trace('fetch ' + url);
                 try {
                     var raw = __aurora_fetch_sync__(url);
+                    trace('fetch result ' + url + ' ok=' + !!(raw && raw.ok) +
+                        ' status=' + (raw && raw.status) + ' bytes=' + ((raw && raw.body && raw.body.length) || 0) +
+                        (raw && raw.error ? (' error=' + raw.error) : ''));
                     if (raw && raw.ok) {
                         return Promise.resolve(makeResponse(raw, url));
                     }
                     return Promise.reject(new TypeError('Failed to fetch: ' + url +
                         (raw && raw.error ? (' (' + raw.error + ')') : '')));
                 } catch (e) {
+                    traceError('fetch ' + url, e);
                     return Promise.reject(e);
                 }
             };
         })();
-    "#);
+    "#,
+    );
 }
 
 /// `XMLHttpRequest` — JS-level polyfill over `__aurora_fetch_sync__`. The
@@ -1600,8 +2126,20 @@ unsafe fn install_fetch(cx: &mut JSContext, global: mozjs::gc::Handle<*mut JSObj
 /// deferred via `queueMicrotask` so listeners attached immediately after
 /// `send()` (universal in real-world code) are registered before it fires.
 unsafe fn install_xhr(cx: &mut JSContext, global: mozjs::gc::Handle<*mut JSObject>) {
-    eval_bootstrap(cx, global, c"xhr", r#"
+    eval_bootstrap(
+        cx,
+        global,
+        c"xhr",
+        r#"
         (function() {
+            function trace(msg) {
+                if (globalThis.__aurora_debug_youtube__) console.log('[yt-xhr] ' + msg);
+            }
+            function traceError(where, error) {
+                if (!globalThis.__aurora_debug_youtube__) return;
+                var detail = error && (error.stack || error.message) || String(error);
+                console.log('[yt-xhr] ' + where + ' threw: ' + detail);
+            }
             function XMLHttpRequest() {
                 this.readyState = 0;
                 this.status = 0;
@@ -1651,9 +2189,9 @@ unsafe fn install_xhr(cx: &mut JSContext, global: mozjs::gc::Handle<*mut JSObjec
             XMLHttpRequest.prototype._dispatch = function(type) {
                 var ev = { type: type, target: this, currentTarget: this };
                 var handler = this['on' + type];
-                if (typeof handler === 'function') { try { handler.call(this, ev); } catch (e) {} }
+                if (typeof handler === 'function') { try { handler.call(this, ev); } catch (e) { traceError('on' + type + ' ' + this._url, e); } }
                 var l = this._listeners[type];
-                if (l) { for (var i = 0; i < l.length; i++) { try { l[i].call(this, ev); } catch (e) {} } }
+                if (l) { for (var i = 0; i < l.length; i++) { try { l[i].call(this, ev); } catch (e) { traceError(type + ' listener ' + this._url, e); } } }
             };
             XMLHttpRequest.prototype.abort = function() {
                 this.readyState = 0;
@@ -1666,12 +2204,17 @@ unsafe fn install_xhr(cx: &mut JSContext, global: mozjs::gc::Handle<*mut JSObjec
                 queueMicrotask(function() {
                     if (self.readyState === 0) return; // aborted before send landed
                     var raw;
+                    trace('send ' + self._url);
                     try {
                         raw = __aurora_fetch_sync__(self._url);
                     } catch (e) {
+                        traceError('send ' + self._url, e);
                         raw = { ok: false, status: 0, body: '', error: String(e) };
                     }
                     self.readyState = 4;
+                    trace('result ' + self._url + ' ok=' + !!(raw && raw.ok) +
+                        ' status=' + (raw && raw.status) + ' bytes=' + ((raw && raw.body && raw.body.length) || 0) +
+                        (raw && raw.error ? (' error=' + raw.error) : ''));
                     if (raw && raw.ok) {
                         self.status = raw.status || 200;
                         self.statusText = 'OK';
@@ -1692,7 +2235,8 @@ unsafe fn install_xhr(cx: &mut JSContext, global: mozjs::gc::Handle<*mut JSObjec
             };
             globalThis.XMLHttpRequest = XMLHttpRequest;
         })();
-    "#);
+    "#,
+    );
 }
 
 unsafe extern "C" fn websocket_ctor(cx: *mut RawJSContext, argc: u32, vp: *mut Value) -> bool {
@@ -1703,7 +2247,13 @@ unsafe extern "C" fn websocket_ctor(cx: *mut RawJSContext, argc: u32, vp: *mut V
     set_prop_i32(&mut cx, obj_root.handle(), c"readyState", 3); // CLOSED
     define_fn(&mut cx, obj_root.handle(), c"send", Some(noop), 1);
     define_fn(&mut cx, obj_root.handle(), c"close", Some(noop), 0);
-    define_fn(&mut cx, obj_root.handle(), c"addEventListener", Some(noop), 2);
+    define_fn(
+        &mut cx,
+        obj_root.handle(),
+        c"addEventListener",
+        Some(noop),
+        2,
+    );
     args.rval().set(ObjectValue(obj));
     true
 }

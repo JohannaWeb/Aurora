@@ -42,28 +42,136 @@ pub(in crate::js_sm) unsafe fn install_document(
     set_prop_i32(cx, doc_root.handle(), c"__node_id__", 0); // document uses ID 0
 
     // Query methods
-    define_fn(cx, doc_root.handle(), c"getElementById", Some(doc_get_element_by_id), 1);
-    define_fn(cx, doc_root.handle(), c"querySelector", Some(doc_query_selector), 1);
-    define_fn(cx, doc_root.handle(), c"querySelectorAll", Some(doc_query_selector_all), 1);
-    define_fn(cx, doc_root.handle(), c"getElementsByTagName", Some(doc_get_elements_by_tag), 1);
-    define_fn(cx, doc_root.handle(), c"getElementsByTagNameNS", Some(doc_get_elements_by_tag), 2);
-    define_fn(cx, doc_root.handle(), c"getElementsByClassName", Some(doc_get_elements_by_class), 1);
-    define_fn(cx, doc_root.handle(), c"getElementsByName", Some(doc_get_elements_by_tag), 1);
+    define_fn(
+        cx,
+        doc_root.handle(),
+        c"getElementById",
+        Some(doc_get_element_by_id),
+        1,
+    );
+    define_fn(
+        cx,
+        doc_root.handle(),
+        c"querySelector",
+        Some(doc_query_selector),
+        1,
+    );
+    define_fn(
+        cx,
+        doc_root.handle(),
+        c"querySelectorAll",
+        Some(doc_query_selector_all),
+        1,
+    );
+    define_fn(
+        cx,
+        doc_root.handle(),
+        c"getElementsByTagName",
+        Some(doc_get_elements_by_tag),
+        1,
+    );
+    define_fn(
+        cx,
+        doc_root.handle(),
+        c"getElementsByTagNameNS",
+        Some(doc_get_elements_by_tag),
+        2,
+    );
+    define_fn(
+        cx,
+        doc_root.handle(),
+        c"getElementsByClassName",
+        Some(doc_get_elements_by_class),
+        1,
+    );
+    define_fn(
+        cx,
+        doc_root.handle(),
+        c"getElementsByName",
+        Some(doc_get_elements_by_tag),
+        1,
+    );
 
     // Factory methods
-    define_fn(cx, doc_root.handle(), c"createElement", Some(doc_create_element), 2);
-    define_fn(cx, doc_root.handle(), c"createElementNS", Some(doc_create_element_ns), 3);
-    define_fn(cx, doc_root.handle(), c"createTextNode", Some(doc_create_text_node), 1);
-    define_fn(cx, doc_root.handle(), c"createComment", Some(doc_create_text_node), 1);
-    define_fn(cx, doc_root.handle(), c"createDocumentFragment", Some(doc_create_fragment), 0);
-    define_fn(cx, doc_root.handle(), c"createEvent", Some(doc_create_event), 1);
-    define_fn(cx, doc_root.handle(), c"createRange", Some(doc_create_range), 0);
-    define_fn(cx, doc_root.handle(), c"createTreeWalker", Some(doc_create_tree_walker), 4);
+    define_fn(
+        cx,
+        doc_root.handle(),
+        c"createElement",
+        Some(doc_create_element),
+        2,
+    );
+    define_fn(
+        cx,
+        doc_root.handle(),
+        c"createElementNS",
+        Some(doc_create_element_ns),
+        3,
+    );
+    define_fn(
+        cx,
+        doc_root.handle(),
+        c"createTextNode",
+        Some(doc_create_text_node),
+        1,
+    );
+    define_fn(
+        cx,
+        doc_root.handle(),
+        c"createComment",
+        Some(doc_create_text_node),
+        1,
+    );
+    define_fn(
+        cx,
+        doc_root.handle(),
+        c"createDocumentFragment",
+        Some(doc_create_fragment),
+        0,
+    );
+    define_fn(
+        cx,
+        doc_root.handle(),
+        c"createEvent",
+        Some(doc_create_event),
+        1,
+    );
+    define_fn(
+        cx,
+        doc_root.handle(),
+        c"createRange",
+        Some(doc_create_range),
+        0,
+    );
+    define_fn(
+        cx,
+        doc_root.handle(),
+        c"createTreeWalker",
+        Some(doc_create_tree_walker),
+        4,
+    );
 
     // Event methods
-    define_fn(cx, doc_root.handle(), c"addEventListener", Some(doc_add_event_listener), 3);
-    define_fn(cx, doc_root.handle(), c"removeEventListener", Some(noop_cb), 3);
-    define_fn(cx, doc_root.handle(), c"dispatchEvent", Some(return_true_doc), 1);
+    define_fn(
+        cx,
+        doc_root.handle(),
+        c"addEventListener",
+        Some(doc_add_event_listener),
+        3,
+    );
+    define_fn(
+        cx,
+        doc_root.handle(),
+        c"removeEventListener",
+        Some(noop_cb),
+        3,
+    );
+    define_fn(
+        cx,
+        doc_root.handle(),
+        c"dispatchEvent",
+        Some(return_true_doc),
+        1,
+    );
 
     // Document tree nodes
     install_head_body(cx, doc_root.handle(), document);
@@ -71,8 +179,20 @@ pub(in crate::js_sm) unsafe fn install_document(
     // document.implementation
     let impl_obj = new_plain_object(cx);
     rooted!(&in(cx) let impl_root = impl_obj);
-    define_fn(cx, impl_root.handle(), c"hasFeature", Some(return_true_doc), 2);
-    define_fn(cx, impl_root.handle(), c"createHTMLDocument", Some(impl_create_html_doc), 1);
+    define_fn(
+        cx,
+        impl_root.handle(),
+        c"hasFeature",
+        Some(return_true_doc),
+        2,
+    );
+    define_fn(
+        cx,
+        impl_root.handle(),
+        c"createHTMLDocument",
+        Some(impl_create_html_doc),
+        1,
+    );
     set_prop_obj(cx, doc_root.handle(), c"implementation", impl_obj);
 
     // write / writeln stubs
@@ -80,9 +200,27 @@ pub(in crate::js_sm) unsafe fn install_document(
     define_fn(cx, doc_root.handle(), c"writeln", Some(noop_cb), 1);
     define_fn(cx, doc_root.handle(), c"open", Some(noop_cb), 0);
     define_fn(cx, doc_root.handle(), c"close", Some(noop_cb), 0);
-    define_fn(cx, doc_root.handle(), c"execCommand", Some(return_false_doc), 3);
-    define_fn(cx, doc_root.handle(), c"hasFocus", Some(return_false_doc), 0);
-    define_fn(cx, doc_root.handle(), c"getSelection", Some(return_null_doc), 0);
+    define_fn(
+        cx,
+        doc_root.handle(),
+        c"execCommand",
+        Some(return_false_doc),
+        3,
+    );
+    define_fn(
+        cx,
+        doc_root.handle(),
+        c"hasFocus",
+        Some(return_false_doc),
+        0,
+    );
+    define_fn(
+        cx,
+        doc_root.handle(),
+        c"getSelection",
+        Some(return_null_doc),
+        0,
+    );
 
     // Register as global property
     rooted!(&in(cx) let doc_val = ObjectValue(doc_obj));
@@ -165,19 +303,25 @@ unsafe extern "C" fn return_null_doc(_cx: *mut RawJSContext, _argc: u32, vp: *mu
     true
 }
 
-unsafe extern "C" fn impl_create_html_doc(cx: *mut RawJSContext, argc: u32, vp: *mut Value) -> bool {
+unsafe extern "C" fn impl_create_html_doc(
+    cx: *mut RawJSContext,
+    argc: u32,
+    vp: *mut Value,
+) -> bool {
     use crate::dom::Node;
     let mut cx = JSContext::from_ptr(NonNull::new_unchecked(cx));
     let args = mozjs::jsapi::CallArgs::from_vp(vp, argc);
     let title = arg_to_string(&mut cx, &args, 0);
-    let doc = Node::document(vec![
-        Node::element("html", vec![
-            Node::element("head", vec![
-                Node::element("title", vec![Node::text(title)]),
-            ]),
+    let doc = Node::document(vec![Node::element(
+        "html",
+        vec![
+            Node::element(
+                "head",
+                vec![Node::element("title", vec![Node::text(title)])],
+            ),
             Node::element("body", vec![]),
-        ]),
-    ]);
+        ],
+    )]);
     let obj = create_js_node(&mut cx, doc);
     args.rval().set(ObjectValue(obj));
     true

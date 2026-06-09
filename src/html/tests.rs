@@ -296,7 +296,7 @@ fn style_text_stays_inside_style_element() {
 
     let occurrences = find_css_text(&dom, "doc");
     println!("CSS text locations: {occurrences:#?}");
-    
+
     for loc in &occurrences {
         assert!(
             loc.contains("<style>"),

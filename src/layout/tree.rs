@@ -1,8 +1,8 @@
 use crate::style::StyleTree;
 
+use super::LayoutBox;
 use super::constants::{DEFAULT_VIEWPORT_HEIGHT, DEFAULT_VIEWPORT_WIDTH};
 use super::engine::layout_root_from_style_tree;
-use super::LayoutBox;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct LayoutTree {

@@ -178,7 +178,6 @@ pub(in crate::js_boa) fn install_platform_objects(context: &mut Context, global_
         })();
     "#;
     let _ = context.eval(Source::from_bytes(custom_elements_js.as_bytes()));
-
 }
 
 fn unsupported_crypto() -> NativeFunction {

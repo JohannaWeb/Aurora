@@ -48,7 +48,8 @@ pub(in crate::js_boa) fn install_window_core(context: &mut Context, global_obj: 
             NativeFunction::from_fn_ptr(|_this, args, ctx| {
                 let cond = args.get(0).map(|v| v.to_boolean()).unwrap_or(false);
                 if !cond {
-                    let msg = args.get(1)
+                    let msg = args
+                        .get(1)
                         .map(|v| v.display().to_string())
                         .unwrap_or_else(|| "Assertion failed".to_string());
                     eprintln!("console.assert: {msg}");

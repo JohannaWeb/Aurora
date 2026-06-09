@@ -73,34 +73,36 @@ impl RenderBackend for ImageBackend {
         let y1 = bounds.bottom();
 
         if border.top.0 > 0.0 {
-            self.fill_rect(Bounds::new(x0, y0, bounds.width, border.top), color, opacity);
+            self.fill_rect(
+                Bounds::new(x0, y0, bounds.width, border.top),
+                color,
+                opacity,
+            );
         }
         if border.bottom.0 > 0.0 {
             self.fill_rect(
                 Bounds::new(x0, Px(y1.0 - border.bottom.0), bounds.width, border.bottom),
-                color, opacity,
+                color,
+                opacity,
             );
         }
         if border.left.0 > 0.0 {
-            self.fill_rect(Bounds::new(x0, y0, border.left, bounds.height), color, opacity);
+            self.fill_rect(
+                Bounds::new(x0, y0, border.left, bounds.height),
+                color,
+                opacity,
+            );
         }
         if border.right.0 > 0.0 {
             self.fill_rect(
                 Bounds::new(Px(x1.0 - border.right.0), y0, border.right, bounds.height),
-                color, opacity,
+                color,
+                opacity,
             );
         }
     }
 
-    fn draw_text(
-        &mut self,
-        text: &str,
-        x: Px,
-        y: Px,
-        font_size: Px,
-        color: Rgba,
-        opacity: f32,
-    ) {
+    fn draw_text(&mut self, text: &str, x: Px, y: Px, font_size: Px, color: Rgba, opacity: f32) {
         if opacity < 0.01 || text.is_empty() {
             return;
         }
@@ -110,7 +112,7 @@ impl RenderBackend for ImageBackend {
 
         let text_run = crate::font::layout_text_run(text, font_size);
         // ISSUE: Parley 0.9.0 metrics (via Skrifa) differ from our legacy shaper.
-        // The new metrics generally place the baseline slightly lower. 
+        // The new metrics generally place the baseline slightly lower.
         // 0.83 is a more accurate approximation for Skrifa-based fonts at 16px
         // than the old 0.81 default.
         let baseline_y = y + font_size * 0.83;
@@ -151,7 +153,9 @@ impl RenderBackend for ImageBackend {
                     let py = (gy.round() as i32 + dy as i32) as u32;
                     if px < img_w && py < img_h {
                         let glyph_color = Rgba::new(
-                            color.r, color.g, color.b,
+                            color.r,
+                            color.g,
+                            color.b,
                             ((alpha as f32 / 255.0) * color.a as f32).round() as u8,
                         );
                         self.blend_pixel(px, py, glyph_color, opacity);
@@ -200,7 +204,12 @@ impl RenderBackend for ImageBackend {
         self.fill_rect(bounds, Rgba::new(220, 235, 250, 255), opacity);
         self.stroke_rect(
             bounds,
-            BorderEdge { top: Px(1.0), right: Px(1.0), bottom: Px(1.0), left: Px(1.0) },
+            BorderEdge {
+                top: Px(1.0),
+                right: Px(1.0),
+                bottom: Px(1.0),
+                left: Px(1.0),
+            },
             Rgba::new(100, 150, 200, 255),
             opacity,
         );

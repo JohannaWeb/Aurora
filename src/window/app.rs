@@ -3,12 +3,12 @@ use std::time::Instant;
 use vello::kurbo::Affine;
 use vello::peniko::{Color, Fill};
 use vello::util::{RenderContext, RenderSurface};
-use vello::{wgpu, Renderer, RendererOptions, Scene};
+use vello::{Renderer, RendererOptions, Scene, wgpu};
 use winit::window::Window;
 
+use super::BROWSER_CHROME_HEIGHT;
 use super::chrome::paint_browser_chrome_scene;
 use super::input::WindowInput;
-use super::BROWSER_CHROME_HEIGHT;
 
 pub(super) struct AuroraApp {
     pub(super) input: WindowInput,

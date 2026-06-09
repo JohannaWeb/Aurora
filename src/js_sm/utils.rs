@@ -5,11 +5,27 @@ use std::ptr::NonNull;
 use mozjs::context::JSContext;
 use mozjs::conversions::jsstr_to_string;
 use mozjs::jsapi::{JSObject, Value};
-use mozjs::jsval::{BooleanValue, DoubleValue, NullValue, ObjectValue, StringValue, UndefinedValue};
+use mozjs::jsval::{
+    BooleanValue, DoubleValue, NullValue, ObjectValue, StringValue, UndefinedValue,
+};
 use mozjs::rooted;
-use mozjs::rust::{evaluate_script, wrappers2, CompileOptionsWrapper};
+use mozjs::rust::{CompileOptionsWrapper, evaluate_script, wrappers2};
 
 use super::state::SmState;
+
+pub(super) fn debug_youtube_enabled() -> bool {
+    matches!(
+        std::env::var("AURORA_DEBUG_YOUTUBE").as_deref(),
+        Ok("1") | Ok("true") | Ok("TRUE") | Ok("yes") | Ok("YES")
+    )
+}
+
+pub(super) fn debug_youtube_verbose_enabled() -> bool {
+    matches!(
+        std::env::var("AURORA_DEBUG_YOUTUBE_VERBOSE").as_deref(),
+        Ok("1") | Ok("true") | Ok("TRUE") | Ok("yes") | Ok("YES")
+    )
+}
 
 // ── State access ────────────────────────────────────────────────────────────
 
@@ -112,7 +128,8 @@ pub(super) unsafe fn get_prop_string(
     name: &CStr,
 ) -> Option<String> {
     rooted!(&in(cx) let mut val = UndefinedValue());
-    if wrappers2::JS_GetProperty(cx, obj, name.as_ptr(), val.handle_mut()) && val.get().is_string() {
+    if wrappers2::JS_GetProperty(cx, obj, name.as_ptr(), val.handle_mut()) && val.get().is_string()
+    {
         let raw = val.get().to_string();
         if !raw.is_null() {
             return Some(jsstr_to_string(cx.raw_cx(), NonNull::new_unchecked(raw)));
@@ -178,7 +195,12 @@ pub(super) unsafe fn define_ctor_with_prototype(
     set_prop_obj(cx, ctor_root.handle(), c"prototype", proto);
 
     rooted!(&in(cx) let ctor_again = ObjectValue(ctor_obj));
-    wrappers2::JS_SetProperty(cx, proto_root.handle(), c"constructor".as_ptr(), ctor_again.handle());
+    wrappers2::JS_SetProperty(
+        cx,
+        proto_root.handle(),
+        c"constructor".as_ptr(),
+        ctor_again.handle(),
+    );
 
     proto
 }
@@ -190,7 +212,14 @@ pub(super) unsafe fn define_getter(
     getter: mozjs::jsapi::JSNative,
 ) {
     use mozjs::jsapi::JSPROP_ENUMERATE;
-    wrappers2::JS_DefineProperty1(cx, obj, name.as_ptr(), getter, None, JSPROP_ENUMERATE as u32);
+    wrappers2::JS_DefineProperty1(
+        cx,
+        obj,
+        name.as_ptr(),
+        getter,
+        None,
+        JSPROP_ENUMERATE as u32,
+    );
 }
 
 pub(super) unsafe fn define_accessor(
@@ -201,18 +230,33 @@ pub(super) unsafe fn define_accessor(
     setter: mozjs::jsapi::JSNative,
 ) {
     use mozjs::jsapi::JSPROP_ENUMERATE;
-    wrappers2::JS_DefineProperty1(cx, obj, name.as_ptr(), getter, setter, JSPROP_ENUMERATE as u32);
+    wrappers2::JS_DefineProperty1(
+        cx,
+        obj,
+        name.as_ptr(),
+        getter,
+        setter,
+        JSPROP_ENUMERATE as u32,
+    );
 }
 
 /// Extract a __node_id__ integer from a JS value that represents a DOM node object.
 pub(super) unsafe fn val_to_node_id(cx: &mut JSContext, val: Value) -> Option<u32> {
-    if !val.is_object() { return None; }
+    if !val.is_object() {
+        return None;
+    }
     let obj = val.to_object_or_null();
-    if obj.is_null() { return None; }
+    if obj.is_null() {
+        return None;
+    }
     rooted!(&in(cx) let obj_root = obj);
     rooted!(&in(cx) let mut id_val = UndefinedValue());
-    if wrappers2::JS_GetProperty(cx, obj_root.handle(), c"__node_id__".as_ptr(), id_val.handle_mut())
-        && id_val.get().is_number()
+    if wrappers2::JS_GetProperty(
+        cx,
+        obj_root.handle(),
+        c"__node_id__".as_ptr(),
+        id_val.handle_mut(),
+    ) && id_val.get().is_number()
     {
         Some(id_val.get().to_number() as u32)
     } else {
@@ -235,7 +279,11 @@ pub(super) unsafe fn value_to_string(cx: &mut JSContext, val: mozjs::gc::Handle<
     jsstr_to_string(cx.raw_cx(), NonNull::new_unchecked(raw))
 }
 
-pub(super) unsafe fn arg_to_string(cx: &mut JSContext, args: &mozjs::jsapi::CallArgs, idx: u32) -> String {
+pub(super) unsafe fn arg_to_string(
+    cx: &mut JSContext,
+    args: &mozjs::jsapi::CallArgs,
+    idx: u32,
+) -> String {
     if args.argc_ > idx {
         rooted!(&in(cx) let v = args.get(idx).get());
         value_to_string(cx, v.handle())
@@ -247,11 +295,7 @@ pub(super) unsafe fn arg_to_string(cx: &mut JSContext, args: &mozjs::jsapi::Call
 pub(super) unsafe fn arg_to_f64(args: &mozjs::jsapi::CallArgs, idx: u32) -> f64 {
     if args.argc_ > idx {
         let v = args.get(idx).get();
-        if v.is_number() {
-            v.to_number()
-        } else {
-            0.0
-        }
+        if v.is_number() { v.to_number() } else { 0.0 }
     } else {
         0.0
     }
@@ -395,5 +439,12 @@ pub(super) unsafe fn pending_exception_string(cx: &mut JSContext) -> String {
         s
     } else {
         "JS error (no exception)".to_string()
+    }
+}
+
+pub(super) unsafe fn clear_pending_exception(cx: &mut JSContext) {
+    if wrappers2::JS_IsExceptionPending(cx) {
+        let msg = pending_exception_string(cx);
+        eprintln!("JS exception: {}", msg);
     }
 }

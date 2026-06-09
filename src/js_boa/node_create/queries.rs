@@ -64,7 +64,11 @@ pub(in crate::js_boa) fn install_query_methods(
         NativeFunction::from_copy_closure_with_captures(
             |_this, args, cap: &NodeCapture, _ctx| {
                 let sel = js_string_of(args.get(0).unwrap_or(&JsValue::undefined()));
-                Ok(JsValue::from(selector_matches(&cap.node, &sel, &cap.document)))
+                Ok(JsValue::from(selector_matches(
+                    &cap.node,
+                    &sel,
+                    &cap.document,
+                )))
             },
             cap.clone(),
         ),

@@ -23,14 +23,37 @@ pub(in crate::js_sm) unsafe fn install_core_globals(
     let console = new_plain_object(cx);
     rooted!(&in(cx) let console_root = console);
     for name in &[
-        c"log", c"info", c"warn", c"error", c"debug", c"trace",
-        c"dir", c"dirxml", c"table", c"group", c"groupCollapsed",
-        c"groupEnd", c"time", c"timeEnd", c"timeLog", c"timeStamp",
-        c"clear", c"count", c"countReset", c"profile", c"profileEnd",
+        c"log",
+        c"info",
+        c"warn",
+        c"error",
+        c"debug",
+        c"trace",
+        c"dir",
+        c"dirxml",
+        c"table",
+        c"group",
+        c"groupCollapsed",
+        c"groupEnd",
+        c"time",
+        c"timeEnd",
+        c"timeLog",
+        c"timeStamp",
+        c"clear",
+        c"count",
+        c"countReset",
+        c"profile",
+        c"profileEnd",
     ] {
         define_fn(cx, console_root.handle(), name, Some(console_log), 1);
     }
-    define_fn(cx, console_root.handle(), c"assert", Some(console_assert), 2);
+    define_fn(
+        cx,
+        console_root.handle(),
+        c"assert",
+        Some(console_assert),
+        2,
+    );
     set_prop_obj(cx, global, c"console", console);
 
     // Viewport / screen numbers
@@ -62,8 +85,15 @@ pub(in crate::js_sm) unsafe fn install_core_globals(
     }
     set_prop_obj(cx, global, c"screen", screen);
 
-    // Window event listener stubs
-    define_fn(cx, global, c"addEventListener", Some(noop), 2);
+    // Window event listeners share the document-level listener bucket for
+    // startup events such as DOMContentLoaded.
+    define_fn(
+        cx,
+        global,
+        c"addEventListener",
+        Some(window_add_event_listener),
+        2,
+    );
     define_fn(cx, global, c"removeEventListener", Some(noop), 2);
     define_fn(cx, global, c"dispatchEvent", Some(return_true), 1);
     define_fn(cx, global, c"focus", Some(noop), 0);
@@ -84,9 +114,27 @@ pub(in crate::js_sm) unsafe fn install_core_globals(
     define_fn(cx, perf_root.handle(), c"measure", Some(noop), 1);
     define_fn(cx, perf_root.handle(), c"clearMarks", Some(noop), 0);
     define_fn(cx, perf_root.handle(), c"clearMeasures", Some(noop), 0);
-    define_fn(cx, perf_root.handle(), c"getEntriesByType", Some(return_empty_array), 1);
-    define_fn(cx, perf_root.handle(), c"getEntriesByName", Some(return_empty_array), 1);
-    define_fn(cx, perf_root.handle(), c"getEntries", Some(return_empty_array), 0);
+    define_fn(
+        cx,
+        perf_root.handle(),
+        c"getEntriesByType",
+        Some(return_empty_array),
+        1,
+    );
+    define_fn(
+        cx,
+        perf_root.handle(),
+        c"getEntriesByName",
+        Some(return_empty_array),
+        1,
+    );
+    define_fn(
+        cx,
+        perf_root.handle(),
+        c"getEntries",
+        Some(return_empty_array),
+        0,
+    );
     set_prop_f64(cx, perf_root.handle(), c"timeOrigin", 0.0);
 
     // performance.timing (Navigation Timing API) — sites read these to compute
@@ -96,14 +144,27 @@ pub(in crate::js_sm) unsafe fn install_core_globals(
     let timing = new_plain_object(cx);
     rooted!(&in(cx) let timing_root = timing);
     for name in &[
-        c"navigationStart", c"unloadEventStart", c"unloadEventEnd",
-        c"redirectStart", c"redirectEnd", c"fetchStart",
-        c"domainLookupStart", c"domainLookupEnd",
-        c"connectStart", c"connectEnd", c"secureConnectionStart",
-        c"requestStart", c"responseStart", c"responseEnd",
-        c"domLoading", c"domInteractive",
-        c"domContentLoadedEventStart", c"domContentLoadedEventEnd",
-        c"domComplete", c"loadEventStart", c"loadEventEnd",
+        c"navigationStart",
+        c"unloadEventStart",
+        c"unloadEventEnd",
+        c"redirectStart",
+        c"redirectEnd",
+        c"fetchStart",
+        c"domainLookupStart",
+        c"domainLookupEnd",
+        c"connectStart",
+        c"connectEnd",
+        c"secureConnectionStart",
+        c"requestStart",
+        c"responseStart",
+        c"responseEnd",
+        c"domLoading",
+        c"domInteractive",
+        c"domContentLoadedEventStart",
+        c"domContentLoadedEventEnd",
+        c"domComplete",
+        c"loadEventStart",
+        c"loadEventEnd",
     ] {
         set_prop_f64(cx, timing_root.handle(), name, now);
     }
@@ -113,8 +174,12 @@ pub(in crate::js_sm) unsafe fn install_core_globals(
     // navigator
     let navigator = new_plain_object(cx);
     rooted!(&in(cx) let nav_root = navigator);
-    set_prop_str(cx, nav_root.handle(), c"userAgent",
-        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Aurora/0.3 Safari/537.36");
+    set_prop_str(
+        cx,
+        nav_root.handle(),
+        c"userAgent",
+        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Aurora/0.3 Safari/537.36",
+    );
     set_prop_str(cx, nav_root.handle(), c"platform", "Linux x86_64");
     set_prop_str(cx, nav_root.handle(), c"language", "en-US");
     set_prop_str(cx, nav_root.handle(), c"vendor", "");
@@ -127,7 +192,13 @@ pub(in crate::js_sm) unsafe fn install_core_globals(
     set_prop_f64(cx, nav_root.handle(), c"maxTouchPoints", 0.0);
     define_fn(cx, nav_root.handle(), c"sendBeacon", Some(return_true), 2);
     define_fn(cx, nav_root.handle(), c"vibrate", Some(return_true), 1);
-    define_fn(cx, nav_root.handle(), c"registerProtocolHandler", Some(noop), 3);
+    define_fn(
+        cx,
+        nav_root.handle(),
+        c"registerProtocolHandler",
+        Some(noop),
+        3,
+    );
 
     let geolocation = new_plain_object(cx);
     rooted!(&in(cx) let geo_root = geolocation);
@@ -141,8 +212,20 @@ pub(in crate::js_sm) unsafe fn install_core_globals(
     // crypto stub
     let crypto = new_plain_object(cx);
     rooted!(&in(cx) let crypto_root = crypto);
-    define_fn(cx, crypto_root.handle(), c"getRandomValues", Some(crypto_get_random_values), 1);
-    define_fn(cx, crypto_root.handle(), c"randomUUID", Some(crypto_random_uuid), 0);
+    define_fn(
+        cx,
+        crypto_root.handle(),
+        c"getRandomValues",
+        Some(crypto_get_random_values),
+        1,
+    );
+    define_fn(
+        cx,
+        crypto_root.handle(),
+        c"randomUUID",
+        Some(crypto_random_uuid),
+        0,
+    );
     set_prop_obj(cx, global, c"crypto", crypto);
 
     // history stub
@@ -174,7 +257,13 @@ pub(in crate::js_sm) unsafe fn install_core_globals(
     set_prop_obj(cx, global, c"location", location);
 
     // Internal sync fetch helper
-    define_fn(cx, global, c"__aurora_fetch_sync__", Some(aurora_fetch_sync), 1);
+    define_fn(
+        cx,
+        global,
+        c"__aurora_fetch_sync__",
+        Some(aurora_fetch_sync),
+        1,
+    );
 }
 
 // ── Native implementations ────────────────────────────────────────────────────
@@ -196,7 +285,11 @@ unsafe extern "C" fn return_empty_array(cx: *mut RawJSContext, argc: u32, vp: *m
     let args = CallArgs::from_vp(vp, argc);
     use mozjs::jsapi::HandleValueArray;
     let arr = wrappers2::NewArrayObject(&mut cx, &HandleValueArray::empty());
-    args.rval().set(if arr.is_null() { UndefinedValue() } else { ObjectValue(arr) });
+    args.rval().set(if arr.is_null() {
+        UndefinedValue()
+    } else {
+        ObjectValue(arr)
+    });
     true
 }
 
@@ -231,6 +324,37 @@ unsafe extern "C" fn console_assert(cx: *mut RawJSContext, argc: u32, vp: *mut V
     true
 }
 
+unsafe extern "C" fn window_add_event_listener(
+    cx: *mut RawJSContext,
+    argc: u32,
+    vp: *mut Value,
+) -> bool {
+    let mut cx = JSContext::from_ptr(NonNull::new(cx).unwrap());
+    let args = CallArgs::from_vp(vp, argc);
+
+    if argc < 2 {
+        args.rval().set(UndefinedValue());
+        return true;
+    }
+
+    let event_type = arg_to_string(&mut cx, &args, 0);
+    let cb_val = args.get(1).get();
+    if !cb_val.is_object() {
+        args.rval().set(UndefinedValue());
+        return true;
+    }
+
+    let state = &mut *get_state_ptr(&cx);
+    let cb_id = state.window.next_id();
+    rooted!(&in(cx) let cb_handle = cb_val);
+    rooted!(&in(cx) let global = state.global);
+    store_callback(&mut cx, global.handle(), cb_id, cb_handle.handle());
+    state.registry.add_listener(0, event_type, cb_id);
+
+    args.rval().set(UndefinedValue());
+    true
+}
+
 fn epoch_millis() -> f64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -245,7 +369,11 @@ unsafe extern "C" fn perf_now(_cx: *mut RawJSContext, argc: u32, vp: *mut Value)
     true
 }
 
-unsafe extern "C" fn crypto_get_random_values(_cx: *mut RawJSContext, argc: u32, vp: *mut Value) -> bool {
+unsafe extern "C" fn crypto_get_random_values(
+    _cx: *mut RawJSContext,
+    argc: u32,
+    vp: *mut Value,
+) -> bool {
     let args = CallArgs::from_vp(vp, argc);
     if args.argc_ > 0 {
         let buf = args.get(0).get();

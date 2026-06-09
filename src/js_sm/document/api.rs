@@ -9,8 +9,8 @@ use mozjs::jsval::{BooleanValue, NullValue, ObjectValue, UndefinedValue};
 use mozjs::rooted;
 use mozjs::rust::wrappers2;
 
-use crate::css::selectors_impl::{element_matches, parse_selector_list, AuroraSelectorImpl};
 use crate::css::ElementData;
+use crate::css::selectors_impl::{AuroraSelectorImpl, element_matches, parse_selector_list};
 use crate::dom::{Node, NodePtr};
 use crate::js_sm::utils::*;
 
@@ -22,10 +22,7 @@ const NODE_ID_PROP: *const std::ffi::c_char = c"__node_id__".as_ptr();
 
 /// Create a JS plain object representing a DOM node.
 /// Registers the node in the state registry and stores its ID on the object.
-pub(in crate::js_sm) unsafe fn create_js_node(
-    cx: &mut JSContext,
-    node: NodePtr,
-) -> *mut JSObject {
+pub(in crate::js_sm) unsafe fn create_js_node(cx: &mut JSContext, node: NodePtr) -> *mut JSObject {
     let state = &mut *get_state_ptr(cx);
     let node_id = state.registry.register(node.clone());
 
@@ -49,7 +46,12 @@ pub(in crate::js_sm) unsafe fn create_js_node(
 
     if node_type == 1 {
         set_prop_str(cx, obj_root.handle(), c"tagName", &tag_name.to_uppercase());
-        set_prop_str(cx, obj_root.handle(), c"localName", &tag_name.to_lowercase());
+        set_prop_str(
+            cx,
+            obj_root.handle(),
+            c"localName",
+            &tag_name.to_lowercase(),
+        );
 
         // Mirror common attributes
         if let Node::Element(el) = &*node.borrow() {
@@ -68,10 +70,34 @@ pub(in crate::js_sm) unsafe fn create_js_node(
             set_prop_str(cx, obj_root.handle(), c"name", &name_val);
             set_prop_str(cx, obj_root.handle(), c"value", &value_val);
             // Live accessors — each read/write goes through the Rust DOM
-            define_accessor(cx, obj_root.handle(), c"innerHTML", Some(get_inner_html), Some(set_inner_html));
-            define_accessor(cx, obj_root.handle(), c"outerHTML", Some(get_outer_html), None);
-            define_accessor(cx, obj_root.handle(), c"textContent", Some(get_text_content), Some(set_text_content));
-            define_accessor(cx, obj_root.handle(), c"innerText", Some(get_text_content), Some(set_text_content));
+            define_accessor(
+                cx,
+                obj_root.handle(),
+                c"innerHTML",
+                Some(get_inner_html),
+                Some(set_inner_html),
+            );
+            define_accessor(
+                cx,
+                obj_root.handle(),
+                c"outerHTML",
+                Some(get_outer_html),
+                None,
+            );
+            define_accessor(
+                cx,
+                obj_root.handle(),
+                c"textContent",
+                Some(get_text_content),
+                Some(set_text_content),
+            );
+            define_accessor(
+                cx,
+                obj_root.handle(),
+                c"innerText",
+                Some(get_text_content),
+                Some(set_text_content),
+            );
 
             // classList — stores __node_id__ so add/remove/toggle can mutate the Rust DOM
             let cl = make_class_list(cx, node_id, &class_val);
@@ -80,7 +106,13 @@ pub(in crate::js_sm) unsafe fn create_js_node(
             // style object (CSSStyleDeclaration stub)
             let style_obj = new_plain_object(cx);
             rooted!(&in(cx) let style_root = style_obj);
-            define_fn(cx, style_root.handle(), c"getPropertyValue", Some(return_empty_string_cb), 1);
+            define_fn(
+                cx,
+                style_root.handle(),
+                c"getPropertyValue",
+                Some(return_empty_string_cb),
+                1,
+            );
             define_fn(cx, style_root.handle(), c"setProperty", Some(noop_cb), 2);
             define_fn(cx, style_root.handle(), c"removeProperty", Some(noop_cb), 1);
             set_prop_obj(cx, obj_root.handle(), c"style", style_obj);
@@ -93,14 +125,40 @@ pub(in crate::js_sm) unsafe fn create_js_node(
             // 300x150 per the HTML spec) and getContext returns a stub 2D/WebGL
             // context so canvas-drawing app code doesn't throw on first use.
             if tag_name.eq_ignore_ascii_case("canvas") {
-                let width = el.attributes.get("width").and_then(|v| v.parse::<f64>().ok()).unwrap_or(300.0);
-                let height = el.attributes.get("height").and_then(|v| v.parse::<f64>().ok()).unwrap_or(150.0);
+                let width = el
+                    .attributes
+                    .get("width")
+                    .and_then(|v| v.parse::<f64>().ok())
+                    .unwrap_or(300.0);
+                let height = el
+                    .attributes
+                    .get("height")
+                    .and_then(|v| v.parse::<f64>().ok())
+                    .unwrap_or(150.0);
                 set_prop_f64(cx, obj_root.handle(), c"width", width);
                 set_prop_f64(cx, obj_root.handle(), c"height", height);
-                define_fn(cx, obj_root.handle(), c"getContext", Some(canvas_get_context), 2);
-                define_fn(cx, obj_root.handle(), c"toDataURL", Some(canvas_to_data_url), 2);
+                define_fn(
+                    cx,
+                    obj_root.handle(),
+                    c"getContext",
+                    Some(canvas_get_context),
+                    2,
+                );
+                define_fn(
+                    cx,
+                    obj_root.handle(),
+                    c"toDataURL",
+                    Some(canvas_to_data_url),
+                    2,
+                );
                 define_fn(cx, obj_root.handle(), c"toBlob", Some(noop_cb), 3);
-                define_fn(cx, obj_root.handle(), c"transferControlToOffscreen", Some(node_return_first_arg), 0);
+                define_fn(
+                    cx,
+                    obj_root.handle(),
+                    c"transferControlToOffscreen",
+                    Some(node_return_first_arg),
+                    0,
+                );
             }
 
             if tag_name.eq_ignore_ascii_case("template") {
@@ -111,9 +169,21 @@ pub(in crate::js_sm) unsafe fn create_js_node(
 
             // Shadow DOM — see element_attach_shadow for how this maps onto
             // the host's own NodePtr.
-            define_fn(cx, obj_root.handle(), c"attachShadow", Some(element_attach_shadow), 1);
+            define_fn(
+                cx,
+                obj_root.handle(),
+                c"attachShadow",
+                Some(element_attach_shadow),
+                1,
+            );
             set_prop_null(cx, obj_root.handle(), c"shadowRoot");
-            define_fn(cx, obj_root.handle(), c"getRootNode", Some(node_return_first_arg_or_this), 1);
+            define_fn(
+                cx,
+                obj_root.handle(),
+                c"getRootNode",
+                Some(node_return_first_arg_or_this),
+                1,
+            );
         }
 
         // <video>/<audio> — decorate with the HTMLMediaElement surface
@@ -129,7 +199,12 @@ pub(in crate::js_sm) unsafe fn create_js_node(
             let state = &mut *get_state_ptr(cx);
             let global_raw = state.global;
             rooted!(&in(cx) let global = global_raw);
-            call_named_global_fn(cx, global.handle(), c"__aurora_install_media_element__", ObjectValue(obj));
+            call_named_global_fn(
+                cx,
+                global.handle(),
+                c"__aurora_install_media_element__",
+                ObjectValue(obj),
+            );
         }
     } else if node_type == 3 {
         // Text node
@@ -154,28 +229,142 @@ pub(in crate::js_sm) unsafe fn create_js_node(
     }
 
     // Common node methods
-    define_fn(cx, obj_root.handle(), c"addEventListener", Some(node_add_event_listener), 3);
-    define_fn(cx, obj_root.handle(), c"removeEventListener", Some(node_remove_event_listener), 3);
-    define_fn(cx, obj_root.handle(), c"dispatchEvent", Some(return_true_cb), 1);
-    define_fn(cx, obj_root.handle(), c"getAttribute", Some(node_get_attribute), 1);
-    define_fn(cx, obj_root.handle(), c"setAttribute", Some(node_set_attribute), 2);
-    define_fn(cx, obj_root.handle(), c"removeAttribute", Some(node_remove_attribute), 1);
-    define_fn(cx, obj_root.handle(), c"hasAttribute", Some(node_has_attribute), 1);
-    define_fn(cx, obj_root.handle(), c"hasAttributes", Some(node_has_attributes), 0);
-    define_fn(cx, obj_root.handle(), c"appendChild", Some(node_append_child), 1);
-    define_fn(cx, obj_root.handle(), c"insertBefore", Some(node_insert_before), 2);
-    define_fn(cx, obj_root.handle(), c"removeChild", Some(node_remove_child), 1);
-    define_fn(cx, obj_root.handle(), c"replaceChild", Some(node_replace_child), 2);
-    define_fn(cx, obj_root.handle(), c"cloneNode", Some(node_clone_node), 1);
+    define_fn(
+        cx,
+        obj_root.handle(),
+        c"addEventListener",
+        Some(node_add_event_listener),
+        3,
+    );
+    define_fn(
+        cx,
+        obj_root.handle(),
+        c"removeEventListener",
+        Some(node_remove_event_listener),
+        3,
+    );
+    define_fn(
+        cx,
+        obj_root.handle(),
+        c"dispatchEvent",
+        Some(return_true_cb),
+        1,
+    );
+    define_fn(
+        cx,
+        obj_root.handle(),
+        c"getAttribute",
+        Some(node_get_attribute),
+        1,
+    );
+    define_fn(
+        cx,
+        obj_root.handle(),
+        c"setAttribute",
+        Some(node_set_attribute),
+        2,
+    );
+    define_fn(
+        cx,
+        obj_root.handle(),
+        c"removeAttribute",
+        Some(node_remove_attribute),
+        1,
+    );
+    define_fn(
+        cx,
+        obj_root.handle(),
+        c"hasAttribute",
+        Some(node_has_attribute),
+        1,
+    );
+    define_fn(
+        cx,
+        obj_root.handle(),
+        c"hasAttributes",
+        Some(node_has_attributes),
+        0,
+    );
+    define_fn(
+        cx,
+        obj_root.handle(),
+        c"appendChild",
+        Some(node_append_child),
+        1,
+    );
+    define_fn(
+        cx,
+        obj_root.handle(),
+        c"insertBefore",
+        Some(node_insert_before),
+        2,
+    );
+    define_fn(
+        cx,
+        obj_root.handle(),
+        c"removeChild",
+        Some(node_remove_child),
+        1,
+    );
+    define_fn(
+        cx,
+        obj_root.handle(),
+        c"replaceChild",
+        Some(node_replace_child),
+        2,
+    );
+    define_fn(
+        cx,
+        obj_root.handle(),
+        c"cloneNode",
+        Some(node_clone_node),
+        1,
+    );
     define_fn(cx, obj_root.handle(), c"contains", Some(node_contains), 1);
     define_fn(cx, obj_root.handle(), c"closest", Some(node_closest), 1);
     define_fn(cx, obj_root.handle(), c"matches", Some(node_matches), 1);
-    define_fn(cx, obj_root.handle(), c"querySelector", Some(node_query_selector), 1);
-    define_fn(cx, obj_root.handle(), c"querySelectorAll", Some(node_query_selector_all), 1);
-    define_fn(cx, obj_root.handle(), c"getElementsByTagName", Some(node_get_elements_by_tag), 1);
-    define_fn(cx, obj_root.handle(), c"getElementsByClassName", Some(node_get_elements_by_class), 1);
-    define_fn(cx, obj_root.handle(), c"getBoundingClientRect", Some(node_get_bounding_rect), 0);
-    define_fn(cx, obj_root.handle(), c"getClientRects", Some(return_empty_array_cb), 0);
+    define_fn(
+        cx,
+        obj_root.handle(),
+        c"querySelector",
+        Some(node_query_selector),
+        1,
+    );
+    define_fn(
+        cx,
+        obj_root.handle(),
+        c"querySelectorAll",
+        Some(node_query_selector_all),
+        1,
+    );
+    define_fn(
+        cx,
+        obj_root.handle(),
+        c"getElementsByTagName",
+        Some(node_get_elements_by_tag),
+        1,
+    );
+    define_fn(
+        cx,
+        obj_root.handle(),
+        c"getElementsByClassName",
+        Some(node_get_elements_by_class),
+        1,
+    );
+    define_fn(
+        cx,
+        obj_root.handle(),
+        c"getBoundingClientRect",
+        Some(node_get_bounding_rect),
+        0,
+    );
+    define_fn(
+        cx,
+        obj_root.handle(),
+        c"getClientRects",
+        Some(return_empty_array_cb),
+        0,
+    );
     define_fn(cx, obj_root.handle(), c"scrollIntoView", Some(noop_cb), 1);
     define_fn(cx, obj_root.handle(), c"focus", Some(noop_cb), 0);
     define_fn(cx, obj_root.handle(), c"blur", Some(noop_cb), 0);
@@ -185,33 +374,107 @@ pub(in crate::js_sm) unsafe fn create_js_node(
     define_fn(cx, obj_root.handle(), c"after", Some(noop_cb), 1);
     define_fn(cx, obj_root.handle(), c"prepend", Some(noop_cb), 1);
     define_fn(cx, obj_root.handle(), c"append", Some(node_append_child), 1);
-    define_fn(cx, obj_root.handle(), c"insertAdjacentHTML", Some(noop_cb), 2);
-    define_fn(cx, obj_root.handle(), c"insertAdjacentElement", Some(node_return_first_arg), 2);
-    define_fn(cx, obj_root.handle(), c"insertAdjacentText", Some(noop_cb), 2);
+    define_fn(
+        cx,
+        obj_root.handle(),
+        c"insertAdjacentHTML",
+        Some(noop_cb),
+        2,
+    );
+    define_fn(
+        cx,
+        obj_root.handle(),
+        c"insertAdjacentElement",
+        Some(node_return_first_arg),
+        2,
+    );
+    define_fn(
+        cx,
+        obj_root.handle(),
+        c"insertAdjacentText",
+        Some(noop_cb),
+        2,
+    );
     define_fn(cx, obj_root.handle(), c"normalize", Some(noop_cb), 0);
-    define_fn(cx, obj_root.handle(), c"animate", Some(return_animation_obj), 2);
-    define_fn(cx, obj_root.handle(), c"getAnimations", Some(return_empty_array_cb), 0);
+    define_fn(
+        cx,
+        obj_root.handle(),
+        c"animate",
+        Some(return_animation_obj),
+        2,
+    );
+    define_fn(
+        cx,
+        obj_root.handle(),
+        c"getAnimations",
+        Some(return_empty_array_cb),
+        0,
+    );
 
     // Live tree-traversal getters — computed from the Rust DOM on every access
     define_getter(cx, obj_root.handle(), c"parentNode", Some(get_parent_node));
-    define_getter(cx, obj_root.handle(), c"parentElement", Some(get_parent_element));
-    define_getter(cx, obj_root.handle(), c"nextSibling", Some(get_next_sibling));
-    define_getter(cx, obj_root.handle(), c"previousSibling", Some(get_previous_sibling));
-    define_getter(cx, obj_root.handle(), c"nextElementSibling", Some(get_next_element_sibling));
-    define_getter(cx, obj_root.handle(), c"previousElementSibling", Some(get_previous_element_sibling));
+    define_getter(
+        cx,
+        obj_root.handle(),
+        c"parentElement",
+        Some(get_parent_element),
+    );
+    define_getter(
+        cx,
+        obj_root.handle(),
+        c"nextSibling",
+        Some(get_next_sibling),
+    );
+    define_getter(
+        cx,
+        obj_root.handle(),
+        c"previousSibling",
+        Some(get_previous_sibling),
+    );
+    define_getter(
+        cx,
+        obj_root.handle(),
+        c"nextElementSibling",
+        Some(get_next_element_sibling),
+    );
+    define_getter(
+        cx,
+        obj_root.handle(),
+        c"previousElementSibling",
+        Some(get_previous_element_sibling),
+    );
     define_getter(cx, obj_root.handle(), c"childNodes", Some(get_child_nodes));
     define_getter(cx, obj_root.handle(), c"children", Some(get_children));
-    define_getter(cx, obj_root.handle(), c"childElementCount", Some(get_child_element_count));
+    define_getter(
+        cx,
+        obj_root.handle(),
+        c"childElementCount",
+        Some(get_child_element_count),
+    );
     define_getter(cx, obj_root.handle(), c"firstChild", Some(get_first_child));
     define_getter(cx, obj_root.handle(), c"lastChild", Some(get_last_child));
-    define_getter(cx, obj_root.handle(), c"firstElementChild", Some(get_first_element_child));
-    define_getter(cx, obj_root.handle(), c"lastElementChild", Some(get_last_element_child));
+    define_getter(
+        cx,
+        obj_root.handle(),
+        c"firstElementChild",
+        Some(get_first_element_child),
+    );
+    define_getter(
+        cx,
+        obj_root.handle(),
+        c"lastElementChild",
+        Some(get_last_element_child),
+    );
     set_prop_null(cx, obj_root.handle(), c"offsetParent");
 
     obj
 }
 
-pub(super) unsafe fn make_class_list(cx: &mut JSContext, node_id: u32, class_str: &str) -> *mut JSObject {
+pub(super) unsafe fn make_class_list(
+    cx: &mut JSContext,
+    node_id: u32,
+    class_str: &str,
+) -> *mut JSObject {
     let obj = new_plain_object(cx);
     rooted!(&in(cx) let obj_root = obj);
     // __node_id__ lets add/remove/toggle find and mutate the Rust node's class attribute
@@ -224,7 +487,13 @@ pub(super) unsafe fn make_class_list(cx: &mut JSContext, node_id: u32, class_str
     }
     set_prop_i32(cx, obj_root.handle(), c"length", len as i32);
     set_prop_str(cx, obj_root.handle(), c"value", class_str);
-    define_fn(cx, obj_root.handle(), c"contains", Some(class_list_contains), 1);
+    define_fn(
+        cx,
+        obj_root.handle(),
+        c"contains",
+        Some(class_list_contains),
+        1,
+    );
     define_fn(cx, obj_root.handle(), c"add", Some(class_list_add), 1);
     define_fn(cx, obj_root.handle(), c"remove", Some(class_list_remove), 1);
     define_fn(cx, obj_root.handle(), c"toggle", Some(class_list_toggle), 2);
@@ -237,6 +506,13 @@ fn collect_text_content(node: &NodePtr) -> String {
         Node::Text(t) => t.clone(),
         Node::Element(el) => el.children.iter().map(collect_text_content).collect(),
         Node::Document { children, .. } => children.iter().map(collect_text_content).collect(),
+    }
+}
+
+fn debug_tag_for_node(node: &NodePtr) -> Option<String> {
+    match &*node.borrow() {
+        Node::Element(el) => Some(el.tag_name.clone()),
+        _ => None,
     }
 }
 
@@ -278,7 +554,9 @@ fn collect_by_tag(root: &NodePtr, tag: &str, acc: &mut Vec<NodePtr>) {
             }
         }
         Node::Document { children, .. } => {
-            for child in children { collect_by_tag(child, tag, acc); }
+            for child in children {
+                collect_by_tag(child, tag, acc);
+            }
         }
         _ => {}
     }
@@ -296,7 +574,9 @@ fn collect_by_class(root: &NodePtr, class: &str, acc: &mut Vec<NodePtr>) {
             }
         }
         Node::Document { children, .. } => {
-            for child in children { collect_by_class(child, class, acc); }
+            for child in children {
+                collect_by_class(child, class, acc);
+            }
         }
         _ => {}
     }
@@ -309,7 +589,9 @@ pub(super) fn query_first_from(root: &NodePtr, selector: &str) -> Option<NodePtr
 }
 
 pub(super) fn query_all_from(root: &NodePtr, selector: &str) -> Vec<NodePtr> {
-    let Some(list) = parse_selector_list(selector) else { return vec![] };
+    let Some(list) = parse_selector_list(selector) else {
+        return vec![];
+    };
     let selectors = list.slice();
     let mut out = Vec::new();
     query_all_rec(root, selectors, root, &mut out, true);
@@ -375,15 +657,9 @@ fn node_matches_selectors(
     let ancestors = build_ancestor_chain(root, node);
     let siblings = build_sibling_list(root, node);
     let sibling_idx = sibling_index_of(root, node);
-    selectors.iter().any(|sel| {
-        element_matches(
-            sel,
-            &element_data,
-            &ancestors,
-            &siblings,
-            sibling_idx,
-        )
-    })
+    selectors
+        .iter()
+        .any(|sel| element_matches(sel, &element_data, &ancestors, &siblings, sibling_idx))
 }
 
 fn build_ancestor_chain(root: &NodePtr, target: &NodePtr) -> Vec<ElementData> {
@@ -401,33 +677,40 @@ fn build_ancestor_chain(root: &NodePtr, target: &NodePtr) -> Vec<ElementData> {
 }
 
 fn build_sibling_list(root: &NodePtr, target: &NodePtr) -> Vec<ElementData> {
-    let Some(parent) = find_parent(root, target) else { return vec![] };
+    let Some(parent) = find_parent(root, target) else {
+        return vec![];
+    };
     let children = match &*parent.borrow() {
         Node::Element(el) => el.children.clone(),
         Node::Document { children, .. } => children.clone(),
         _ => return vec![],
     };
-    children.iter().filter_map(|c| {
-        match &*c.borrow() {
+    children
+        .iter()
+        .filter_map(|c| match &*c.borrow() {
             Node::Element(el) => Some(ElementData {
                 tag_name: el.tag_name.clone(),
                 attributes: el.attributes.clone(),
             }),
             _ => None,
-        }
-    }).collect()
+        })
+        .collect()
 }
 
 fn sibling_index_of(root: &NodePtr, target: &NodePtr) -> usize {
-    let Some(parent) = find_parent(root, target) else { return 0 };
+    let Some(parent) = find_parent(root, target) else {
+        return 0;
+    };
     let children = match &*parent.borrow() {
         Node::Element(el) => el.children.clone(),
         Node::Document { children, .. } => children.clone(),
         _ => return 0,
     };
-    children.iter().enumerate().find_map(|(i, c)| {
-        (Rc::ptr_eq(c, target)).then_some(i)
-    }).unwrap_or(0)
+    children
+        .iter()
+        .enumerate()
+        .find_map(|(i, c)| (Rc::ptr_eq(c, target)).then_some(i))
+        .unwrap_or(0)
 }
 
 fn find_parent(root: &NodePtr, target: &NodePtr) -> Option<NodePtr> {
@@ -474,22 +757,32 @@ unsafe fn build_nodelist(cx: &mut JSContext, nodes: Vec<NodePtr>) -> *mut JSObje
 
 unsafe fn node_id_from_this(cx: &mut JSContext, args: &CallArgs) -> Option<u32> {
     let this_val = args.thisv().get();
-    if !this_val.is_object() { return None; }
+    if !this_val.is_object() {
+        return None;
+    }
     let this_obj = this_val.to_object_or_null();
-    if this_obj.is_null() { return None; }
+    if this_obj.is_null() {
+        return None;
+    }
     rooted!(&in(cx) let this_root = this_obj);
     rooted!(&in(cx) let mut id_val = UndefinedValue());
     if !wrappers2::JS_GetProperty(cx, this_root.handle(), NODE_ID_PROP, id_val.handle_mut()) {
         return None;
     }
     let v = id_val.get();
-    if !v.is_number() { return None; }
+    if !v.is_number() {
+        return None;
+    }
     Some(v.to_number() as u32)
 }
 
 // ── Trivial callbacks ─────────────────────────────────────────────────────────
 
-pub(super) unsafe extern "C" fn noop_cb(_cx: *mut RawJSContext, _argc: u32, vp: *mut Value) -> bool {
+pub(super) unsafe extern "C" fn noop_cb(
+    _cx: *mut RawJSContext,
+    _argc: u32,
+    vp: *mut Value,
+) -> bool {
     let args = CallArgs::from_vp(vp, _argc);
     args.rval().set(UndefinedValue());
     true
@@ -507,25 +800,49 @@ unsafe extern "C" fn return_null_cb(_cx: *mut RawJSContext, _argc: u32, vp: *mut
     true
 }
 
-unsafe extern "C" fn return_empty_array_cb(cx: *mut RawJSContext, argc: u32, vp: *mut Value) -> bool {
+unsafe extern "C" fn return_empty_array_cb(
+    cx: *mut RawJSContext,
+    argc: u32,
+    vp: *mut Value,
+) -> bool {
     let mut cx = JSContext::from_ptr(NonNull::new(cx).unwrap());
     let args = CallArgs::from_vp(vp, argc);
     let arr = wrappers2::NewArrayObject(&mut cx, &HandleValueArray::empty());
-    args.rval().set(if arr.is_null() { UndefinedValue() } else { ObjectValue(arr) });
+    args.rval().set(if arr.is_null() {
+        UndefinedValue()
+    } else {
+        ObjectValue(arr)
+    });
     true
 }
 
-unsafe extern "C" fn return_empty_string_cb(cx: *mut RawJSContext, _argc: u32, vp: *mut Value) -> bool {
+unsafe extern "C" fn return_empty_string_cb(
+    cx: *mut RawJSContext,
+    _argc: u32,
+    vp: *mut Value,
+) -> bool {
     let mut cx = JSContext::from_ptr(NonNull::new(cx).unwrap());
     let args = CallArgs::from_vp(vp, _argc);
     let js_str = new_js_string(&mut cx, "");
-    args.rval().set(if js_str.is_null() { UndefinedValue() } else { mozjs::jsval::StringValue(&*js_str) });
+    args.rval().set(if js_str.is_null() {
+        UndefinedValue()
+    } else {
+        mozjs::jsval::StringValue(&*js_str)
+    });
     true
 }
 
-unsafe extern "C" fn node_return_first_arg(_cx: *mut RawJSContext, argc: u32, vp: *mut Value) -> bool {
+unsafe extern "C" fn node_return_first_arg(
+    _cx: *mut RawJSContext,
+    argc: u32,
+    vp: *mut Value,
+) -> bool {
     let args = CallArgs::from_vp(vp, argc);
-    args.rval().set(if argc > 0 { args.get(0).get() } else { NullValue() });
+    args.rval().set(if argc > 0 {
+        args.get(0).get()
+    } else {
+        NullValue()
+    });
     true
 }
 
@@ -540,27 +857,95 @@ unsafe fn build_canvas_2d_context(cx: &mut JSContext) -> *mut JSObject {
     rooted!(&in(cx) let ctx_root = ctx);
 
     for name in &[
-        c"save", c"restore", c"scale", c"rotate", c"translate", c"transform", c"setTransform", c"resetTransform",
-        c"clearRect", c"fillRect", c"strokeRect",
-        c"beginPath", c"closePath", c"moveTo", c"lineTo", c"bezierCurveTo", c"quadraticCurveTo",
-        c"arc", c"arcTo", c"ellipse", c"rect", c"roundRect",
-        c"fill", c"stroke", c"clip", c"isPointInPath", c"isPointInStroke",
-        c"fillText", c"strokeText",
-        c"drawImage", c"putImageData", c"drawFocusIfNeeded",
-        c"setLineDash", c"createPattern",
+        c"save",
+        c"restore",
+        c"scale",
+        c"rotate",
+        c"translate",
+        c"transform",
+        c"setTransform",
+        c"resetTransform",
+        c"clearRect",
+        c"fillRect",
+        c"strokeRect",
+        c"beginPath",
+        c"closePath",
+        c"moveTo",
+        c"lineTo",
+        c"bezierCurveTo",
+        c"quadraticCurveTo",
+        c"arc",
+        c"arcTo",
+        c"ellipse",
+        c"rect",
+        c"roundRect",
+        c"fill",
+        c"stroke",
+        c"clip",
+        c"isPointInPath",
+        c"isPointInStroke",
+        c"fillText",
+        c"strokeText",
+        c"drawImage",
+        c"putImageData",
+        c"drawFocusIfNeeded",
+        c"setLineDash",
+        c"createPattern",
     ] {
         define_fn(cx, ctx_root.handle(), name, Some(noop_cb), 2);
     }
 
-    define_fn(cx, ctx_root.handle(), c"getLineDash", Some(return_empty_array_cb), 0);
+    define_fn(
+        cx,
+        ctx_root.handle(),
+        c"getLineDash",
+        Some(return_empty_array_cb),
+        0,
+    );
     define_fn(cx, ctx_root.handle(), c"save", Some(noop_cb), 0);
 
-    define_fn(cx, ctx_root.handle(), c"measureText", Some(canvas_measure_text), 1);
-    define_fn(cx, ctx_root.handle(), c"getImageData", Some(canvas_get_image_data), 4);
-    define_fn(cx, ctx_root.handle(), c"createImageData", Some(canvas_get_image_data), 2);
-    define_fn(cx, ctx_root.handle(), c"createLinearGradient", Some(canvas_create_gradient), 4);
-    define_fn(cx, ctx_root.handle(), c"createRadialGradient", Some(canvas_create_gradient), 6);
-    define_fn(cx, ctx_root.handle(), c"createConicGradient", Some(canvas_create_gradient), 3);
+    define_fn(
+        cx,
+        ctx_root.handle(),
+        c"measureText",
+        Some(canvas_measure_text),
+        1,
+    );
+    define_fn(
+        cx,
+        ctx_root.handle(),
+        c"getImageData",
+        Some(canvas_get_image_data),
+        4,
+    );
+    define_fn(
+        cx,
+        ctx_root.handle(),
+        c"createImageData",
+        Some(canvas_get_image_data),
+        2,
+    );
+    define_fn(
+        cx,
+        ctx_root.handle(),
+        c"createLinearGradient",
+        Some(canvas_create_gradient),
+        4,
+    );
+    define_fn(
+        cx,
+        ctx_root.handle(),
+        c"createRadialGradient",
+        Some(canvas_create_gradient),
+        6,
+    );
+    define_fn(
+        cx,
+        ctx_root.handle(),
+        c"createConicGradient",
+        Some(canvas_create_gradient),
+        3,
+    );
 
     // Style/state properties app code commonly reads back after setting
     set_prop_str(cx, ctx_root.handle(), c"fillStyle", "#000000");
@@ -570,7 +955,12 @@ unsafe fn build_canvas_2d_context(cx: &mut JSContext) -> *mut JSObject {
     set_prop_str(cx, ctx_root.handle(), c"lineJoin", "miter");
     set_prop_f64(cx, ctx_root.handle(), c"miterLimit", 10.0);
     set_prop_f64(cx, ctx_root.handle(), c"globalAlpha", 1.0);
-    set_prop_str(cx, ctx_root.handle(), c"globalCompositeOperation", "source-over");
+    set_prop_str(
+        cx,
+        ctx_root.handle(),
+        c"globalCompositeOperation",
+        "source-over",
+    );
     set_prop_str(cx, ctx_root.handle(), c"font", "10px sans-serif");
     set_prop_str(cx, ctx_root.handle(), c"textAlign", "start");
     set_prop_str(cx, ctx_root.handle(), c"textBaseline", "alphabetic");
@@ -583,13 +973,21 @@ unsafe extern "C" fn canvas_get_context(cx: *mut RawJSContext, argc: u32, vp: *m
     let mut cx = JSContext::from_ptr(NonNull::new(cx).unwrap());
     let args = CallArgs::from_vp(vp, argc);
     let kind = arg_to_string(&mut cx, &args, 0);
-    if kind == "webgl" || kind == "webgl2" || kind == "experimental-webgl" || kind == "bitmaprenderer" {
+    if kind == "webgl"
+        || kind == "webgl2"
+        || kind == "experimental-webgl"
+        || kind == "bitmaprenderer"
+    {
         // No software/GPU GL backend — report unsupported like a headless browser would.
         args.rval().set(NullValue());
         return true;
     }
     let ctx = build_canvas_2d_context(&mut cx);
-    args.rval().set(if ctx.is_null() { UndefinedValue() } else { ObjectValue(ctx) });
+    args.rval().set(if ctx.is_null() {
+        UndefinedValue()
+    } else {
+        ObjectValue(ctx)
+    });
     true
 }
 
@@ -597,8 +995,15 @@ unsafe extern "C" fn canvas_to_data_url(cx: *mut RawJSContext, argc: u32, vp: *m
     let mut cx = JSContext::from_ptr(NonNull::new(cx).unwrap());
     let args = CallArgs::from_vp(vp, argc);
     // 1x1 transparent PNG — enough for code that just needs *a* data URL string.
-    let js_str = new_js_string(&mut cx, "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGNgAAAAAgABc3UBGAAAAABJRU5ErkJggg==");
-    args.rval().set(if js_str.is_null() { UndefinedValue() } else { mozjs::jsval::StringValue(&*js_str) });
+    let js_str = new_js_string(
+        &mut cx,
+        "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGNgAAAAAgABc3UBGAAAAABJRU5ErkJggg==",
+    );
+    args.rval().set(if js_str.is_null() {
+        UndefinedValue()
+    } else {
+        mozjs::jsval::StringValue(&*js_str)
+    });
     true
 }
 
@@ -611,17 +1016,55 @@ unsafe extern "C" fn canvas_measure_text(cx: *mut RawJSContext, argc: u32, vp: *
     // Rough monospace-ish estimate so layout math doesn't divide by zero.
     let width = text.chars().count() as f64 * 6.0;
     set_prop_f64(&mut cx, metrics_root.handle(), c"width", width);
-    set_prop_f64(&mut cx, metrics_root.handle(), c"actualBoundingBoxLeft", 0.0);
-    set_prop_f64(&mut cx, metrics_root.handle(), c"actualBoundingBoxRight", width);
-    set_prop_f64(&mut cx, metrics_root.handle(), c"actualBoundingBoxAscent", 0.0);
-    set_prop_f64(&mut cx, metrics_root.handle(), c"actualBoundingBoxDescent", 0.0);
-    set_prop_f64(&mut cx, metrics_root.handle(), c"fontBoundingBoxAscent", 0.0);
-    set_prop_f64(&mut cx, metrics_root.handle(), c"fontBoundingBoxDescent", 0.0);
-    args.rval().set(if metrics.is_null() { UndefinedValue() } else { ObjectValue(metrics) });
+    set_prop_f64(
+        &mut cx,
+        metrics_root.handle(),
+        c"actualBoundingBoxLeft",
+        0.0,
+    );
+    set_prop_f64(
+        &mut cx,
+        metrics_root.handle(),
+        c"actualBoundingBoxRight",
+        width,
+    );
+    set_prop_f64(
+        &mut cx,
+        metrics_root.handle(),
+        c"actualBoundingBoxAscent",
+        0.0,
+    );
+    set_prop_f64(
+        &mut cx,
+        metrics_root.handle(),
+        c"actualBoundingBoxDescent",
+        0.0,
+    );
+    set_prop_f64(
+        &mut cx,
+        metrics_root.handle(),
+        c"fontBoundingBoxAscent",
+        0.0,
+    );
+    set_prop_f64(
+        &mut cx,
+        metrics_root.handle(),
+        c"fontBoundingBoxDescent",
+        0.0,
+    );
+    args.rval().set(if metrics.is_null() {
+        UndefinedValue()
+    } else {
+        ObjectValue(metrics)
+    });
     true
 }
 
-unsafe extern "C" fn canvas_get_image_data(cx: *mut RawJSContext, argc: u32, vp: *mut Value) -> bool {
+unsafe extern "C" fn canvas_get_image_data(
+    cx: *mut RawJSContext,
+    argc: u32,
+    vp: *mut Value,
+) -> bool {
     let mut cx = JSContext::from_ptr(NonNull::new(cx).unwrap());
     let args = CallArgs::from_vp(vp, argc);
     let w = if argc > 2 { arg_to_f64(&args, 2) } else { 0.0 };
@@ -632,17 +1075,35 @@ unsafe extern "C" fn canvas_get_image_data(cx: *mut RawJSContext, argc: u32, vp:
     set_prop_obj(&mut cx, data_root.handle(), c"data", arr);
     set_prop_f64(&mut cx, data_root.handle(), c"width", w);
     set_prop_f64(&mut cx, data_root.handle(), c"height", h);
-    args.rval().set(if data_obj.is_null() { UndefinedValue() } else { ObjectValue(data_obj) });
+    args.rval().set(if data_obj.is_null() {
+        UndefinedValue()
+    } else {
+        ObjectValue(data_obj)
+    });
     true
 }
 
-unsafe extern "C" fn canvas_create_gradient(cx: *mut RawJSContext, argc: u32, vp: *mut Value) -> bool {
+unsafe extern "C" fn canvas_create_gradient(
+    cx: *mut RawJSContext,
+    argc: u32,
+    vp: *mut Value,
+) -> bool {
     let mut cx = JSContext::from_ptr(NonNull::new(cx).unwrap());
     let args = CallArgs::from_vp(vp, argc);
     let gradient = new_plain_object(&mut cx);
     rooted!(&in(cx) let gradient_root = gradient);
-    define_fn(&mut cx, gradient_root.handle(), c"addColorStop", Some(noop_cb), 2);
-    args.rval().set(if gradient.is_null() { UndefinedValue() } else { ObjectValue(gradient) });
+    define_fn(
+        &mut cx,
+        gradient_root.handle(),
+        c"addColorStop",
+        Some(noop_cb),
+        2,
+    );
+    args.rval().set(if gradient.is_null() {
+        UndefinedValue()
+    } else {
+        ObjectValue(gradient)
+    });
     true
 }
 
@@ -650,7 +1111,11 @@ unsafe extern "C" fn canvas_create_gradient(cx: *mut RawJSContext, argc: u32, vp
 /// the node. We don't track tree membership precisely enough to compute that,
 /// so return `this`; callers mostly use it for `instanceof ShadowRoot` checks
 /// or to walk back up, neither of which we can satisfy exactly anyway.
-unsafe extern "C" fn node_return_first_arg_or_this(_cx: *mut RawJSContext, argc: u32, vp: *mut Value) -> bool {
+unsafe extern "C" fn node_return_first_arg_or_this(
+    _cx: *mut RawJSContext,
+    argc: u32,
+    vp: *mut Value,
+) -> bool {
     let args = CallArgs::from_vp(vp, argc);
     args.rval().set(args.thisv().get());
     true
@@ -665,13 +1130,20 @@ unsafe extern "C" fn node_return_first_arg_or_this(_cx: *mut RawJSContext, argc:
 /// and shadow DOM merge) — but for a custom-element-heavy site like YouTube,
 /// "the content shows up, just not perfectly isolated" beats "nothing renders
 /// because attachShadow doesn't exist."
-unsafe extern "C" fn element_attach_shadow(cx: *mut RawJSContext, argc: u32, vp: *mut Value) -> bool {
+unsafe extern "C" fn element_attach_shadow(
+    cx: *mut RawJSContext,
+    argc: u32,
+    vp: *mut Value,
+) -> bool {
     let mut cx = JSContext::from_ptr(NonNull::new(cx).unwrap());
     let args = CallArgs::from_vp(vp, argc);
 
     let node_id = match node_id_from_this(&mut cx, &args) {
         Some(id) => id,
-        None => { args.rval().set(NullValue()); return true; }
+        None => {
+            args.rval().set(NullValue());
+            return true;
+        }
     };
 
     let mode = if argc > 0 && args.get(0).get().is_object() {
@@ -689,23 +1161,98 @@ unsafe extern "C" fn element_attach_shadow(cx: *mut RawJSContext, argc: u32, vp:
     set_prop_str(&mut cx, sr_root.handle(), c"nodeName", "#document-fragment");
     set_prop_str(&mut cx, sr_root.handle(), c"mode", &mode);
     set_prop_bool(&mut cx, sr_root.handle(), c"delegatesFocus", false);
-    define_accessor(&mut cx, sr_root.handle(), c"innerHTML", Some(get_inner_html), Some(set_inner_html));
-    define_accessor(&mut cx, sr_root.handle(), c"textContent", Some(get_text_content), Some(set_text_content));
-    define_fn(&mut cx, sr_root.handle(), c"appendChild", Some(node_append_child), 1);
-    define_fn(&mut cx, sr_root.handle(), c"insertBefore", Some(node_insert_before), 2);
-    define_fn(&mut cx, sr_root.handle(), c"removeChild", Some(node_remove_child), 1);
-    define_fn(&mut cx, sr_root.handle(), c"append", Some(node_append_child), 1);
-    define_fn(&mut cx, sr_root.handle(), c"querySelector", Some(node_query_selector), 1);
-    define_fn(&mut cx, sr_root.handle(), c"querySelectorAll", Some(node_query_selector_all), 1);
-    define_fn(&mut cx, sr_root.handle(), c"addEventListener", Some(node_add_event_listener), 3);
-    define_fn(&mut cx, sr_root.handle(), c"removeEventListener", Some(node_remove_event_listener), 3);
-    define_getter(&mut cx, sr_root.handle(), c"firstChild", Some(get_first_child));
+    define_accessor(
+        &mut cx,
+        sr_root.handle(),
+        c"innerHTML",
+        Some(get_inner_html),
+        Some(set_inner_html),
+    );
+    define_accessor(
+        &mut cx,
+        sr_root.handle(),
+        c"textContent",
+        Some(get_text_content),
+        Some(set_text_content),
+    );
+    define_fn(
+        &mut cx,
+        sr_root.handle(),
+        c"appendChild",
+        Some(node_append_child),
+        1,
+    );
+    define_fn(
+        &mut cx,
+        sr_root.handle(),
+        c"insertBefore",
+        Some(node_insert_before),
+        2,
+    );
+    define_fn(
+        &mut cx,
+        sr_root.handle(),
+        c"removeChild",
+        Some(node_remove_child),
+        1,
+    );
+    define_fn(
+        &mut cx,
+        sr_root.handle(),
+        c"append",
+        Some(node_append_child),
+        1,
+    );
+    define_fn(
+        &mut cx,
+        sr_root.handle(),
+        c"querySelector",
+        Some(node_query_selector),
+        1,
+    );
+    define_fn(
+        &mut cx,
+        sr_root.handle(),
+        c"querySelectorAll",
+        Some(node_query_selector_all),
+        1,
+    );
+    define_fn(
+        &mut cx,
+        sr_root.handle(),
+        c"addEventListener",
+        Some(node_add_event_listener),
+        3,
+    );
+    define_fn(
+        &mut cx,
+        sr_root.handle(),
+        c"removeEventListener",
+        Some(node_remove_event_listener),
+        3,
+    );
+    define_getter(
+        &mut cx,
+        sr_root.handle(),
+        c"firstChild",
+        Some(get_first_child),
+    );
     define_getter(&mut cx, sr_root.handle(), c"children", Some(get_children));
-    define_getter(&mut cx, sr_root.handle(), c"childNodes", Some(get_child_nodes));
+    define_getter(
+        &mut cx,
+        sr_root.handle(),
+        c"childNodes",
+        Some(get_child_nodes),
+    );
 
     // host <-> shadowRoot back-references
     rooted!(&in(cx) let host_val = args.thisv().get());
-    wrappers2::JS_SetProperty(&mut cx, sr_root.handle(), c"host".as_ptr(), host_val.handle());
+    wrappers2::JS_SetProperty(
+        &mut cx,
+        sr_root.handle(),
+        c"host".as_ptr(),
+        host_val.handle(),
+    );
     if host_val.get().is_object() {
         let host_obj = host_val.get().to_object_or_null();
         rooted!(&in(cx) let host_root = host_obj);
@@ -716,7 +1263,11 @@ unsafe extern "C" fn element_attach_shadow(cx: *mut RawJSContext, argc: u32, vp:
     true
 }
 
-unsafe extern "C" fn return_animation_obj(cx: *mut RawJSContext, argc: u32, vp: *mut Value) -> bool {
+unsafe extern "C" fn return_animation_obj(
+    cx: *mut RawJSContext,
+    argc: u32,
+    vp: *mut Value,
+) -> bool {
     let mut cx = JSContext::from_ptr(NonNull::new(cx).unwrap());
     let args = CallArgs::from_vp(vp, argc);
     let obj = new_plain_object(&mut cx);
@@ -742,30 +1293,54 @@ unsafe extern "C" fn class_list_contains(cx: *mut RawJSContext, argc: u32, vp: *
         rooted!(&in(cx) let this_root = this_obj);
         rooted!(&in(cx) let mut val = UndefinedValue());
         let target = arg_to_string(&mut cx, &args, 0);
-        if !target.is_empty() && wrappers2::JS_GetProperty(&mut cx, this_root.handle(), c"value".as_ptr(), val.handle_mut()) && val.get().is_string() {
+        if !target.is_empty()
+            && wrappers2::JS_GetProperty(
+                &mut cx,
+                this_root.handle(),
+                c"value".as_ptr(),
+                val.handle_mut(),
+            )
+            && val.get().is_string()
+        {
             let raw = val.get().to_string();
             if !raw.is_null() {
                 use mozjs::conversions::jsstr_to_string;
                 let s = jsstr_to_string(cx.raw_cx(), NonNull::new_unchecked(raw));
                 s.split_whitespace().any(|c| c == target)
-            } else { false }
-        } else { false }
-    } else { false };
+            } else {
+                false
+            }
+        } else {
+            false
+        }
+    } else {
+        false
+    };
     args.rval().set(BooleanValue(result));
     true
 }
 
 // ── Node method callbacks ─────────────────────────────────────────────────────
 
-unsafe extern "C" fn node_add_event_listener(cx: *mut RawJSContext, argc: u32, vp: *mut Value) -> bool {
+unsafe extern "C" fn node_add_event_listener(
+    cx: *mut RawJSContext,
+    argc: u32,
+    vp: *mut Value,
+) -> bool {
     let mut cx = JSContext::from_ptr(NonNull::new(cx).unwrap());
     let args = CallArgs::from_vp(vp, argc);
 
-    if argc < 2 { args.rval().set(UndefinedValue()); return true; }
+    if argc < 2 {
+        args.rval().set(UndefinedValue());
+        return true;
+    }
 
     let event_type = arg_to_string(&mut cx, &args, 0);
     let cb_val = args.get(1).get();
-    if !cb_val.is_object() { args.rval().set(UndefinedValue()); return true; }
+    if !cb_val.is_object() {
+        args.rval().set(UndefinedValue());
+        return true;
+    }
 
     let node_id = node_id_from_this(&mut cx, &args).unwrap_or(0);
     let state = &mut *get_state_ptr(&cx);
@@ -780,7 +1355,11 @@ unsafe extern "C" fn node_add_event_listener(cx: *mut RawJSContext, argc: u32, v
     true
 }
 
-unsafe extern "C" fn node_remove_event_listener(_cx: *mut RawJSContext, argc: u32, vp: *mut Value) -> bool {
+unsafe extern "C" fn node_remove_event_listener(
+    _cx: *mut RawJSContext,
+    argc: u32,
+    vp: *mut Value,
+) -> bool {
     let args = CallArgs::from_vp(vp, argc);
     args.rval().set(UndefinedValue());
     true
@@ -793,17 +1372,22 @@ unsafe extern "C" fn node_get_attribute(cx: *mut RawJSContext, argc: u32, vp: *m
     let node_id = node_id_from_this(&mut cx, &args).unwrap_or(0);
 
     let state = &*get_state_ptr(&cx);
-    let result = state.registry.lookup(node_id).and_then(|node| {
-        match &*node.borrow() {
+    let result = state
+        .registry
+        .lookup(node_id)
+        .and_then(|node| match &*node.borrow() {
             Node::Element(el) => el.attributes.get(&attr_name).cloned(),
             _ => None,
-        }
-    });
+        });
 
     match result {
         Some(val) => {
             let js_str = new_js_string(&mut cx, &val);
-            args.rval().set(if js_str.is_null() { NullValue() } else { mozjs::jsval::StringValue(&*js_str) });
+            args.rval().set(if js_str.is_null() {
+                NullValue()
+            } else {
+                mozjs::jsval::StringValue(&*js_str)
+            });
         }
         None => args.rval().set(NullValue()),
     }
@@ -828,7 +1412,11 @@ unsafe extern "C" fn node_set_attribute(cx: *mut RawJSContext, argc: u32, vp: *m
     true
 }
 
-unsafe extern "C" fn node_remove_attribute(cx: *mut RawJSContext, argc: u32, vp: *mut Value) -> bool {
+unsafe extern "C" fn node_remove_attribute(
+    cx: *mut RawJSContext,
+    argc: u32,
+    vp: *mut Value,
+) -> bool {
     let mut cx = JSContext::from_ptr(NonNull::new(cx).unwrap());
     let args = CallArgs::from_vp(vp, argc);
     let attr_name = arg_to_string(&mut cx, &args, 0);
@@ -865,9 +1453,10 @@ unsafe extern "C" fn node_has_attributes(cx: *mut RawJSContext, argc: u32, vp: *
     let node_id = node_id_from_this(&mut cx, &args).unwrap_or(0);
 
     let state = &*get_state_ptr(&cx);
-    let has = state.registry.lookup(node_id).map_or(false, |node| {
-        matches!(&*node.borrow(), Node::Element(el) if !el.attributes.is_empty())
-    });
+    let has = state.registry.lookup(node_id).map_or(
+        false,
+        |node| matches!(&*node.borrow(), Node::Element(el) if !el.attributes.is_empty()),
+    );
     args.rval().set(BooleanValue(has));
     true
 }
@@ -876,7 +1465,10 @@ unsafe extern "C" fn node_append_child(cx: *mut RawJSContext, argc: u32, vp: *mu
     let mut cx = JSContext::from_ptr(NonNull::new(cx).unwrap());
     let args = CallArgs::from_vp(vp, argc);
 
-    if argc == 0 { args.rval().set(NullValue()); return true; }
+    if argc == 0 {
+        args.rval().set(NullValue());
+        return true;
+    }
 
     // Get child node_id from the first argument
     let child_val = args.get(0).get();
@@ -884,16 +1476,27 @@ unsafe extern "C" fn node_append_child(cx: *mut RawJSContext, argc: u32, vp: *mu
         let child_obj = child_val.to_object_or_null();
         rooted!(&in(cx) let child_root = child_obj);
         rooted!(&in(cx) let mut id_v = UndefinedValue());
-        if wrappers2::JS_GetProperty(&mut cx, child_root.handle(), NODE_ID_PROP, id_v.handle_mut()) && id_v.get().is_number() {
+        if wrappers2::JS_GetProperty(
+            &mut cx,
+            child_root.handle(),
+            NODE_ID_PROP,
+            id_v.handle_mut(),
+        ) && id_v.get().is_number()
+        {
             Some(id_v.get().to_number() as u32)
-        } else { None }
-    } else { None };
+        } else {
+            None
+        }
+    } else {
+        None
+    };
 
     let parent_id = node_id_from_this(&mut cx, &args).unwrap_or(0);
     let state = &mut *get_state_ptr(&cx);
 
     if let (Some(child_id), Some(parent_node)) = (child_node_id, state.registry.lookup(parent_id)) {
         if let Some(child_node) = state.registry.lookup(child_id) {
+            let child_tag = debug_tag_for_node(&child_node);
             match &mut *parent_node.borrow_mut() {
                 Node::Element(el) => {
                     el.children.push(child_node);
@@ -904,9 +1507,15 @@ unsafe extern "C" fn node_append_child(cx: *mut RawJSContext, argc: u32, vp: *mu
                 }
                 _ => {}
             }
+            if debug_youtube_enabled() {
+                if let Some(tag) = child_tag.filter(|tag| tag.contains('-')) {
+                    eprintln!("JS: [yt-dom] appendChild {tag}");
+                }
+            }
         }
     }
 
+    call_connected_callback(&mut cx, child_val);
     args.rval().set(args.get(0).get());
     true
 }
@@ -914,24 +1523,37 @@ unsafe extern "C" fn node_append_child(cx: *mut RawJSContext, argc: u32, vp: *mu
 unsafe extern "C" fn node_insert_before(cx: *mut RawJSContext, argc: u32, vp: *mut Value) -> bool {
     let mut cx = JSContext::from_ptr(NonNull::new(cx).unwrap());
     let args = CallArgs::from_vp(vp, argc);
-    if argc == 0 { args.rval().set(NullValue()); return true; }
+    if argc == 0 {
+        args.rval().set(NullValue());
+        return true;
+    }
 
     let child_id = val_to_node_id(&mut cx, args.get(0).get());
     let ref_id = if argc >= 2 {
         let v = args.get(1).get();
-        if v.is_null() || v.is_undefined() { None } else { val_to_node_id(&mut cx, v) }
-    } else { None };
+        if v.is_null() || v.is_undefined() {
+            None
+        } else {
+            val_to_node_id(&mut cx, v)
+        }
+    } else {
+        None
+    };
     let parent_id = node_id_from_this(&mut cx, &args).unwrap_or(0);
 
     let state = &mut *get_state_ptr(&cx);
     if let (Some(child_id), Some(parent)) = (child_id, state.registry.lookup(parent_id)) {
         if let Some(child) = state.registry.lookup(child_id) {
+            let child_tag = debug_tag_for_node(&child);
             let ref_node = ref_id.and_then(|id| state.registry.lookup(id));
             let mut p = parent.borrow_mut();
             let kids: &mut Vec<NodePtr> = match &mut *p {
                 Node::Element(el) => &mut el.children,
                 Node::Document { children, .. } => children,
-                _ => { args.rval().set(args.get(0).get()); return true; }
+                _ => {
+                    args.rval().set(args.get(0).get());
+                    return true;
+                }
             };
             match ref_node.and_then(|r| kids.iter().position(|c| Rc::ptr_eq(c, &r))) {
                 Some(pos) => kids.insert(pos, child),
@@ -939,8 +1561,14 @@ unsafe extern "C" fn node_insert_before(cx: *mut RawJSContext, argc: u32, vp: *m
             }
             drop(p);
             state.registry.mark_needs_reflow();
+            if debug_youtube_enabled() {
+                if let Some(tag) = child_tag.filter(|tag| tag.contains('-')) {
+                    eprintln!("JS: [yt-dom] insertBefore {tag}");
+                }
+            }
         }
     }
+    call_connected_callback(&mut cx, args.get(0).get());
     args.rval().set(args.get(0).get());
     true
 }
@@ -949,17 +1577,30 @@ unsafe extern "C" fn node_remove_child(cx: *mut RawJSContext, argc: u32, vp: *mu
     let mut cx = JSContext::from_ptr(NonNull::new(cx).unwrap());
     let args = CallArgs::from_vp(vp, argc);
 
-    if argc == 0 { args.rval().set(NullValue()); return true; }
+    if argc == 0 {
+        args.rval().set(NullValue());
+        return true;
+    }
 
     let child_val = args.get(0).get();
     let child_node_id = if child_val.is_object() {
         let child_obj = child_val.to_object_or_null();
         rooted!(&in(cx) let child_root = child_obj);
         rooted!(&in(cx) let mut id_v = UndefinedValue());
-        if wrappers2::JS_GetProperty(&mut cx, child_root.handle(), NODE_ID_PROP, id_v.handle_mut()) && id_v.get().is_number() {
+        if wrappers2::JS_GetProperty(
+            &mut cx,
+            child_root.handle(),
+            NODE_ID_PROP,
+            id_v.handle_mut(),
+        ) && id_v.get().is_number()
+        {
             Some(id_v.get().to_number() as u32)
-        } else { None }
-    } else { None };
+        } else {
+            None
+        }
+    } else {
+        None
+    };
 
     let parent_id = node_id_from_this(&mut cx, &args).unwrap_or(0);
     let state = &mut *get_state_ptr(&cx);
@@ -986,7 +1627,10 @@ unsafe extern "C" fn node_remove_child(cx: *mut RawJSContext, argc: u32, vp: *mu
 unsafe extern "C" fn node_replace_child(cx: *mut RawJSContext, argc: u32, vp: *mut Value) -> bool {
     let mut cx = JSContext::from_ptr(NonNull::new(cx).unwrap());
     let args = CallArgs::from_vp(vp, argc);
-    if argc < 2 { args.rval().set(NullValue()); return true; }
+    if argc < 2 {
+        args.rval().set(NullValue());
+        return true;
+    }
 
     let new_id = val_to_node_id(&mut cx, args.get(0).get());
     let old_id = val_to_node_id(&mut cx, args.get(1).get());
@@ -1003,7 +1647,10 @@ unsafe extern "C" fn node_replace_child(cx: *mut RawJSContext, argc: u32, vp: *m
             let kids: &mut Vec<NodePtr> = match &mut *p {
                 Node::Element(el) => &mut el.children,
                 Node::Document { children, .. } => children,
-                _ => { args.rval().set(args.get(1).get()); return true; }
+                _ => {
+                    args.rval().set(args.get(1).get());
+                    return true;
+                }
             };
             if let Some(pos) = kids.iter().position(|c| Rc::ptr_eq(c, &old_node)) {
                 kids[pos] = new_node;
@@ -1012,8 +1659,64 @@ unsafe extern "C" fn node_replace_child(cx: *mut RawJSContext, argc: u32, vp: *m
             state.registry.mark_needs_reflow();
         }
     }
+    call_connected_callback(&mut cx, args.get(0).get());
     args.rval().set(args.get(1).get());
     true
+}
+
+unsafe fn call_connected_callback(cx: &mut JSContext, node_val: Value) {
+    if !node_val.is_object() {
+        return;
+    }
+    let node_obj = node_val.to_object_or_null();
+    if node_obj.is_null() {
+        return;
+    }
+
+    rooted!(&in(cx) let node_root = node_obj);
+    let tag_name = if debug_youtube_enabled() {
+        get_prop_string(cx, node_root.handle(), c"localName")
+            .or_else(|| get_prop_string(cx, node_root.handle(), c"tagName"))
+    } else {
+        None
+    };
+    rooted!(&in(cx) let mut connected = UndefinedValue());
+    if wrappers2::JS_GetProperty(
+        cx,
+        node_root.handle(),
+        c"__ce_connected__".as_ptr(),
+        connected.handle_mut(),
+    ) && connected.get().is_boolean()
+        && connected.get().to_boolean()
+    {
+        return;
+    }
+
+    rooted!(&in(cx) let mut callback = UndefinedValue());
+    if !wrappers2::JS_GetProperty(
+        cx,
+        node_root.handle(),
+        c"connectedCallback".as_ptr(),
+        callback.handle_mut(),
+    ) || !callback.get().is_object()
+    {
+        return;
+    }
+
+    set_prop_bool(cx, node_root.handle(), c"__ce_connected__", true);
+    if let Some(tag) = tag_name.filter(|tag| tag.contains('-')) {
+        eprintln!("JS: [yt-dom] connectedCallback {tag}");
+    }
+    rooted!(&in(cx) let mut rval = UndefinedValue());
+    let empty = HandleValueArray::empty();
+    wrappers2::JS_CallFunctionValue(
+        cx,
+        node_root.handle(),
+        callback.handle(),
+        &empty,
+        rval.handle_mut(),
+    );
+    clear_pending_exception(cx);
 }
 
 unsafe extern "C" fn node_clone_node(cx: *mut RawJSContext, argc: u32, vp: *mut Value) -> bool {
@@ -1022,15 +1725,26 @@ unsafe extern "C" fn node_clone_node(cx: *mut RawJSContext, argc: u32, vp: *mut 
     let deep = argc > 0 && args.get(0).get().to_boolean();
     let node_id = match node_id_from_this(&mut cx, &args) {
         Some(id) => id,
-        None => { args.rval().set(NullValue()); return true; }
+        None => {
+            args.rval().set(NullValue());
+            return true;
+        }
     };
     let cloned = {
         let state = &*get_state_ptr(&cx);
-        state.registry.lookup(node_id).map(|n| clone_node_rs(&n, deep))
+        state
+            .registry
+            .lookup(node_id)
+            .map(|n| clone_node_rs(&n, deep))
     };
     match cloned {
-        Some(ptr) => { let obj = create_js_node(&mut cx, ptr); args.rval().set(ObjectValue(obj)); }
-        None => { args.rval().set(NullValue()); }
+        Some(ptr) => {
+            let obj = create_js_node(&mut cx, ptr);
+            args.rval().set(ObjectValue(obj));
+        }
+        None => {
+            args.rval().set(NullValue());
+        }
     }
     true
 }
@@ -1038,12 +1752,16 @@ unsafe extern "C" fn node_clone_node(cx: *mut RawJSContext, argc: u32, vp: *mut 
 unsafe extern "C" fn node_contains(cx: *mut RawJSContext, argc: u32, vp: *mut Value) -> bool {
     let mut cx = JSContext::from_ptr(NonNull::new(cx).unwrap());
     let args = CallArgs::from_vp(vp, argc);
-    if argc == 0 { args.rval().set(BooleanValue(false)); return true; }
+    if argc == 0 {
+        args.rval().set(BooleanValue(false));
+        return true;
+    }
     let other_id = val_to_node_id(&mut cx, args.get(0).get());
     let this_id = node_id_from_this(&mut cx, &args).unwrap_or(0);
     let state = &*get_state_ptr(&cx);
     let result = match (other_id, state.registry.lookup(this_id)) {
-        (Some(other_id), Some(this_node)) => state.registry
+        (Some(other_id), Some(this_node)) => state
+            .registry
             .lookup(other_id)
             .map(|other| node_contains_node(&this_node, &other))
             .unwrap_or(false),
@@ -1059,11 +1777,18 @@ unsafe extern "C" fn node_closest(cx: *mut RawJSContext, argc: u32, vp: *mut Val
     let selector = arg_to_string(&mut cx, &args, 0);
     let this_id = match node_id_from_this(&mut cx, &args) {
         Some(id) => id,
-        None => { args.rval().set(NullValue()); return true; }
+        None => {
+            args.rval().set(NullValue());
+            return true;
+        }
     };
     let (this_node, doc, list) = {
         let state = &*get_state_ptr(&cx);
-        (state.registry.lookup(this_id), state.registry.document.clone(), parse_selector_list(&selector))
+        (
+            state.registry.lookup(this_id),
+            state.registry.document.clone(),
+            parse_selector_list(&selector),
+        )
     };
     if let (Some(this_node), Some(doc), Some(list)) = (this_node, doc, list) {
         if let Some(matched) = find_matching_ancestor(&doc, &this_node, list.slice()) {
@@ -1102,7 +1827,9 @@ unsafe extern "C" fn node_query_selector(cx: *mut RawJSContext, argc: u32, vp: *
     let node_id = node_id_from_this(&mut cx, &args).unwrap_or(0);
 
     let state = &mut *get_state_ptr(&cx);
-    let search_root = state.registry.lookup(node_id)
+    let search_root = state
+        .registry
+        .lookup(node_id)
         .or_else(|| state.registry.document.clone());
 
     if let Some(root) = search_root {
@@ -1116,77 +1843,125 @@ unsafe extern "C" fn node_query_selector(cx: *mut RawJSContext, argc: u32, vp: *
     true
 }
 
-unsafe extern "C" fn node_query_selector_all(cx: *mut RawJSContext, argc: u32, vp: *mut Value) -> bool {
+unsafe extern "C" fn node_query_selector_all(
+    cx: *mut RawJSContext,
+    argc: u32,
+    vp: *mut Value,
+) -> bool {
     let mut cx = JSContext::from_ptr(NonNull::new(cx).unwrap());
     let args = CallArgs::from_vp(vp, argc);
     let selector = arg_to_string(&mut cx, &args, 0);
     let node_id = node_id_from_this(&mut cx, &args).unwrap_or(0);
 
     let state = &mut *get_state_ptr(&cx);
-    let search_root = state.registry.lookup(node_id)
+    let search_root = state
+        .registry
+        .lookup(node_id)
         .or_else(|| state.registry.document.clone());
 
     if let Some(root) = search_root {
         let found = query_all_from(&root, &selector);
         let arr = build_nodelist(&mut cx, found);
-        args.rval().set(if arr.is_null() { UndefinedValue() } else { ObjectValue(arr) });
+        args.rval().set(if arr.is_null() {
+            UndefinedValue()
+        } else {
+            ObjectValue(arr)
+        });
     } else {
         let arr = wrappers2::NewArrayObject(&mut cx, &HandleValueArray::empty());
-        args.rval().set(if arr.is_null() { UndefinedValue() } else { ObjectValue(arr) });
+        args.rval().set(if arr.is_null() {
+            UndefinedValue()
+        } else {
+            ObjectValue(arr)
+        });
     }
     true
 }
 
-unsafe extern "C" fn node_get_elements_by_tag(cx: *mut RawJSContext, argc: u32, vp: *mut Value) -> bool {
+unsafe extern "C" fn node_get_elements_by_tag(
+    cx: *mut RawJSContext,
+    argc: u32,
+    vp: *mut Value,
+) -> bool {
     let mut cx = JSContext::from_ptr(NonNull::new(cx).unwrap());
     let args = CallArgs::from_vp(vp, argc);
     let tag = arg_to_string(&mut cx, &args, 0).to_lowercase();
     let node_id = node_id_from_this(&mut cx, &args).unwrap_or(0);
 
     let state = &mut *get_state_ptr(&cx);
-    let search_root = state.registry.lookup(node_id)
+    let search_root = state
+        .registry
+        .lookup(node_id)
         .or_else(|| state.registry.document.clone());
 
     if let Some(root) = search_root {
         let mut acc = Vec::new();
         collect_by_tag(&root, &tag, &mut acc);
         let arr = build_nodelist(&mut cx, acc);
-        args.rval().set(if arr.is_null() { UndefinedValue() } else { ObjectValue(arr) });
+        args.rval().set(if arr.is_null() {
+            UndefinedValue()
+        } else {
+            ObjectValue(arr)
+        });
     } else {
         let arr = wrappers2::NewArrayObject(&mut cx, &HandleValueArray::empty());
-        args.rval().set(if arr.is_null() { UndefinedValue() } else { ObjectValue(arr) });
+        args.rval().set(if arr.is_null() {
+            UndefinedValue()
+        } else {
+            ObjectValue(arr)
+        });
     }
     true
 }
 
-unsafe extern "C" fn node_get_elements_by_class(cx: *mut RawJSContext, argc: u32, vp: *mut Value) -> bool {
+unsafe extern "C" fn node_get_elements_by_class(
+    cx: *mut RawJSContext,
+    argc: u32,
+    vp: *mut Value,
+) -> bool {
     let mut cx = JSContext::from_ptr(NonNull::new(cx).unwrap());
     let args = CallArgs::from_vp(vp, argc);
     let class = arg_to_string(&mut cx, &args, 0);
     let node_id = node_id_from_this(&mut cx, &args).unwrap_or(0);
 
     let state = &mut *get_state_ptr(&cx);
-    let search_root = state.registry.lookup(node_id)
+    let search_root = state
+        .registry
+        .lookup(node_id)
         .or_else(|| state.registry.document.clone());
 
     if let Some(root) = search_root {
         let mut acc = Vec::new();
         collect_by_class(&root, &class, &mut acc);
         let arr = build_nodelist(&mut cx, acc);
-        args.rval().set(if arr.is_null() { UndefinedValue() } else { ObjectValue(arr) });
+        args.rval().set(if arr.is_null() {
+            UndefinedValue()
+        } else {
+            ObjectValue(arr)
+        });
     } else {
         let arr = wrappers2::NewArrayObject(&mut cx, &HandleValueArray::empty());
-        args.rval().set(if arr.is_null() { UndefinedValue() } else { ObjectValue(arr) });
+        args.rval().set(if arr.is_null() {
+            UndefinedValue()
+        } else {
+            ObjectValue(arr)
+        });
     }
     true
 }
 
-unsafe extern "C" fn node_get_bounding_rect(cx: *mut RawJSContext, argc: u32, vp: *mut Value) -> bool {
+unsafe extern "C" fn node_get_bounding_rect(
+    cx: *mut RawJSContext,
+    argc: u32,
+    vp: *mut Value,
+) -> bool {
     let mut cx = JSContext::from_ptr(NonNull::new(cx).unwrap());
     let args = CallArgs::from_vp(vp, argc);
     let obj = new_plain_object(&mut cx);
     rooted!(&in(cx) let obj_root = obj);
-    for name in &[c"x", c"y", c"top", c"left", c"bottom", c"right", c"width", c"height"] {
+    for name in &[
+        c"x", c"y", c"top", c"left", c"bottom", c"right", c"width", c"height",
+    ] {
         set_prop_f64(&mut cx, obj_root.handle(), name, 0.0);
     }
     define_fn(&mut cx, obj_root.handle(), c"toJSON", Some(noop_cb), 0);
@@ -1196,7 +1971,11 @@ unsafe extern "C" fn node_get_bounding_rect(cx: *mut RawJSContext, argc: u32, vp
 
 // ── Document global callbacks ─────────────────────────────────────────────────
 
-pub(super) unsafe extern "C" fn doc_get_element_by_id(cx: *mut RawJSContext, argc: u32, vp: *mut Value) -> bool {
+pub(super) unsafe extern "C" fn doc_get_element_by_id(
+    cx: *mut RawJSContext,
+    argc: u32,
+    vp: *mut Value,
+) -> bool {
     let mut cx = JSContext::from_ptr(NonNull::new(cx).unwrap());
     let args = CallArgs::from_vp(vp, argc);
     let id = arg_to_string(&mut cx, &args, 0);
@@ -1213,7 +1992,11 @@ pub(super) unsafe extern "C" fn doc_get_element_by_id(cx: *mut RawJSContext, arg
     true
 }
 
-pub(super) unsafe extern "C" fn doc_query_selector(cx: *mut RawJSContext, argc: u32, vp: *mut Value) -> bool {
+pub(super) unsafe extern "C" fn doc_query_selector(
+    cx: *mut RawJSContext,
+    argc: u32,
+    vp: *mut Value,
+) -> bool {
     let mut cx = JSContext::from_ptr(NonNull::new(cx).unwrap());
     let args = CallArgs::from_vp(vp, argc);
     let selector = arg_to_string(&mut cx, &args, 0);
@@ -1230,7 +2013,11 @@ pub(super) unsafe extern "C" fn doc_query_selector(cx: *mut RawJSContext, argc: 
     true
 }
 
-pub(super) unsafe extern "C" fn doc_query_selector_all(cx: *mut RawJSContext, argc: u32, vp: *mut Value) -> bool {
+pub(super) unsafe extern "C" fn doc_query_selector_all(
+    cx: *mut RawJSContext,
+    argc: u32,
+    vp: *mut Value,
+) -> bool {
     let mut cx = JSContext::from_ptr(NonNull::new(cx).unwrap());
     let args = CallArgs::from_vp(vp, argc);
     let selector = arg_to_string(&mut cx, &args, 0);
@@ -1239,15 +2026,27 @@ pub(super) unsafe extern "C" fn doc_query_selector_all(cx: *mut RawJSContext, ar
     if let Some(doc) = state.registry.document.clone() {
         let found = query_all_from(&doc, &selector);
         let arr = build_nodelist(&mut cx, found);
-        args.rval().set(if arr.is_null() { UndefinedValue() } else { ObjectValue(arr) });
+        args.rval().set(if arr.is_null() {
+            UndefinedValue()
+        } else {
+            ObjectValue(arr)
+        });
     } else {
         let arr = wrappers2::NewArrayObject(&mut cx, &HandleValueArray::empty());
-        args.rval().set(if arr.is_null() { UndefinedValue() } else { ObjectValue(arr) });
+        args.rval().set(if arr.is_null() {
+            UndefinedValue()
+        } else {
+            ObjectValue(arr)
+        });
     }
     true
 }
 
-pub(super) unsafe extern "C" fn doc_get_elements_by_tag(cx: *mut RawJSContext, argc: u32, vp: *mut Value) -> bool {
+pub(super) unsafe extern "C" fn doc_get_elements_by_tag(
+    cx: *mut RawJSContext,
+    argc: u32,
+    vp: *mut Value,
+) -> bool {
     let mut cx = JSContext::from_ptr(NonNull::new(cx).unwrap());
     let args = CallArgs::from_vp(vp, argc);
     let tag = arg_to_string(&mut cx, &args, 0).to_lowercase();
@@ -1257,15 +2056,27 @@ pub(super) unsafe extern "C" fn doc_get_elements_by_tag(cx: *mut RawJSContext, a
         let mut acc = Vec::new();
         collect_by_tag(&doc, &tag, &mut acc);
         let arr = build_nodelist(&mut cx, acc);
-        args.rval().set(if arr.is_null() { UndefinedValue() } else { ObjectValue(arr) });
+        args.rval().set(if arr.is_null() {
+            UndefinedValue()
+        } else {
+            ObjectValue(arr)
+        });
     } else {
         let arr = wrappers2::NewArrayObject(&mut cx, &HandleValueArray::empty());
-        args.rval().set(if arr.is_null() { UndefinedValue() } else { ObjectValue(arr) });
+        args.rval().set(if arr.is_null() {
+            UndefinedValue()
+        } else {
+            ObjectValue(arr)
+        });
     }
     true
 }
 
-pub(super) unsafe extern "C" fn doc_get_elements_by_class(cx: *mut RawJSContext, argc: u32, vp: *mut Value) -> bool {
+pub(super) unsafe extern "C" fn doc_get_elements_by_class(
+    cx: *mut RawJSContext,
+    argc: u32,
+    vp: *mut Value,
+) -> bool {
     let mut cx = JSContext::from_ptr(NonNull::new(cx).unwrap());
     let args = CallArgs::from_vp(vp, argc);
     let class = arg_to_string(&mut cx, &args, 0);
@@ -1275,15 +2086,27 @@ pub(super) unsafe extern "C" fn doc_get_elements_by_class(cx: *mut RawJSContext,
         let mut acc = Vec::new();
         collect_by_class(&doc, &class, &mut acc);
         let arr = build_nodelist(&mut cx, acc);
-        args.rval().set(if arr.is_null() { UndefinedValue() } else { ObjectValue(arr) });
+        args.rval().set(if arr.is_null() {
+            UndefinedValue()
+        } else {
+            ObjectValue(arr)
+        });
     } else {
         let arr = wrappers2::NewArrayObject(&mut cx, &HandleValueArray::empty());
-        args.rval().set(if arr.is_null() { UndefinedValue() } else { ObjectValue(arr) });
+        args.rval().set(if arr.is_null() {
+            UndefinedValue()
+        } else {
+            ObjectValue(arr)
+        });
     }
     true
 }
 
-pub(super) unsafe extern "C" fn doc_create_element(cx: *mut RawJSContext, argc: u32, vp: *mut Value) -> bool {
+pub(super) unsafe extern "C" fn doc_create_element(
+    cx: *mut RawJSContext,
+    argc: u32,
+    vp: *mut Value,
+) -> bool {
     let mut cx = JSContext::from_ptr(NonNull::new(cx).unwrap());
     let args = CallArgs::from_vp(vp, argc);
     let tag = arg_to_string(&mut cx, &args, 0).to_lowercase();
@@ -1293,7 +2116,11 @@ pub(super) unsafe extern "C" fn doc_create_element(cx: *mut RawJSContext, argc: 
     true
 }
 
-pub(super) unsafe extern "C" fn doc_create_element_ns(cx: *mut RawJSContext, argc: u32, vp: *mut Value) -> bool {
+pub(super) unsafe extern "C" fn doc_create_element_ns(
+    cx: *mut RawJSContext,
+    argc: u32,
+    vp: *mut Value,
+) -> bool {
     let mut cx = JSContext::from_ptr(NonNull::new(cx).unwrap());
     let args = CallArgs::from_vp(vp, argc);
     let tag = arg_to_string(&mut cx, &args, 1).to_lowercase();
@@ -1303,7 +2130,11 @@ pub(super) unsafe extern "C" fn doc_create_element_ns(cx: *mut RawJSContext, arg
     true
 }
 
-pub(super) unsafe extern "C" fn doc_create_text_node(cx: *mut RawJSContext, argc: u32, vp: *mut Value) -> bool {
+pub(super) unsafe extern "C" fn doc_create_text_node(
+    cx: *mut RawJSContext,
+    argc: u32,
+    vp: *mut Value,
+) -> bool {
     let mut cx = JSContext::from_ptr(NonNull::new(cx).unwrap());
     let args = CallArgs::from_vp(vp, argc);
     let text = arg_to_string(&mut cx, &args, 0);
@@ -1313,7 +2144,11 @@ pub(super) unsafe extern "C" fn doc_create_text_node(cx: *mut RawJSContext, argc
     true
 }
 
-pub(super) unsafe extern "C" fn doc_create_fragment(cx: *mut RawJSContext, argc: u32, vp: *mut Value) -> bool {
+pub(super) unsafe extern "C" fn doc_create_fragment(
+    cx: *mut RawJSContext,
+    argc: u32,
+    vp: *mut Value,
+) -> bool {
     let mut cx = JSContext::from_ptr(NonNull::new(cx).unwrap());
     let args = CallArgs::from_vp(vp, argc);
     let node = Node::element("#document-fragment", vec![]);
@@ -1322,7 +2157,11 @@ pub(super) unsafe extern "C" fn doc_create_fragment(cx: *mut RawJSContext, argc:
     true
 }
 
-pub(super) unsafe extern "C" fn doc_create_event(cx: *mut RawJSContext, argc: u32, vp: *mut Value) -> bool {
+pub(super) unsafe extern "C" fn doc_create_event(
+    cx: *mut RawJSContext,
+    argc: u32,
+    vp: *mut Value,
+) -> bool {
     let mut cx = JSContext::from_ptr(NonNull::new(cx).unwrap());
     let args = CallArgs::from_vp(vp, argc);
     let obj = new_plain_object(&mut cx);
@@ -1332,11 +2171,41 @@ pub(super) unsafe extern "C" fn doc_create_event(cx: *mut RawJSContext, argc: u3
     set_prop_bool(&mut cx, obj_root.handle(), c"cancelable", false);
     set_prop_bool(&mut cx, obj_root.handle(), c"defaultPrevented", false);
     set_prop_null(&mut cx, obj_root.handle(), c"detail");
-    define_fn(&mut cx, obj_root.handle(), c"initEvent", Some(doc_init_event), 3);
-    define_fn(&mut cx, obj_root.handle(), c"initCustomEvent", Some(doc_init_custom_event), 4);
-    define_fn(&mut cx, obj_root.handle(), c"preventDefault", Some(noop_cb), 0);
-    define_fn(&mut cx, obj_root.handle(), c"stopPropagation", Some(noop_cb), 0);
-    define_fn(&mut cx, obj_root.handle(), c"stopImmediatePropagation", Some(noop_cb), 0);
+    define_fn(
+        &mut cx,
+        obj_root.handle(),
+        c"initEvent",
+        Some(doc_init_event),
+        3,
+    );
+    define_fn(
+        &mut cx,
+        obj_root.handle(),
+        c"initCustomEvent",
+        Some(doc_init_custom_event),
+        4,
+    );
+    define_fn(
+        &mut cx,
+        obj_root.handle(),
+        c"preventDefault",
+        Some(noop_cb),
+        0,
+    );
+    define_fn(
+        &mut cx,
+        obj_root.handle(),
+        c"stopPropagation",
+        Some(noop_cb),
+        0,
+    );
+    define_fn(
+        &mut cx,
+        obj_root.handle(),
+        c"stopImmediatePropagation",
+        Some(noop_cb),
+        0,
+    );
     args.rval().set(ObjectValue(obj));
     true
 }
@@ -1350,7 +2219,11 @@ unsafe extern "C" fn doc_init_event(cx: *mut RawJSContext, argc: u32, vp: *mut V
     true
 }
 
-unsafe extern "C" fn doc_init_custom_event(cx: *mut RawJSContext, argc: u32, vp: *mut Value) -> bool {
+unsafe extern "C" fn doc_init_custom_event(
+    cx: *mut RawJSContext,
+    argc: u32,
+    vp: *mut Value,
+) -> bool {
     let mut cx = JSContext::from_ptr(NonNull::new(cx).unwrap());
     let args = CallArgs::from_vp(vp, argc);
     rooted!(&in(cx) let this_val = args.thisv().get());
@@ -1375,15 +2248,29 @@ unsafe fn init_created_event(
     rooted!(&in(cx) let obj_root = obj);
     let event_type = arg_to_string(cx, args, 0);
     set_prop_str(cx, obj_root.handle(), c"type", &event_type);
-    set_prop_bool(cx, obj_root.handle(), c"bubbles", args.argc_ > 1 && args.get(1).get().to_boolean());
-    set_prop_bool(cx, obj_root.handle(), c"cancelable", args.argc_ > 2 && args.get(2).get().to_boolean());
+    set_prop_bool(
+        cx,
+        obj_root.handle(),
+        c"bubbles",
+        args.argc_ > 1 && args.get(1).get().to_boolean(),
+    );
+    set_prop_bool(
+        cx,
+        obj_root.handle(),
+        c"cancelable",
+        args.argc_ > 2 && args.get(2).get().to_boolean(),
+    );
     if include_detail && args.argc_ > 3 {
         rooted!(&in(cx) let detail = args.get(3).get());
         wrappers2::JS_SetProperty(cx, obj_root.handle(), c"detail".as_ptr(), detail.handle());
     }
 }
 
-pub(super) unsafe extern "C" fn doc_create_range(cx: *mut RawJSContext, argc: u32, vp: *mut Value) -> bool {
+pub(super) unsafe extern "C" fn doc_create_range(
+    cx: *mut RawJSContext,
+    argc: u32,
+    vp: *mut Value,
+) -> bool {
     let mut cx = JSContext::from_ptr(NonNull::new(cx).unwrap());
     let args = CallArgs::from_vp(vp, argc);
     let obj = new_plain_object(&mut cx);
@@ -1393,18 +2280,44 @@ pub(super) unsafe extern "C" fn doc_create_range(cx: *mut RawJSContext, argc: u3
     set_prop_i32(&mut cx, obj_root.handle(), c"endOffset", 0);
     set_prop_null(&mut cx, obj_root.handle(), c"startContainer");
     set_prop_null(&mut cx, obj_root.handle(), c"endContainer");
-    for name in &[c"setStart", c"setEnd", c"setStartBefore", c"setEndAfter", c"collapse",
-                  c"selectNode", c"selectNodeContents", c"deleteContents", c"detach",
-                  c"surroundContents", c"insertNode"] {
+    for name in &[
+        c"setStart",
+        c"setEnd",
+        c"setStartBefore",
+        c"setEndAfter",
+        c"collapse",
+        c"selectNode",
+        c"selectNodeContents",
+        c"deleteContents",
+        c"detach",
+        c"surroundContents",
+        c"insertNode",
+    ] {
         define_fn(&mut cx, obj_root.handle(), name, Some(noop_cb), 2);
     }
-    define_fn(&mut cx, obj_root.handle(), c"getBoundingClientRect", Some(node_get_bounding_rect), 0);
-    define_fn(&mut cx, obj_root.handle(), c"getClientRects", Some(return_empty_array_cb), 0);
+    define_fn(
+        &mut cx,
+        obj_root.handle(),
+        c"getBoundingClientRect",
+        Some(node_get_bounding_rect),
+        0,
+    );
+    define_fn(
+        &mut cx,
+        obj_root.handle(),
+        c"getClientRects",
+        Some(return_empty_array_cb),
+        0,
+    );
     args.rval().set(ObjectValue(obj));
     true
 }
 
-pub(super) unsafe extern "C" fn doc_create_tree_walker(cx: *mut RawJSContext, argc: u32, vp: *mut Value) -> bool {
+pub(super) unsafe extern "C" fn doc_create_tree_walker(
+    cx: *mut RawJSContext,
+    argc: u32,
+    vp: *mut Value,
+) -> bool {
     let mut cx = JSContext::from_ptr(NonNull::new(cx).unwrap());
     let args = CallArgs::from_vp(vp, argc);
     let obj = new_plain_object(&mut cx);
@@ -1412,31 +2325,88 @@ pub(super) unsafe extern "C" fn doc_create_tree_walker(cx: *mut RawJSContext, ar
     if argc > 0 {
         rooted!(&in(cx) let root = args.get(0).get());
         wrappers2::JS_SetProperty(&mut cx, obj_root.handle(), c"root".as_ptr(), root.handle());
-        wrappers2::JS_SetProperty(&mut cx, obj_root.handle(), c"currentNode".as_ptr(), root.handle());
+        wrappers2::JS_SetProperty(
+            &mut cx,
+            obj_root.handle(),
+            c"currentNode".as_ptr(),
+            root.handle(),
+        );
     } else {
         set_prop_null(&mut cx, obj_root.handle(), c"root");
         set_prop_null(&mut cx, obj_root.handle(), c"currentNode");
     }
-    define_fn(&mut cx, obj_root.handle(), c"parentNode", Some(return_null_cb), 0);
-    define_fn(&mut cx, obj_root.handle(), c"firstChild", Some(return_null_cb), 0);
-    define_fn(&mut cx, obj_root.handle(), c"lastChild", Some(return_null_cb), 0);
-    define_fn(&mut cx, obj_root.handle(), c"previousSibling", Some(return_null_cb), 0);
-    define_fn(&mut cx, obj_root.handle(), c"nextSibling", Some(return_null_cb), 0);
-    define_fn(&mut cx, obj_root.handle(), c"previousNode", Some(return_null_cb), 0);
-    define_fn(&mut cx, obj_root.handle(), c"nextNode", Some(return_null_cb), 0);
+    define_fn(
+        &mut cx,
+        obj_root.handle(),
+        c"parentNode",
+        Some(return_null_cb),
+        0,
+    );
+    define_fn(
+        &mut cx,
+        obj_root.handle(),
+        c"firstChild",
+        Some(return_null_cb),
+        0,
+    );
+    define_fn(
+        &mut cx,
+        obj_root.handle(),
+        c"lastChild",
+        Some(return_null_cb),
+        0,
+    );
+    define_fn(
+        &mut cx,
+        obj_root.handle(),
+        c"previousSibling",
+        Some(return_null_cb),
+        0,
+    );
+    define_fn(
+        &mut cx,
+        obj_root.handle(),
+        c"nextSibling",
+        Some(return_null_cb),
+        0,
+    );
+    define_fn(
+        &mut cx,
+        obj_root.handle(),
+        c"previousNode",
+        Some(return_null_cb),
+        0,
+    );
+    define_fn(
+        &mut cx,
+        obj_root.handle(),
+        c"nextNode",
+        Some(return_null_cb),
+        0,
+    );
     args.rval().set(ObjectValue(obj));
     true
 }
 
-pub(super) unsafe extern "C" fn doc_add_event_listener(cx: *mut RawJSContext, argc: u32, vp: *mut Value) -> bool {
+pub(super) unsafe extern "C" fn doc_add_event_listener(
+    cx: *mut RawJSContext,
+    argc: u32,
+    vp: *mut Value,
+) -> bool {
     let mut cx = JSContext::from_ptr(NonNull::new(cx).unwrap());
     let args = CallArgs::from_vp(vp, argc);
 
-    if argc < 2 { args.rval().set(UndefinedValue()); return true; }
+    if argc < 2 {
+        args.rval().set(UndefinedValue());
+        return true;
+    }
 
     let event_type = arg_to_string(&mut cx, &args, 0);
     let cb_val = args.get(1).get();
-    if !cb_val.is_object() { args.rval().set(UndefinedValue()); return true; }
+    if !cb_val.is_object() {
+        args.rval().set(UndefinedValue());
+        return true;
+    }
 
     let state = &mut *get_state_ptr(&cx);
     let cb_id = state.window.next_id();
@@ -1458,11 +2428,17 @@ unsafe extern "C" fn get_parent_node(cx: *mut RawJSContext, argc: u32, vp: *mut 
     let args = CallArgs::from_vp(vp, argc);
     let node_id = match node_id_from_this(&mut cx, &args) {
         Some(id) => id,
-        None => { args.rval().set(NullValue()); return true; }
+        None => {
+            args.rval().set(NullValue());
+            return true;
+        }
     };
     let (this_node, doc) = {
         let state = &*get_state_ptr(&cx);
-        (state.registry.lookup(node_id), state.registry.document.clone())
+        (
+            state.registry.lookup(node_id),
+            state.registry.document.clone(),
+        )
     };
     if let (Some(this_node), Some(doc)) = (this_node, doc) {
         if let Some(parent) = find_parent(&doc, &this_node) {
@@ -1480,11 +2456,17 @@ unsafe extern "C" fn get_parent_element(cx: *mut RawJSContext, argc: u32, vp: *m
     let args = CallArgs::from_vp(vp, argc);
     let node_id = match node_id_from_this(&mut cx, &args) {
         Some(id) => id,
-        None => { args.rval().set(NullValue()); return true; }
+        None => {
+            args.rval().set(NullValue());
+            return true;
+        }
     };
     let (this_node, doc) = {
         let state = &*get_state_ptr(&cx);
-        (state.registry.lookup(node_id), state.registry.document.clone())
+        (
+            state.registry.lookup(node_id),
+            state.registry.document.clone(),
+        )
     };
     if let (Some(this_node), Some(doc)) = (this_node, doc) {
         if let Some(parent) = find_parent(&doc, &this_node) {
@@ -1506,20 +2488,32 @@ unsafe extern "C" fn get_child_nodes(cx: *mut RawJSContext, argc: u32, vp: *mut 
         Some(id) => id,
         None => {
             let empty = wrappers2::NewArrayObject(&mut cx, &HandleValueArray::empty());
-            args.rval().set(if empty.is_null() { UndefinedValue() } else { ObjectValue(empty) });
+            args.rval().set(if empty.is_null() {
+                UndefinedValue()
+            } else {
+                ObjectValue(empty)
+            });
             return true;
         }
     };
     let children = {
         let state = &*get_state_ptr(&cx);
-        state.registry.lookup(node_id).map(|n| match &*n.borrow() {
-            Node::Element(el) => el.children.clone(),
-            Node::Document { children, .. } => children.clone(),
-            _ => vec![],
-        }).unwrap_or_default()
+        state
+            .registry
+            .lookup(node_id)
+            .map(|n| match &*n.borrow() {
+                Node::Element(el) => el.children.clone(),
+                Node::Document { children, .. } => children.clone(),
+                _ => vec![],
+            })
+            .unwrap_or_default()
     };
     let arr = build_nodelist(&mut cx, children);
-    args.rval().set(if arr.is_null() { UndefinedValue() } else { ObjectValue(arr) });
+    args.rval().set(if arr.is_null() {
+        UndefinedValue()
+    } else {
+        ObjectValue(arr)
+    });
     true
 }
 
@@ -1530,40 +2524,72 @@ unsafe extern "C" fn get_children(cx: *mut RawJSContext, argc: u32, vp: *mut Val
         Some(id) => id,
         None => {
             let empty = wrappers2::NewArrayObject(&mut cx, &HandleValueArray::empty());
-            args.rval().set(if empty.is_null() { UndefinedValue() } else { ObjectValue(empty) });
+            args.rval().set(if empty.is_null() {
+                UndefinedValue()
+            } else {
+                ObjectValue(empty)
+            });
             return true;
         }
     };
     let children = {
         let state = &*get_state_ptr(&cx);
-        state.registry.lookup(node_id).map(|n| {
-            let all = match &*n.borrow() {
-                Node::Element(el) => el.children.clone(),
-                Node::Document { children, .. } => children.clone(),
-                _ => return vec![],
-            };
-            all.into_iter().filter(|c| matches!(&*c.borrow(), Node::Element(_))).collect()
-        }).unwrap_or_default()
+        state
+            .registry
+            .lookup(node_id)
+            .map(|n| {
+                let all = match &*n.borrow() {
+                    Node::Element(el) => el.children.clone(),
+                    Node::Document { children, .. } => children.clone(),
+                    _ => return vec![],
+                };
+                all.into_iter()
+                    .filter(|c| matches!(&*c.borrow(), Node::Element(_)))
+                    .collect()
+            })
+            .unwrap_or_default()
     };
     let arr = build_nodelist(&mut cx, children);
-    args.rval().set(if arr.is_null() { UndefinedValue() } else { ObjectValue(arr) });
+    args.rval().set(if arr.is_null() {
+        UndefinedValue()
+    } else {
+        ObjectValue(arr)
+    });
     true
 }
 
-unsafe extern "C" fn get_child_element_count(cx: *mut RawJSContext, argc: u32, vp: *mut Value) -> bool {
+unsafe extern "C" fn get_child_element_count(
+    cx: *mut RawJSContext,
+    argc: u32,
+    vp: *mut Value,
+) -> bool {
     let mut cx = JSContext::from_ptr(NonNull::new(cx).unwrap());
     let args = CallArgs::from_vp(vp, argc);
     let node_id = match node_id_from_this(&mut cx, &args) {
         Some(id) => id,
-        None => { args.rval().set(mozjs::jsval::Int32Value(0)); return true; }
+        None => {
+            args.rval().set(mozjs::jsval::Int32Value(0));
+            return true;
+        }
     };
     let count = {
         let state = &*get_state_ptr(&cx);
-        state.registry.lookup(node_id).map(|n| match &*n.borrow() {
-            Node::Element(el) => el.children.iter().filter(|c| matches!(&*c.borrow(), Node::Element(_))).count(),
-            Node::Document { children, .. } => children.iter().filter(|c| matches!(&*c.borrow(), Node::Element(_))).count(),
-            _ => 0,
-        }).unwrap_or(0)
+        state
+            .registry
+            .lookup(node_id)
+            .map(|n| match &*n.borrow() {
+                Node::Element(el) => el
+                    .children
+                    .iter()
+                    .filter(|c| matches!(&*c.borrow(), Node::Element(_)))
+                    .count(),
+                Node::Document { children, .. } => children
+                    .iter()
+                    .filter(|c| matches!(&*c.borrow(), Node::Element(_)))
+                    .count(),
+                _ => 0,
+            })
+            .unwrap_or(0)
     };
     args.rval().set(mozjs::jsval::Int32Value(count as i32));
     true
@@ -1574,19 +2600,30 @@ unsafe extern "C" fn get_first_child(cx: *mut RawJSContext, argc: u32, vp: *mut 
     let args = CallArgs::from_vp(vp, argc);
     let node_id = match node_id_from_this(&mut cx, &args) {
         Some(id) => id,
-        None => { args.rval().set(NullValue()); return true; }
+        None => {
+            args.rval().set(NullValue());
+            return true;
+        }
     };
     let first = {
         let state = &*get_state_ptr(&cx);
-        state.registry.lookup(node_id).and_then(|n| match &*n.borrow() {
-            Node::Element(el) => el.children.first().cloned(),
-            Node::Document { children, .. } => children.first().cloned(),
-            _ => None,
-        })
+        state
+            .registry
+            .lookup(node_id)
+            .and_then(|n| match &*n.borrow() {
+                Node::Element(el) => el.children.first().cloned(),
+                Node::Document { children, .. } => children.first().cloned(),
+                _ => None,
+            })
     };
     match first {
-        Some(node) => { let obj = create_js_node(&mut cx, node); args.rval().set(ObjectValue(obj)); }
-        None => { args.rval().set(NullValue()); }
+        Some(node) => {
+            let obj = create_js_node(&mut cx, node);
+            args.rval().set(ObjectValue(obj));
+        }
+        None => {
+            args.rval().set(NullValue());
+        }
     }
     true
 }
@@ -1596,29 +2633,47 @@ unsafe extern "C" fn get_last_child(cx: *mut RawJSContext, argc: u32, vp: *mut V
     let args = CallArgs::from_vp(vp, argc);
     let node_id = match node_id_from_this(&mut cx, &args) {
         Some(id) => id,
-        None => { args.rval().set(NullValue()); return true; }
+        None => {
+            args.rval().set(NullValue());
+            return true;
+        }
     };
     let last = {
         let state = &*get_state_ptr(&cx);
-        state.registry.lookup(node_id).and_then(|n| match &*n.borrow() {
-            Node::Element(el) => el.children.last().cloned(),
-            Node::Document { children, .. } => children.last().cloned(),
-            _ => None,
-        })
+        state
+            .registry
+            .lookup(node_id)
+            .and_then(|n| match &*n.borrow() {
+                Node::Element(el) => el.children.last().cloned(),
+                Node::Document { children, .. } => children.last().cloned(),
+                _ => None,
+            })
     };
     match last {
-        Some(node) => { let obj = create_js_node(&mut cx, node); args.rval().set(ObjectValue(obj)); }
-        None => { args.rval().set(NullValue()); }
+        Some(node) => {
+            let obj = create_js_node(&mut cx, node);
+            args.rval().set(ObjectValue(obj));
+        }
+        None => {
+            args.rval().set(NullValue());
+        }
     }
     true
 }
 
-unsafe extern "C" fn get_first_element_child(cx: *mut RawJSContext, argc: u32, vp: *mut Value) -> bool {
+unsafe extern "C" fn get_first_element_child(
+    cx: *mut RawJSContext,
+    argc: u32,
+    vp: *mut Value,
+) -> bool {
     let mut cx = JSContext::from_ptr(NonNull::new(cx).unwrap());
     let args = CallArgs::from_vp(vp, argc);
     let node_id = match node_id_from_this(&mut cx, &args) {
         Some(id) => id,
-        None => { args.rval().set(NullValue()); return true; }
+        None => {
+            args.rval().set(NullValue());
+            return true;
+        }
     };
     let first = {
         let state = &*get_state_ptr(&cx);
@@ -1628,22 +2683,35 @@ unsafe extern "C" fn get_first_element_child(cx: *mut RawJSContext, argc: u32, v
                 Node::Document { children, .. } => children.clone(),
                 _ => return None,
             };
-            kids.into_iter().find(|c| matches!(&*c.borrow(), Node::Element(_)))
+            kids.into_iter()
+                .find(|c| matches!(&*c.borrow(), Node::Element(_)))
         })
     };
     match first {
-        Some(node) => { let obj = create_js_node(&mut cx, node); args.rval().set(ObjectValue(obj)); }
-        None => { args.rval().set(NullValue()); }
+        Some(node) => {
+            let obj = create_js_node(&mut cx, node);
+            args.rval().set(ObjectValue(obj));
+        }
+        None => {
+            args.rval().set(NullValue());
+        }
     }
     true
 }
 
-unsafe extern "C" fn get_last_element_child(cx: *mut RawJSContext, argc: u32, vp: *mut Value) -> bool {
+unsafe extern "C" fn get_last_element_child(
+    cx: *mut RawJSContext,
+    argc: u32,
+    vp: *mut Value,
+) -> bool {
     let mut cx = JSContext::from_ptr(NonNull::new(cx).unwrap());
     let args = CallArgs::from_vp(vp, argc);
     let node_id = match node_id_from_this(&mut cx, &args) {
         Some(id) => id,
-        None => { args.rval().set(NullValue()); return true; }
+        None => {
+            args.rval().set(NullValue());
+            return true;
+        }
     };
     let last = {
         let state = &*get_state_ptr(&cx);
@@ -1653,12 +2721,19 @@ unsafe extern "C" fn get_last_element_child(cx: *mut RawJSContext, argc: u32, vp
                 Node::Document { children, .. } => children.clone(),
                 _ => return None,
             };
-            kids.into_iter().filter(|c| matches!(&*c.borrow(), Node::Element(_))).last()
+            kids.into_iter()
+                .filter(|c| matches!(&*c.borrow(), Node::Element(_)))
+                .last()
         })
     };
     match last {
-        Some(node) => { let obj = create_js_node(&mut cx, node); args.rval().set(ObjectValue(obj)); }
-        None => { args.rval().set(NullValue()); }
+        Some(node) => {
+            let obj = create_js_node(&mut cx, node);
+            args.rval().set(ObjectValue(obj));
+        }
+        None => {
+            args.rval().set(NullValue());
+        }
     }
     true
 }
@@ -1668,82 +2743,147 @@ unsafe extern "C" fn get_next_sibling(cx: *mut RawJSContext, argc: u32, vp: *mut
     let args = CallArgs::from_vp(vp, argc);
     let node_id = match node_id_from_this(&mut cx, &args) {
         Some(id) => id,
-        None => { args.rval().set(NullValue()); return true; }
+        None => {
+            args.rval().set(NullValue());
+            return true;
+        }
     };
     let sibling = {
         let state = &*get_state_ptr(&cx);
         state.registry.lookup(node_id).and_then(|this_node| {
-            state.registry.document.as_ref().and_then(|doc| get_sibling(doc, &this_node, 1, false))
+            state
+                .registry
+                .document
+                .as_ref()
+                .and_then(|doc| get_sibling(doc, &this_node, 1, false))
         })
     };
     match sibling {
-        Some(node) => { let obj = create_js_node(&mut cx, node); args.rval().set(ObjectValue(obj)); }
-        None => { args.rval().set(NullValue()); }
+        Some(node) => {
+            let obj = create_js_node(&mut cx, node);
+            args.rval().set(ObjectValue(obj));
+        }
+        None => {
+            args.rval().set(NullValue());
+        }
     }
     true
 }
 
-unsafe extern "C" fn get_previous_sibling(cx: *mut RawJSContext, argc: u32, vp: *mut Value) -> bool {
+unsafe extern "C" fn get_previous_sibling(
+    cx: *mut RawJSContext,
+    argc: u32,
+    vp: *mut Value,
+) -> bool {
     let mut cx = JSContext::from_ptr(NonNull::new(cx).unwrap());
     let args = CallArgs::from_vp(vp, argc);
     let node_id = match node_id_from_this(&mut cx, &args) {
         Some(id) => id,
-        None => { args.rval().set(NullValue()); return true; }
+        None => {
+            args.rval().set(NullValue());
+            return true;
+        }
     };
     let sibling = {
         let state = &*get_state_ptr(&cx);
         state.registry.lookup(node_id).and_then(|this_node| {
-            state.registry.document.as_ref().and_then(|doc| get_sibling(doc, &this_node, -1, false))
+            state
+                .registry
+                .document
+                .as_ref()
+                .and_then(|doc| get_sibling(doc, &this_node, -1, false))
         })
     };
     match sibling {
-        Some(node) => { let obj = create_js_node(&mut cx, node); args.rval().set(ObjectValue(obj)); }
-        None => { args.rval().set(NullValue()); }
+        Some(node) => {
+            let obj = create_js_node(&mut cx, node);
+            args.rval().set(ObjectValue(obj));
+        }
+        None => {
+            args.rval().set(NullValue());
+        }
     }
     true
 }
 
-unsafe extern "C" fn get_next_element_sibling(cx: *mut RawJSContext, argc: u32, vp: *mut Value) -> bool {
+unsafe extern "C" fn get_next_element_sibling(
+    cx: *mut RawJSContext,
+    argc: u32,
+    vp: *mut Value,
+) -> bool {
     let mut cx = JSContext::from_ptr(NonNull::new(cx).unwrap());
     let args = CallArgs::from_vp(vp, argc);
     let node_id = match node_id_from_this(&mut cx, &args) {
         Some(id) => id,
-        None => { args.rval().set(NullValue()); return true; }
+        None => {
+            args.rval().set(NullValue());
+            return true;
+        }
     };
     let sibling = {
         let state = &*get_state_ptr(&cx);
         state.registry.lookup(node_id).and_then(|this_node| {
-            state.registry.document.as_ref().and_then(|doc| get_sibling(doc, &this_node, 1, true))
+            state
+                .registry
+                .document
+                .as_ref()
+                .and_then(|doc| get_sibling(doc, &this_node, 1, true))
         })
     };
     match sibling {
-        Some(node) => { let obj = create_js_node(&mut cx, node); args.rval().set(ObjectValue(obj)); }
-        None => { args.rval().set(NullValue()); }
+        Some(node) => {
+            let obj = create_js_node(&mut cx, node);
+            args.rval().set(ObjectValue(obj));
+        }
+        None => {
+            args.rval().set(NullValue());
+        }
     }
     true
 }
 
-unsafe extern "C" fn get_previous_element_sibling(cx: *mut RawJSContext, argc: u32, vp: *mut Value) -> bool {
+unsafe extern "C" fn get_previous_element_sibling(
+    cx: *mut RawJSContext,
+    argc: u32,
+    vp: *mut Value,
+) -> bool {
     let mut cx = JSContext::from_ptr(NonNull::new(cx).unwrap());
     let args = CallArgs::from_vp(vp, argc);
     let node_id = match node_id_from_this(&mut cx, &args) {
         Some(id) => id,
-        None => { args.rval().set(NullValue()); return true; }
+        None => {
+            args.rval().set(NullValue());
+            return true;
+        }
     };
     let sibling = {
         let state = &*get_state_ptr(&cx);
         state.registry.lookup(node_id).and_then(|this_node| {
-            state.registry.document.as_ref().and_then(|doc| get_sibling(doc, &this_node, -1, true))
+            state
+                .registry
+                .document
+                .as_ref()
+                .and_then(|doc| get_sibling(doc, &this_node, -1, true))
         })
     };
     match sibling {
-        Some(node) => { let obj = create_js_node(&mut cx, node); args.rval().set(ObjectValue(obj)); }
-        None => { args.rval().set(NullValue()); }
+        Some(node) => {
+            let obj = create_js_node(&mut cx, node);
+            args.rval().set(ObjectValue(obj));
+        }
+        None => {
+            args.rval().set(NullValue());
+        }
     }
     true
 }
 
-fn get_sibling(root: &NodePtr, target: &NodePtr, delta: i32, element_only: bool) -> Option<NodePtr> {
+fn get_sibling(
+    root: &NodePtr,
+    target: &NodePtr,
+    delta: i32,
+    element_only: bool,
+) -> Option<NodePtr> {
     let parent = find_parent(root, target)?;
     let children = match &*parent.borrow() {
         Node::Element(el) => el.children.clone(),
@@ -1769,22 +2909,36 @@ unsafe extern "C" fn get_inner_html(cx: *mut RawJSContext, argc: u32, vp: *mut V
     let args = CallArgs::from_vp(vp, argc);
     let node_id = match node_id_from_this(&mut cx, &args) {
         Some(id) => id,
-        None => { args.rval().set(UndefinedValue()); return true; }
+        None => {
+            args.rval().set(UndefinedValue());
+            return true;
+        }
     };
     let html = {
         let state = &*get_state_ptr(&cx);
-        state.registry.lookup(node_id).map(|n| match &*n.borrow() {
-            Node::Element(el) => el.children.iter()
-                .map(|c| crate::js_sm::serialization::serialize_outer_html(c))
-                .collect::<String>(),
-            Node::Document { children, .. } => children.iter()
-                .map(|c| crate::js_sm::serialization::serialize_outer_html(c))
-                .collect::<String>(),
-            Node::Text(t) => t.clone(),
-        }).unwrap_or_default()
+        state
+            .registry
+            .lookup(node_id)
+            .map(|n| match &*n.borrow() {
+                Node::Element(el) => el
+                    .children
+                    .iter()
+                    .map(|c| crate::js_sm::serialization::serialize_outer_html(c))
+                    .collect::<String>(),
+                Node::Document { children, .. } => children
+                    .iter()
+                    .map(|c| crate::js_sm::serialization::serialize_outer_html(c))
+                    .collect::<String>(),
+                Node::Text(t) => t.clone(),
+            })
+            .unwrap_or_default()
     };
     let js_str = new_js_string(&mut cx, &html);
-    args.rval().set(if js_str.is_null() { UndefinedValue() } else { mozjs::jsval::StringValue(unsafe { &*js_str }) });
+    args.rval().set(if js_str.is_null() {
+        UndefinedValue()
+    } else {
+        mozjs::jsval::StringValue(unsafe { &*js_str })
+    });
     true
 }
 
@@ -1794,9 +2948,15 @@ unsafe extern "C" fn set_inner_html(cx: *mut RawJSContext, argc: u32, vp: *mut V
     let html = arg_to_string(&mut cx, &args, 0);
     let node_id = match node_id_from_this(&mut cx, &args) {
         Some(id) => id,
-        None => { args.rval().set(UndefinedValue()); return true; }
+        None => {
+            args.rval().set(UndefinedValue());
+            return true;
+        }
     };
-    let node = { let state = &*get_state_ptr(&cx); state.registry.lookup(node_id) };
+    let node = {
+        let state = &*get_state_ptr(&cx);
+        state.registry.lookup(node_id)
+    };
     if let Some(node) = node {
         let fragment = crate::html::Parser::new(&format!("<body>{}</body>", html)).parse_document();
         let new_children = extract_body_children(&fragment);
@@ -1817,16 +2977,25 @@ unsafe extern "C" fn get_outer_html(cx: *mut RawJSContext, argc: u32, vp: *mut V
     let args = CallArgs::from_vp(vp, argc);
     let node_id = match node_id_from_this(&mut cx, &args) {
         Some(id) => id,
-        None => { args.rval().set(UndefinedValue()); return true; }
+        None => {
+            args.rval().set(UndefinedValue());
+            return true;
+        }
     };
     let html = {
         let state = &*get_state_ptr(&cx);
-        state.registry.lookup(node_id)
+        state
+            .registry
+            .lookup(node_id)
             .map(|n| crate::js_sm::serialization::serialize_outer_html(&n))
             .unwrap_or_default()
     };
     let js_str = new_js_string(&mut cx, &html);
-    args.rval().set(if js_str.is_null() { UndefinedValue() } else { mozjs::jsval::StringValue(unsafe { &*js_str }) });
+    args.rval().set(if js_str.is_null() {
+        UndefinedValue()
+    } else {
+        mozjs::jsval::StringValue(unsafe { &*js_str })
+    });
     true
 }
 
@@ -1835,14 +3004,25 @@ unsafe extern "C" fn get_text_content(cx: *mut RawJSContext, argc: u32, vp: *mut
     let args = CallArgs::from_vp(vp, argc);
     let node_id = match node_id_from_this(&mut cx, &args) {
         Some(id) => id,
-        None => { args.rval().set(NullValue()); return true; }
+        None => {
+            args.rval().set(NullValue());
+            return true;
+        }
     };
     let text = {
         let state = &*get_state_ptr(&cx);
-        state.registry.lookup(node_id).map(|n| collect_text_content(&n)).unwrap_or_default()
+        state
+            .registry
+            .lookup(node_id)
+            .map(|n| collect_text_content(&n))
+            .unwrap_or_default()
     };
     let js_str = new_js_string(&mut cx, &text);
-    args.rval().set(if js_str.is_null() { NullValue() } else { mozjs::jsval::StringValue(unsafe { &*js_str }) });
+    args.rval().set(if js_str.is_null() {
+        NullValue()
+    } else {
+        mozjs::jsval::StringValue(unsafe { &*js_str })
+    });
     true
 }
 
@@ -1852,9 +3032,15 @@ unsafe extern "C" fn set_text_content(cx: *mut RawJSContext, argc: u32, vp: *mut
     let text = arg_to_string(&mut cx, &args, 0);
     let node_id = match node_id_from_this(&mut cx, &args) {
         Some(id) => id,
-        None => { args.rval().set(UndefinedValue()); return true; }
+        None => {
+            args.rval().set(UndefinedValue());
+            return true;
+        }
     };
-    let node = { let state = &*get_state_ptr(&cx); state.registry.lookup(node_id) };
+    let node = {
+        let state = &*get_state_ptr(&cx);
+        state.registry.lookup(node_id)
+    };
     if let Some(node) = node {
         let text_node = crate::dom::Node::text(text);
         match &mut *node.borrow_mut() {
@@ -1906,10 +3092,18 @@ fn clone_node_rs(node: &NodePtr, deep: bool) -> NodePtr {
             } else {
                 vec![]
             };
-            crate::dom::Node::element_with_attributes(el.tag_name.clone(), el.attributes.clone(), children)
+            crate::dom::Node::element_with_attributes(
+                el.tag_name.clone(),
+                el.attributes.clone(),
+                children,
+            )
         }
         Node::Document { children, .. } => {
-            let kids = if deep { children.iter().map(|c| clone_node_rs(c, true)).collect() } else { vec![] };
+            let kids = if deep {
+                children.iter().map(|c| clone_node_rs(c, true)).collect()
+            } else {
+                vec![]
+            };
             crate::dom::Node::document(kids)
         }
     }
@@ -1918,7 +3112,9 @@ fn clone_node_rs(node: &NodePtr, deep: bool) -> NodePtr {
 // ── node_contains helper ──────────────────────────────────────────────────────
 
 fn node_contains_node(root: &NodePtr, needle: &NodePtr) -> bool {
-    if Rc::ptr_eq(root, needle) { return true; }
+    if Rc::ptr_eq(root, needle) {
+        return true;
+    }
     match &*root.borrow() {
         Node::Element(el) => el.children.iter().any(|c| node_contains_node(c, needle)),
         Node::Document { children, .. } => children.iter().any(|c| node_contains_node(c, needle)),
@@ -1946,17 +3142,27 @@ unsafe extern "C" fn class_list_add(cx: *mut RawJSContext, argc: u32, vp: *mut V
     let mut cx = JSContext::from_ptr(NonNull::new(cx).unwrap());
     let args = CallArgs::from_vp(vp, argc);
     let to_add = arg_to_string(&mut cx, &args, 0);
-    if to_add.is_empty() { args.rval().set(UndefinedValue()); return true; }
+    if to_add.is_empty() {
+        args.rval().set(UndefinedValue());
+        return true;
+    }
     let node_id = match node_id_from_this(&mut cx, &args) {
         Some(id) => id,
-        None => { args.rval().set(UndefinedValue()); return true; }
+        None => {
+            args.rval().set(UndefinedValue());
+            return true;
+        }
     };
     let state = &mut *get_state_ptr(&cx);
     if let Some(node) = state.registry.lookup(node_id) {
         if let Node::Element(el) = &mut *node.borrow_mut() {
             let current = el.attributes.get("class").cloned().unwrap_or_default();
             if !current.split_whitespace().any(|c| c == to_add.as_str()) {
-                let new_class = if current.is_empty() { to_add.clone() } else { format!("{} {}", current, to_add) };
+                let new_class = if current.is_empty() {
+                    to_add.clone()
+                } else {
+                    format!("{} {}", current, to_add)
+                };
                 el.attributes.insert("class".to_string(), new_class.clone());
                 let this_obj = args.thisv().get().to_object_or_null();
                 if !this_obj.is_null() {
@@ -1975,18 +3181,26 @@ unsafe extern "C" fn class_list_remove(cx: *mut RawJSContext, argc: u32, vp: *mu
     let mut cx = JSContext::from_ptr(NonNull::new(cx).unwrap());
     let args = CallArgs::from_vp(vp, argc);
     let to_remove = arg_to_string(&mut cx, &args, 0);
-    if to_remove.is_empty() { args.rval().set(UndefinedValue()); return true; }
+    if to_remove.is_empty() {
+        args.rval().set(UndefinedValue());
+        return true;
+    }
     let node_id = match node_id_from_this(&mut cx, &args) {
         Some(id) => id,
-        None => { args.rval().set(UndefinedValue()); return true; }
+        None => {
+            args.rval().set(UndefinedValue());
+            return true;
+        }
     };
     let state = &mut *get_state_ptr(&cx);
     if let Some(node) = state.registry.lookup(node_id) {
         if let Node::Element(el) = &mut *node.borrow_mut() {
             let current = el.attributes.get("class").cloned().unwrap_or_default();
-            let new_class = current.split_whitespace()
+            let new_class = current
+                .split_whitespace()
                 .filter(|c| *c != to_remove.as_str())
-                .collect::<Vec<_>>().join(" ");
+                .collect::<Vec<_>>()
+                .join(" ");
             el.attributes.insert("class".to_string(), new_class.clone());
             let this_obj = args.thisv().get().to_object_or_null();
             if !this_obj.is_null() {
@@ -2004,10 +3218,16 @@ unsafe extern "C" fn class_list_toggle(cx: *mut RawJSContext, argc: u32, vp: *mu
     let mut cx = JSContext::from_ptr(NonNull::new(cx).unwrap());
     let args = CallArgs::from_vp(vp, argc);
     let cls = arg_to_string(&mut cx, &args, 0);
-    if cls.is_empty() { args.rval().set(BooleanValue(false)); return true; }
+    if cls.is_empty() {
+        args.rval().set(BooleanValue(false));
+        return true;
+    }
     let node_id = match node_id_from_this(&mut cx, &args) {
         Some(id) => id,
-        None => { args.rval().set(BooleanValue(false)); return true; }
+        None => {
+            args.rval().set(BooleanValue(false));
+            return true;
+        }
     };
     let mut added = false;
     let state = &mut *get_state_ptr(&cx);
@@ -2016,10 +3236,18 @@ unsafe extern "C" fn class_list_toggle(cx: *mut RawJSContext, argc: u32, vp: *mu
             let current = el.attributes.get("class").cloned().unwrap_or_default();
             let has = current.split_whitespace().any(|c| c == cls.as_str());
             let new_class = if has {
-                current.split_whitespace().filter(|c| *c != cls.as_str()).collect::<Vec<_>>().join(" ")
+                current
+                    .split_whitespace()
+                    .filter(|c| *c != cls.as_str())
+                    .collect::<Vec<_>>()
+                    .join(" ")
             } else {
                 added = true;
-                if current.is_empty() { cls.clone() } else { format!("{} {}", current, cls) }
+                if current.is_empty() {
+                    cls.clone()
+                } else {
+                    format!("{} {}", current, cls)
+                }
             };
             el.attributes.insert("class".to_string(), new_class.clone());
             let this_obj = args.thisv().get().to_object_or_null();

@@ -4,6 +4,8 @@ mod engine;
 mod globals;
 mod registry;
 mod runtime;
+#[cfg(test)]
+mod runtime_tests;
 mod serialization;
 mod state;
 mod utils;

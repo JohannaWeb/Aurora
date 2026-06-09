@@ -13,8 +13,8 @@ fn clamps_block_width_and_height_with_min_and_max() {
         ],
     )]);
     let stylesheet = Stylesheet::parse(
-            "section { width: 40px; min-width: 80px; height: 12px; min-height: 24px; padding: 4px; } article { width: 180px; max-width: 96px; height: 120px; max-height: 40px; padding: 4px; }",
-        );
+        "section { width: 40px; min-width: 80px; height: 12px; min-height: 24px; padding: 4px; } article { width: 180px; max-width: 96px; height: 120px; max-height: 40px; padding: 4px; }",
+    );
     let style_tree = StyleTree::from_dom(&dom, &stylesheet);
 
     let layout = LayoutTree::from_style_tree_with_viewport_width(&style_tree, 240.0);
@@ -64,7 +64,9 @@ fn clamps_inline_width_before_wrapping() {
     let layout = LayoutTree::from_style_tree_with_viewport_width(&style_tree, 240.0);
     let rendered = layout.to_string();
 
-    assert!(rendered.contains("inline<p> {display: inline, max-width: 64px, min-height: 60px, padding: 4px, width: 140px}"));
+    assert!(rendered.contains(
+        "inline<p> {display: inline, max-width: 64px, min-height: 60px, padding: 4px, width: 140px}"
+    ));
     for word in ["one", "two", "three", "four", "five"] {
         assert!(
             rendered.contains(word),

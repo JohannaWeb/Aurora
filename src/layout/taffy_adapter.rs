@@ -1,6 +1,6 @@
 use crate::css::{
-    parse_length_value, AlignItems, BoxSizing, DisplayMode, FlexDirection, JustifyContent,
-    LengthValue, MarginValue, StyleMap,
+    AlignItems, BoxSizing, DisplayMode, FlexDirection, JustifyContent, LengthValue, MarginValue,
+    StyleMap, parse_length_value,
 };
 use taffy::prelude::{
     AlignContent as TaffyAlignContent, AlignItems as TaffyAlignItems, Dimension,
@@ -12,10 +12,13 @@ use super::ViewportSize;
 
 #[cfg(test)]
 fn style_to_taffy(styles: &StyleMap) -> TaffyStyle {
-    style_to_taffy_with_viewport(styles, ViewportSize {
-        width: 800.0,
-        height: 600.0,
-    })
+    style_to_taffy_with_viewport(
+        styles,
+        ViewportSize {
+            width: 800.0,
+            height: 600.0,
+        },
+    )
 }
 
 pub fn style_to_taffy_with_viewport(styles: &StyleMap, viewport: ViewportSize) -> TaffyStyle {

@@ -8,8 +8,8 @@ use vello::Scene;
 
 use crate::identity::Identity;
 
-use std::sync::{Mutex, OnceLock};
 use std::collections::BTreeMap;
+use std::sync::{Mutex, OnceLock};
 
 static NET_CACHE: OnceLock<Mutex<BTreeMap<String, Vec<u8>>>> = OnceLock::new();
 
@@ -23,7 +23,9 @@ struct AuroraNetProvider {
 
 impl AuroraNetProvider {
     fn new(identity: &Identity) -> std::sync::Arc<Self> {
-        std::sync::Arc::new(Self { identity: identity.clone() })
+        std::sync::Arc::new(Self {
+            identity: identity.clone(),
+        })
     }
 }
 

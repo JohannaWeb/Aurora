@@ -1,205 +1,103 @@
 # Aurora
 
-A from-scratch Rust browser engine with GPU rendering, HTTPS fetch, and an embedded SpiderMonkey-based JavaScript DOM/BOM runtime bridge.
+A **from‑scratch Rust browser engine** with GPU‑accelerated rendering, HTTPS fetching, and an embedded JavaScript runtime.
 
 Aurora is not Servo, Chromium, WebKit, or a wrapper around an existing browser. It is an experimental browser engine written in Rust as part of the broader Bastion sovereign stack.
 
-## Rendering Test 
+## Rendering Test
 
 <img width="1437" height="1066" alt="image" src="https://github.com/user-attachments/assets/5d23b17a-3cd4-4aa8-84f9-711e49e8ad69" />
+<img width="1440" height="1059" alt="image" src="https://github.com/user-attachments/assets/caadc2aa-a3d4-4db6-a321-16451d79a404" />
 
 ## Mockup
 
 ![Mockup](https://github.com/user-attachments/assets/7c9210f4-d161-4404-946d-36869cecd1f2)
 
+## Architecture
 
+Aurora is built on a layered stack of focused crates:
 
-## Current Scope
-
-Aurora currently focuses on the core pieces of a browser engine:
-
-* HTML tokenization for a narrow but useful subset
-* DOM tree construction
-* CSS extraction and parsing from `<style>` tags
-* selector matching for tag, `.class`, `#id`, attributes, descendant selectors, and comma groups
-* computed style tree generation with basic inheritance
-* block-oriented layout tree construction
-* text shaping through **rustybuzz**
-* GPU painting through **Vello** and **WGPU**
-* interactive windowing and scrolling through **winit**
-* HTTP and HTTPS fetch support with normal TLS certificate validation
-* local `file://` fetch support gated by identity/capability checks
-* placeholder rendering for remote images using `<img>` layout and alt text
-* optional `<video>` frame playback through **ffmpeg-next**
-* embedded **SpiderMonkey** JavaScript runtime
-* live Rust DOM/BOM bridge exposed to JavaScript
-
-Aurora is now more than a static renderer. It has an experimental runtime surface that allows many modern scripts to initialize without immediately crashing, even though large parts of the Web Platform are still partial or stubbed.
+| Layer | Crate | Role |
+|-------|-------|------|
+| **DOM** | `blitz-dom` | Document model, HTML parsing, CSS styling, layout |
+| **Painting** | `blitz-paint` | Traverses the layout tree and emits draw commands |
+| **Rendering** | `anyrender_vello` | GPU rasterisation via Vello + WGPU |
+| **Windowing** | `winit` | Window, input events, resize |
+| **Text** | `parley` | Text layout and shaping |
+| **JavaScript** | SpiderMonkey (`js_sm`) | Primary JS engine with live DOM/BOM bridge |
+| **JavaScript** | Boa (`js_boa`, `engine-boa` feature) | Alternative engine, used for specific tests |
+| **Networking** | Aurora fetch | `http://`, `https://`, and capability‑gated `file://` |
 
 ## JavaScript Runtime
 
-Aurora embeds **SpiderMonkey** as its JavaScript engine and exposes a live DOM/BOM bridge.
+Aurora embeds **SpiderMonkey** as its default JavaScript engine and exposes a live DOM/BOM bridge.
 
 Each JavaScript node object carries a `__node_id` that points back into a Rust-side `NodeRegistry`. Methods recover the underlying Rust `NodePtr` from the registry on each call, so mutations from the parser, renderer, or JavaScript bridge remain visible through the same JS handle.
 
-The current bridge includes partial support for:
+The bridge includes partial support for:
 
-* `document`
+* `document` — `body`, `head`, `documentElement`, `title`, `readyState`, `cookie`, `createElement`, `createTextNode`, `createDocumentFragment`, `getElementById`, `getElementsByTagName`, `getElementsByClassName`, `querySelector`, `querySelectorAll`, event listener stubs
+* `Element` / `Node` — `tagName`, `nodeName`, `nodeType`, `id`, `className`, `textContent`, `innerHTML`, `innerText`, `outerHTML`, `children`, `childNodes`, `firstChild`, `lastChild`, `parentNode`, `parentElement`, `style`, `classList`, `dataset`, `attributes`, `appendChild`, `insertBefore`, `removeChild`, `replaceChild`, `cloneNode`, `contains`, `setAttribute`, `getAttribute`, `removeAttribute`, `hasAttribute`, `querySelector`, `querySelectorAll`, `getBoundingClientRect`, `focus`, `blur`, `click`
+* `window` — `document`, `window`, `self`, `top`, `parent`, `globalThis`, viewport fields (`innerWidth`, `innerHeight`, `devicePixelRatio`, `scrollX`, `scrollY`), `setTimeout`, `setInterval`, `requestAnimationFrame`, `requestIdleCallback`, `matchMedia`, `getComputedStyle`, `localStorage`, `sessionStorage`, `location`, `history`, `navigator`, `performance`, `screen`, `MutationObserver`, `IntersectionObserver`, `ResizeObserver`, `fetch`, `XMLHttpRequest` survival stubs
 
-  * `body`, `head`, `documentElement`, `title`, `readyState`, `cookie`
-  * `createElement`, `createTextNode`, `createDocumentFragment`
-  * `getElementById`, `getElementsByTagName`, `getElementsByClassName`
-  * `querySelector`, `querySelectorAll`
-  * event listener stubs
-* `Element` and `Node`
+The bridge prioritises compatibility survival over full correctness — timers, observers, storage, XHR, and fetch are intentionally partial so real-world scripts can initialise without panicking while the engine evolves.
 
-  * `tagName`, `nodeName`, `nodeType`, `id`, `className`
-  * `textContent`, `innerHTML`, `innerText`, `outerHTML`
-  * `children`, `childNodes`, `firstChild`, `lastChild`
-  * `parentNode`, `parentElement`
-  * `style`, `classList`, `dataset`, `attributes`
-  * `appendChild`, `insertBefore`, `removeChild`, `replaceChild`
-  * `cloneNode`, `contains`
-  * `setAttribute`, `getAttribute`, `removeAttribute`, `hasAttribute`, `hasAttributes`
-  * `querySelector`, `querySelectorAll`
-  * `getBoundingClientRect`, `focus`, `blur`, `click`
-* `window`
+## Rendering Pipeline
 
-  * `document`, `window`, `self`, `top`, `parent`, `globalThis`
-  * viewport fields such as `innerWidth`, `innerHeight`, `devicePixelRatio`, `scrollX`, `scrollY`
-  * `setTimeout`, `setInterval`, `requestAnimationFrame`, `requestIdleCallback`
-  * `matchMedia`, `getComputedStyle`
-  * `localStorage`, `sessionStorage`
-  * `location`, `history`, `navigator`, `performance`, `screen`
-  * `MutationObserver`, `IntersectionObserver`, `ResizeObserver`
-  * `fetch` and `XMLHttpRequest` survival stubs
+1. **Event Loop** — `winit` manages the window, resizing, and user input.
+2. **Document** — `blitz-dom` parses HTML, resolves CSS, and runs layout.
+3. **Painting** — `blitz-paint` traverses the layout tree and emits vector commands to a `VelloScenePainter`.
+4. **Rasterisation** — `anyrender_vello` compiles the scene and executes GPU compute work through Vello + WGPU.
+5. **Presentation** — the final texture is presented to the window surface.
+6. **JS Bridge** — SpiderMonkey can inspect and mutate the DOM through the live DOM/BOM bridge.
 
-The bridge currently prioritizes compatibility survival over full browser correctness. Timers, observers, storage, XHR, fetch, and several Web APIs are intentionally partial or stubbed so real-world scripts can initialize without panicking while the engine evolves.
+## Networking
 
-## Rendering Path
-
-Aurora uses a GPU-backed rendering pipeline:
-
-1. **Event Loop**: `winit` manages the window, resizing, and user input.
-2. **Scene Construction**: each frame initializes a new `vello::Scene`.
-3. **Painting**: `GpuPainter` traverses the layout tree and emits vector commands into the scene.
-4. **Text Shaping**: `rustybuzz` converts UTF-8 strings into positioned glyphs, sampled from a pre-baked glyph atlas texture.
-5. **Rasterization**: `vello::Renderer` compiles the scene and executes GPU compute work through `wgpu`.
-6. **Presentation**: the final texture is presented to the window surface.
-7. **Runtime Bridge**: embedded SpiderMonkey JavaScript can inspect and mutate the Rust DOM through the live DOM/BOM bridge.
-
-## Networking and Fetching
-
-Aurora includes intentionally small but real fetch support:
-
-* `http://`
-* `https://`
-* `file://`
-* basic redirects
-* normal HTTPS certificate validation
-* capability-gated local file access
-
-Local `file://` fetches are only allowed when the provided identity has `workspace.read`.
+* `http://` and `https://` with TLS certificate validation
+* `file://` gated by `workspace.read` capability
+* Basic redirect following
+* In-process net cache to avoid redundant fetches
 
 ## What Aurora Does Not Claim Yet
 
-Aurora is not trying to pass as a general-purpose production browser yet. It does not currently claim:
+Aurora is an early engine prototype, not a production browser. It does not yet claim:
 
-* full HTML parsing
-* broad CSS coverage
-* complete layout correctness
-* browser-grade JavaScript scheduling semantics
-* full DOM, BOM, or Web API compliance
-* full web compatibility
-* spec compliance across normal browser test suites
-
-If you want to judge it harshly, judge it as an early browser engine and runtime prototype, not as a Chrome replacement.
-
-## Longer-Term Direction
-
-Aurora is part of a larger sovereign computing direction. Longer-term ideas include:
-
-* **DID-Native Identity**: identity resolution built into the browser core.
-* **AT Protocol Integration**: native support for decentralized coordination.
-* **Sovereign Render Path**: a GPU-accelerated rendering pipeline owned by the user.
-* **Capability-Oriented Fetching**: local and remote resources mediated through explicit authority.
-* **User-Owned Runtime Surface**: browser APIs shaped around user agency rather than platform capture.
+* Full HTML parsing or broad CSS coverage
+* Complete layout correctness
+* Browser-grade JavaScript scheduling semantics
+* Full DOM, BOM, or Web API compliance
+* Spec compliance across standard browser test suites
 
 ## Run
 
 ```bash
+# Default startup
 cargo run
-```
 
-To fetch a page over the network:
-
-```bash
-cargo run -- http://example.com/
-```
-
-To fetch an HTTPS page:
-
-```bash
+# Fetch a page
 cargo run -- https://example.com/
-```
 
-To enable experimental video playback, install the FFmpeg development packages
-that provide `libavutil.pc`, `libavcodec.pc`, `libavformat.pc`, and
-`libswscale.pc`, then run with:
-
-```bash
-cargo run --features media-ffmpeg -- file:///path/to/page.html
-```
-
-To render the bundled static Google homepage fixture:
-
-```bash
-cargo run -- --fixture google-homepage
-```
-
-To render the Aurora mockup/reflow fixture:
-
-```bash
+# Use a bundled fixture
 cargo run -- --fixture aurora-search
-```
-
-To render the bundled demo fixture:
-
-```bash
+cargo run -- --fixture google-homepage
 cargo run -- --fixture demo
+
+# Optional FFmpeg video support (requires FFmpeg dev packages)
+cargo run --features media-ffmpeg -- file:///path/to/page.html
+
+# Debug dumps
+cargo run -- --fixture google-homepage --debug-dom --debug-style --debug-layout
 ```
 
-To save a screenshot from the fixture:
+## Screenshots
 
 ```bash
 make screenshot FIXTURE=google-homepage
-```
-
-To save the Aurora mockup screenshot at the target size:
-
-```bash
 make mockup-screenshot
-```
-
-To refresh every bundled fixture render in `tests/screenshots`:
-
-```bash
 make all-renders
 ```
 
-The generated render set is:
-
-- `tests/screenshots/google-homepage.png`
-- `tests/screenshots/aurora-search.png`
-- `tests/screenshots/demo.png`
-- `tests/screenshots/dynamic-reflow.png`
-- `tests/screenshots/raf-reflow.png`
-
-Optional debug dumps:
-
-```bash
-cargo run -- --fixture google-homepage --debug-dom --debug-style --debug-layout
-```
+Generated renders are saved to `tests/screenshots/`.
 
 ## Test
 
@@ -207,33 +105,35 @@ cargo run -- --fixture google-homepage --debug-dom --debug-style --debug-layout
 cargo test
 ```
 
-At the time of this edit, `cargo test` passes in this directory. That matters more than any marketing sentence in this README.
-
 ## Docker
-
-Aurora can be built as a Docker image from this repository:
 
 ```bash
 docker build -t aurora .
-```
-
-From this directory, the same build is available as:
-
-```bash
+# or
 make docker-build
 ```
 
 See [docs/DOCKER.md](docs/DOCKER.md) for run examples.
 
-See [docs/MOCKUP_REFLOW_STATUS.md](docs/MOCKUP_REFLOW_STATUS.md) for the Aurora
-mockup fixture status, render commands, and remaining scrollbar task.
+## Longer‑Term Direction
 
-## Next Steps
+* **DID‑Native Identity** — identity resolution built into the browser core.
+* **AT Protocol Integration** — native support for decentralised coordination.
+* **Sovereign Render Path** — a GPU‑accelerated pipeline owned by the user.
+* **Capability‑Oriented Fetching** — local and remote resources mediated through explicit authority.
+* **User‑Owned Runtime Surface** — browser APIs shaped around user agency rather than platform capture.
+* **AI‑Native** — a browser built from the ground up to be a first-class environment for AI agents and AI-assisted browsing, not an afterthought bolted onto a legacy web platform.
 
-1. Replace the narrow HTML tokenizer with a real tokenizer state machine.
-2. Expand CSS parsing, inheritance, and value handling.
-3. Improve layout with inline flow, wrapping, margins, and richer box behavior.
-4. Add dynamic glyph atlas growth and multi-font fallback chains.
-5. Turn runtime survival stubs into scheduled/evented implementations where it matters.
-6. Connect JavaScript-triggered DOM mutation more deeply into style/layout invalidation.
-7. Explore protocol-native identity integration once the rendering and runtime core are more stable.
+## Roadmap
+
+1. Render YouTube homepage shell
+2. Search results page loads without JS fatal errors
+3. Video page renders title, player box, sidebar
+4. Basic playback path works
+5. Controls/input events work
+6. Enough scheduling/timers/fetch/XHR survival for YouTube scripts
+7. Performance pass
+
+## License
+
+Mozilla Public License 2.0 © 2024‑2026 Aurora Contributors

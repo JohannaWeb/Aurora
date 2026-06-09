@@ -1,7 +1,7 @@
-use crate::dom::NodePtr;
-use mozjs::jsapi::JSObject;
 use super::capture::WindowCapture;
 use super::registry::NodeRegistry;
+use crate::dom::NodePtr;
+use mozjs::jsapi::JSObject;
 
 /// Pinned state passed to all JS native callbacks via JS_SetContextPrivate.
 /// Lives inside SmRuntime as Box<SmState> (stable address).

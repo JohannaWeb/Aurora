@@ -1,7 +1,7 @@
 use crate::css::Stylesheet;
 
-use super::inherited::InheritedStyles;
 use super::StyledNode;
+use super::inherited::InheritedStyles;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StyleTree {

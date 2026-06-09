@@ -87,8 +87,16 @@ pub(in crate::js_boa) fn add_document_factory_methods(
                 .property(js_string!("collapsed"), true, Attribute::all())
                 .property(js_string!("startOffset"), 0, Attribute::all())
                 .property(js_string!("endOffset"), 0, Attribute::all())
-                .property(js_string!("startContainer"), JsValue::null(), Attribute::all())
-                .property(js_string!("endContainer"), JsValue::null(), Attribute::all())
+                .property(
+                    js_string!("startContainer"),
+                    JsValue::null(),
+                    Attribute::all(),
+                )
+                .property(
+                    js_string!("endContainer"),
+                    JsValue::null(),
+                    Attribute::all(),
+                )
                 .function(noop_native(), js_string!("setStart"), 2)
                 .function(noop_native(), js_string!("setEnd"), 2)
                 .function(noop_native(), js_string!("setStartBefore"), 1)
@@ -120,7 +128,9 @@ pub(in crate::js_boa) fn add_document_factory_methods(
                     0,
                 )
                 .function(
-                    NativeFunction::from_fn_ptr(|_this, _args, _ctx| Ok(JsValue::from(js_string!("")))),
+                    NativeFunction::from_fn_ptr(|_this, _args, _ctx| {
+                        Ok(JsValue::from(js_string!("")))
+                    }),
                     js_string!("toString"),
                     0,
                 )

@@ -19,8 +19,7 @@ pub(in crate::js_boa) fn install_timers(
         NativeFunction::from_copy_closure_with_captures(
             move |_this: &JsValue, args: &[JsValue], cap: &WindowCapture, _ctx: &mut Context| {
                 let id = next_timer_id(cap);
-                let Some(callback) = args.get(0).and_then(|value| value.as_callable())
-                else {
+                let Some(callback) = args.get(0).and_then(|value| value.as_callable()) else {
                     return Ok(JsValue::from(id));
                 };
                 let delay = delay_arg(args.get(1));
@@ -51,9 +50,10 @@ pub(in crate::js_boa) fn install_timers(
         |_this: &JsValue, args: &[JsValue], cap: &WindowCapture, _ctx: &mut Context| {
             let id = next_timer_id(cap);
             if let Some(callback) = args.get(0).and_then(|value| value.as_callable()) {
-                cap.animation_frames
-                    .borrow_mut()
-                    .push(AnimationFrameEntry { id, callback: callback.clone() });
+                cap.animation_frames.borrow_mut().push(AnimationFrameEntry {
+                    id,
+                    callback: callback.clone(),
+                });
             }
             Ok(JsValue::from(id))
         },

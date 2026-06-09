@@ -1,8 +1,8 @@
+use super::ScreenshotImage;
 use super::primitives::{draw_border, draw_rect};
 use super::text::render_text_simple;
-use super::ScreenshotImage;
-use crate::window::chrome::{chrome_display_url, truncate_chrome_text};
 use crate::window::BROWSER_CHROME_HEIGHT;
+use crate::window::chrome::{chrome_display_url, truncate_chrome_text};
 use image::Rgba;
 
 pub(super) fn render_browser_chrome(img: &mut ScreenshotImage, width: u32, url: &str) {

@@ -2,8 +2,8 @@ use peniko::Color;
 use vello::Scene;
 
 use super::text::text;
-use crate::window::scene_helpers::{fill_scene_rect, stroke_scene_rect};
 use crate::window::BROWSER_CHROME_HEIGHT;
+use crate::window::scene_helpers::{fill_scene_rect, stroke_scene_rect};
 
 pub(super) fn paint_top_bar(scene: &mut Scene, width: u32) {
     fill_scene_rect(

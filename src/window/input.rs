@@ -1,3 +1,4 @@
+use crate::ImageCache;
 use crate::blitz_document::BlitzDocument;
 use crate::css::Stylesheet;
 use crate::dom::NodePtr;
@@ -6,7 +7,6 @@ use crate::js_engine::JsRuntime;
 use crate::layout::{LayoutTree, ViewportSize};
 use crate::media::MediaCache;
 use crate::style::StyleTree;
-use crate::ImageCache;
 use std::cell::RefCell;
 use std::rc::Rc;
 

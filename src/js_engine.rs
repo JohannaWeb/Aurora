@@ -28,6 +28,8 @@ pub(crate) trait JsRuntime {
     fn drain_animation_frame_callbacks(&mut self, now: Instant) -> bool;
 
     fn dispatch_event(&mut self, node: &NodePtr, event_type: &str) -> bool;
+    fn fire_dom_content_loaded(&mut self);
+    fn fire_load(&mut self);
 
     fn next_deadline(&self) -> Option<Instant>;
     fn has_animation_frame_callbacks(&self) -> bool;

@@ -96,7 +96,10 @@ impl winit::application::ApplicationHandler for AuroraApp {
     }
 
     fn about_to_wait(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
-        let runtime_dirty = self.input.runtime.as_ref()
+        let runtime_dirty = self
+            .input
+            .runtime
+            .as_ref()
             .map(|r| r.has_dirty_bits())
             .unwrap_or(false);
         if self.has_animation_frame_callbacks()
@@ -169,8 +172,7 @@ impl AuroraApp {
             .and_then(|doc| doc.hit_test_anchor(content_x, content_y))
         {
             let full_url = match &self.input.base_url {
-                Some(base) => crate::fetch::resolve_relative_url(base, &href)
-                    .unwrap_or(href),
+                Some(base) => crate::fetch::resolve_relative_url(base, &href).unwrap_or(href),
                 None => href,
             };
             self.input.navigate_to(&full_url);
@@ -219,4 +221,3 @@ impl AuroraApp {
         self.input.media.has_active_media()
     }
 }
-

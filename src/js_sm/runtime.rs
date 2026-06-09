@@ -10,12 +10,12 @@ use mozjs::realm::AutoRealm;
 use mozjs::rooted;
 use mozjs::rust::wrappers2::{JS_NewGlobalObject, JS_SetContextPrivate};
 use mozjs::rust::{
-    evaluate_script, CompileOptionsWrapper, RealmOptions, Runtime, SIMPLE_GLOBAL_CLASS,
+    CompileOptionsWrapper, RealmOptions, Runtime, SIMPLE_GLOBAL_CLASS, evaluate_script,
 };
 
+use crate::css::Stylesheet;
 use crate::dom::NodePtr;
 use crate::layout::{LayoutTree, ViewportSize};
-use crate::css::Stylesheet;
 
 use super::capture::WindowCapture;
 use super::document::install_document;
@@ -84,7 +84,9 @@ impl SmRuntime {
 
         // Store global raw pointer (we must be careful: it must live as long as rt)
         // The global is kept alive by the realm, which is kept alive by rt.
-        unsafe { (*state_ptr).global = global; }
+        unsafe {
+            (*state_ptr).global = global;
+        }
 
         SmRuntime {
             rt,
@@ -110,7 +112,13 @@ impl SmRuntime {
             // so fetching the pending exception afterwards (with no realm
             // entered) segfaults inside JS_GetPendingException.
             let mut realm = AutoRealm::new_from_handle(cx, global.handle());
-            let result = evaluate_script(&mut realm, global.handle(), script, rval.handle_mut(), options);
+            let result = evaluate_script(
+                &mut realm,
+                global.handle(),
+                script,
+                rval.handle_mut(),
+                options,
+            );
             match result {
                 Ok(_) => Ok(()),
                 Err(()) => {
@@ -184,7 +192,9 @@ impl SmRuntime {
             // Drain microtasks first
             for _ in 0..1000 {
                 let ids: Vec<u32> = self.state.window.microtask_ids.drain(..).collect();
-                if ids.is_empty() { break; }
+                if ids.is_empty() {
+                    break;
+                }
                 fired = true;
                 for id in ids {
                     call_stored_callback(realm_ref, global_handle, id, &[]);
@@ -209,11 +219,14 @@ impl SmRuntime {
         // Re-register interval timers with new deadlines
         for entry in ready {
             if let Some(interval) = entry.interval {
-                self.state.window.timers.push(crate::js_sm::capture::TimerEntry {
-                    id: entry.id,
-                    deadline: now + interval,
-                    interval: Some(interval),
-                });
+                self.state
+                    .window
+                    .timers
+                    .push(crate::js_sm::capture::TimerEntry {
+                        id: entry.id,
+                        deadline: now + interval,
+                        interval: Some(interval),
+                    });
             }
         }
 
@@ -282,9 +295,18 @@ impl SmRuntime {
     }
 
     pub fn fire_dom_content_loaded(&mut self) {
-        // Fire DOMContentLoaded on document listeners (node_id 0)
-        let ids = self.state.registry.get_listener_ids(0, "DOMContentLoaded");
-        if ids.is_empty() { return; }
+        self.fire_lifecycle_event("DOMContentLoaded");
+    }
+
+    pub fn fire_load(&mut self) {
+        self.fire_lifecycle_event("load");
+    }
+
+    fn fire_lifecycle_event(&mut self, event_type: &str) {
+        let ids = self.state.registry.get_listener_ids(0, event_type);
+        if ids.is_empty() {
+            return;
+        }
 
         let global_raw = self.state.global;
         unsafe {
@@ -292,7 +314,7 @@ impl SmRuntime {
             rooted!(&in(cx) let global = global_raw);
             let mut realm = AutoRealm::new_from_handle(cx, global.handle());
             let (global_handle, realm_ref) = realm.global_and_reborrow();
-            let event_obj = make_event_object(realm_ref, "DOMContentLoaded");
+            let event_obj = make_event_object(realm_ref, event_type);
             let event_val = mozjs::jsval::ObjectValue(event_obj);
             for id in &ids {
                 call_stored_callback(realm_ref, global_handle, *id, &[event_val]);
@@ -349,11 +371,19 @@ impl crate::js_engine::JsRuntime for SmRuntime {
         SmRuntime::set_shared_state(self, layout_tree, stylesheet, viewport)
     }
 
-    fn clear_dirty_bits(&mut self) { SmRuntime::clear_dirty_bits(self) }
-    fn has_dirty_bits(&self) -> bool { SmRuntime::has_dirty_bits(self) }
-    fn take_needs_reflow(&mut self) -> bool { SmRuntime::take_needs_reflow(self) }
+    fn clear_dirty_bits(&mut self) {
+        SmRuntime::clear_dirty_bits(self)
+    }
+    fn has_dirty_bits(&self) -> bool {
+        SmRuntime::has_dirty_bits(self)
+    }
+    fn take_needs_reflow(&mut self) -> bool {
+        SmRuntime::take_needs_reflow(self)
+    }
 
-    fn tick(&mut self, now: std::time::Instant) -> bool { SmRuntime::tick(self, now) }
+    fn tick(&mut self, now: std::time::Instant) -> bool {
+        SmRuntime::tick(self, now)
+    }
 
     fn drain_animation_frame_callbacks(&mut self, now: std::time::Instant) -> bool {
         SmRuntime::drain_animation_frame_callbacks(self, now)
@@ -363,7 +393,17 @@ impl crate::js_engine::JsRuntime for SmRuntime {
         SmRuntime::dispatch_event(self, node, event_type)
     }
 
-    fn next_deadline(&self) -> Option<std::time::Instant> { SmRuntime::next_deadline(self) }
+    fn fire_dom_content_loaded(&mut self) {
+        SmRuntime::fire_dom_content_loaded(self)
+    }
+
+    fn fire_load(&mut self) {
+        SmRuntime::fire_load(self)
+    }
+
+    fn next_deadline(&self) -> Option<std::time::Instant> {
+        SmRuntime::next_deadline(self)
+    }
 
     fn has_animation_frame_callbacks(&self) -> bool {
         SmRuntime::has_animation_frame_callbacks(self)
@@ -374,7 +414,10 @@ impl crate::js_engine::JsRuntime for SmRuntime {
     }
 }
 
-unsafe fn make_event_object(cx: &mut mozjs::context::JSContext, event_type: &str) -> *mut mozjs::jsapi::JSObject {
+unsafe fn make_event_object(
+    cx: &mut mozjs::context::JSContext,
+    event_type: &str,
+) -> *mut mozjs::jsapi::JSObject {
     let obj = new_plain_object(cx);
     rooted!(&in(cx) let obj_root = obj);
     set_prop_str(cx, obj_root.handle(), c"type", event_type);
@@ -382,9 +425,27 @@ unsafe fn make_event_object(cx: &mut mozjs::context::JSContext, event_type: &str
     set_prop_bool(cx, obj_root.handle(), c"cancelable", true);
     set_prop_bool(cx, obj_root.handle(), c"defaultPrevented", false);
     set_prop_bool(cx, obj_root.handle(), c"isTrusted", true);
-    define_fn(cx, obj_root.handle(), c"preventDefault", Some(noop_native), 0);
-    define_fn(cx, obj_root.handle(), c"stopPropagation", Some(noop_native), 0);
-    define_fn(cx, obj_root.handle(), c"stopImmediatePropagation", Some(noop_native), 0);
+    define_fn(
+        cx,
+        obj_root.handle(),
+        c"preventDefault",
+        Some(noop_native),
+        0,
+    );
+    define_fn(
+        cx,
+        obj_root.handle(),
+        c"stopPropagation",
+        Some(noop_native),
+        0,
+    );
+    define_fn(
+        cx,
+        obj_root.handle(),
+        c"stopImmediatePropagation",
+        Some(noop_native),
+        0,
+    );
     obj
 }
 
@@ -396,12 +457,4 @@ unsafe extern "C" fn noop_native(
     let args = mozjs::jsapi::CallArgs::from_vp(vp, _argc);
     args.rval().set(UndefinedValue());
     true
-}
-
-unsafe fn clear_pending_exception(cx: &mut mozjs::context::JSContext) {
-    use mozjs::rust::wrappers2;
-    if wrappers2::JS_IsExceptionPending(cx) {
-        let msg = pending_exception_string(cx);
-        eprintln!("JS exception: {}", msg);
-    }
 }

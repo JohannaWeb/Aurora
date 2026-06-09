@@ -19,9 +19,11 @@ fn applies_margin_and_padding_to_block_layout() {
         rendered
     );
 
-    assert!(rendered.contains(
-        "block<section> {margin: 10px 12px, padding: 4px 6px} [x: 12, y: 10, w: 176,"
-    ));
+    assert!(
+        rendered.contains(
+            "block<section> {margin: 10px 12px, padding: 4px 6px} [x: 12, y: 10, w: 176,"
+        )
+    );
     // x = 12 (margin) + 6 (padding) = 18. y = 10 (margin) + 4 (padding) = 14.
     assert!(rendered.contains("text(\"Box\") [x: 18, y: 14,"));
 }
@@ -40,7 +42,9 @@ fn includes_border_width_in_box_geometry() {
     let rendered = layout.to_string();
     println!("DEBUG includes_border_width_in_box_geometry:\n{}", rendered);
 
-    assert!(rendered.contains("block<section> {border: 4px solid ember, padding: 6px, width: 80px} [x: 0, y: 0, w: 100,"));
+    assert!(rendered.contains(
+        "block<section> {border: 4px solid ember, padding: 6px, width: 80px} [x: 0, y: 0, w: 100,"
+    ));
     assert!(rendered.contains("text(\"Border\") [x: 10, y: 10,"));
 }
 
@@ -134,7 +138,10 @@ fn constrains_inline_wrapping_with_fixed_width() {
 
     assert!(rendered.contains("inline<p> {display: inline, padding: 4px, width: 64px}"));
     for word in ["one", "two", "three", "four", "five"] {
-        assert!(rendered.contains(word), "missing wrapped word: {word}\n{rendered}");
+        assert!(
+            rendered.contains(word),
+            "missing wrapped word: {word}\n{rendered}"
+        );
     }
 }
 

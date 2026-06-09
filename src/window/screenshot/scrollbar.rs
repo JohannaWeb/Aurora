@@ -1,5 +1,5 @@
-use super::primitives::draw_rect;
 use super::ScreenshotImage;
+use super::primitives::draw_rect;
 use crate::window::scroll_metrics::scroll_content_height;
 use image::Rgba;
 

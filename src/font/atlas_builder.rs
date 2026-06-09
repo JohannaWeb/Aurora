@@ -2,7 +2,7 @@ use ab_glyph::{Font, PxScale};
 
 use crate::atlas::{AtlasPacker, GlyphAtlas};
 
-use super::resources::{get_ab_font, ATLAS_BASE_SIZE};
+use super::resources::{ATLAS_BASE_SIZE, get_ab_font};
 
 pub(super) struct AtlasBuilder;
 

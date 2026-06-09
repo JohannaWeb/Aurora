@@ -288,7 +288,9 @@ pub(in crate::js_boa) fn install_command_methods(
                         el.attributes.remove(&name);
                         false
                     }
-                } else { false };
+                } else {
+                    false
+                };
                 cap.registry.mark_style_dirty(&cap.node);
                 Ok(JsValue::from(result))
             },
@@ -324,7 +326,9 @@ pub(in crate::js_boa) fn install_command_methods(
                         Some(v) => Ok(JsValue::from(JsString::from(v.clone()))),
                         None => Ok(JsValue::null()),
                     }
-                } else { Ok(JsValue::null()) }
+                } else {
+                    Ok(JsValue::null())
+                }
             },
             cap.clone(),
         ),
@@ -352,7 +356,9 @@ pub(in crate::js_boa) fn install_command_methods(
                 let b = cap.node.borrow();
                 if let Node::Element(el) = &*b {
                     Ok(JsValue::from(el.attributes.contains_key(&name)))
-                } else { Ok(JsValue::from(false)) }
+                } else {
+                    Ok(JsValue::from(false))
+                }
             },
             cap.clone(),
         ),
@@ -381,14 +387,18 @@ pub(in crate::js_boa) fn install_command_methods(
     init.function(
         NativeFunction::from_fn_ptr(|_this, _args, ctx| {
             let anim = ObjectInitializer::new(ctx)
-                .property(js_string!("playState"), js_string!("idle"), Attribute::all())
+                .property(
+                    js_string!("playState"),
+                    js_string!("idle"),
+                    Attribute::all(),
+                )
                 .property(js_string!("currentTime"), JsValue::null(), Attribute::all())
-                .property(js_string!("finished"),
+                .property(
+                    js_string!("finished"),
                     JsValue::undefined(), // ideally a Promise, but undefined is safe
-                    Attribute::all())
-                .property(js_string!("ready"),
-                    JsValue::undefined(),
-                    Attribute::all())
+                    Attribute::all(),
+                )
+                .property(js_string!("ready"), JsValue::undefined(), Attribute::all())
                 .function(noop_native(), js_string!("play"), 0)
                 .function(noop_native(), js_string!("pause"), 0)
                 .function(noop_native(), js_string!("cancel"), 0)

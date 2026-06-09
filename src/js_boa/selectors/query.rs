@@ -1,16 +1,12 @@
+use crate::css::selectors_impl::{AuroraSelectorImpl, element_matches, parse_selector_list};
 use crate::css::{CascadeElement, ElementData};
-use crate::css::selectors_impl::{element_matches, parse_selector_list, AuroraSelectorImpl};
 use ::selectors::parser::Selector;
 
 use super::*;
 
 // ─── Public API ───────────────────────────────────────────────────────────────
 
-pub(in crate::js_boa) fn selector_matches(
-    node: &NodePtr,
-    selector: &str,
-    root: &NodePtr,
-) -> bool {
+pub(in crate::js_boa) fn selector_matches(node: &NodePtr, selector: &str, root: &NodePtr) -> bool {
     let selectors = parse_selectors(selector);
     node_matches_any(&selectors, node, root)
 }
@@ -73,7 +69,9 @@ fn build_ancestor_chain(root: &NodePtr, target: &NodePtr) -> Vec<ElementData> {
 
 /// Collect ElementData for all element siblings at the same level.
 fn build_sibling_list(root: &NodePtr, target: &NodePtr) -> Vec<ElementData> {
-    let Some(parent) = find_parent(root, target) else { return vec![] };
+    let Some(parent) = find_parent(root, target) else {
+        return vec![];
+    };
     let children = match &*parent.borrow() {
         Node::Element(el) => el.children.clone(),
         Node::Document { children, .. } => children.clone(),
@@ -83,7 +81,10 @@ fn build_sibling_list(root: &NodePtr, target: &NodePtr) -> Vec<ElementData> {
         .iter()
         .filter_map(|child| {
             if let Node::Element(el) = &*child.borrow() {
-                Some(ElementData { tag_name: el.tag_name.clone(), attributes: el.attributes.clone() })
+                Some(ElementData {
+                    tag_name: el.tag_name.clone(),
+                    attributes: el.attributes.clone(),
+                })
             } else {
                 None
             }
@@ -93,7 +94,9 @@ fn build_sibling_list(root: &NodePtr, target: &NodePtr) -> Vec<ElementData> {
 
 /// 0-based index of `target` among its element siblings.
 fn sibling_index_of(root: &NodePtr, target: &NodePtr) -> usize {
-    let Some(parent) = find_parent(root, target) else { return 0 };
+    let Some(parent) = find_parent(root, target) else {
+        return 0;
+    };
     let children = match &*parent.borrow() {
         Node::Element(el) => el.children.clone(),
         Node::Document { children, .. } => children.clone(),

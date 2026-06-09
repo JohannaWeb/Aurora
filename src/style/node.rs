@@ -68,7 +68,13 @@ impl StyledNode {
                         .into_iter()
                         .map(|child| {
                             let is_elem = matches!(&*child.borrow(), Node::Element(_));
-                            let idx = if is_elem { let i = elem_idx; elem_idx += 1; i } else { 0 };
+                            let idx = if is_elem {
+                                let i = elem_idx;
+                                elem_idx += 1;
+                                i
+                            } else {
+                                0
+                            };
                             Self::from_dom_node(
                                 child,
                                 stylesheet,
@@ -88,8 +94,12 @@ impl StyledNode {
                     tag_name: element.tag_name.clone(),
                     attributes: element.attributes.clone(),
                 };
-                let mut styles =
-                    stylesheet.styles_for(&current_data, element_ancestors, siblings, sibling_index);
+                let mut styles = stylesheet.styles_for(
+                    &current_data,
+                    element_ancestors,
+                    siblings,
+                    sibling_index,
+                );
                 if let Some(inline_style) = element.attributes.get("style") {
                     for (name, value) in crate::css::parse_style_text(inline_style) {
                         styles.set(name, value);
@@ -104,7 +114,11 @@ impl StyledNode {
                 let element_children = element.children.clone();
                 drop(node_borrow);
 
-                let mut node_to_return = Self { node, styles, children: Vec::new() };
+                let mut node_to_return = Self {
+                    node,
+                    styles,
+                    children: Vec::new(),
+                };
                 let mut next_style_ancestors = style_ancestors.to_vec();
                 next_style_ancestors.push(&node_to_return.styles);
 
@@ -116,8 +130,13 @@ impl StyledNode {
                     .into_iter()
                     .map(|child| {
                         let is_elem = matches!(&*child.borrow(), Node::Element(_));
-                        let idx =
-                            if is_elem { let i = elem_child_idx; elem_child_idx += 1; i } else { 0 };
+                        let idx = if is_elem {
+                            let i = elem_child_idx;
+                            elem_child_idx += 1;
+                            i
+                        } else {
+                            0
+                        };
                         Self::from_dom_node(
                             child,
                             stylesheet,
@@ -137,7 +156,11 @@ impl StyledNode {
                 let mut styles = StyleMap::default();
                 styles.set("display", "inline");
                 apply_inherited_text_styles(&mut styles, &inherited);
-                Self { node: node.clone(), styles, children: Vec::new() }
+                Self {
+                    node: node.clone(),
+                    styles,
+                    children: Vec::new(),
+                }
             }
         }
     }
@@ -149,7 +172,10 @@ fn element_siblings_of(children: &[crate::dom::NodePtr]) -> Vec<ElementData> {
         .iter()
         .filter_map(|child| {
             if let Node::Element(el) = &*child.borrow() {
-                Some(ElementData { tag_name: el.tag_name.clone(), attributes: el.attributes.clone() })
+                Some(ElementData {
+                    tag_name: el.tag_name.clone(),
+                    attributes: el.attributes.clone(),
+                })
             } else {
                 None
             }
@@ -183,7 +209,11 @@ fn apply_inherited_element_styles(styles: &mut StyleMap, inherited: &InheritedSt
     apply_if_missing(styles, "text-transform", &inherited.text_transform);
     apply_if_missing(styles, "text-indent", &inherited.text_indent);
     apply_if_missing(styles, "list-style-type", &inherited.list_style_type);
-    apply_if_missing(styles, "list-style-position", &inherited.list_style_position);
+    apply_if_missing(
+        styles,
+        "list-style-position",
+        &inherited.list_style_position,
+    );
     apply_if_missing(styles, "border-collapse", &inherited.border_collapse);
     apply_if_missing(styles, "border-spacing", &inherited.border_spacing);
     apply_if_missing(styles, "caption-side", &inherited.caption_side);
@@ -192,16 +222,36 @@ fn apply_inherited_element_styles(styles: &mut StyleMap, inherited: &InheritedSt
 }
 
 fn apply_inherited_text_styles(styles: &mut StyleMap, inherited: &InheritedStyles) {
-    if let Some(v) = &inherited.color { styles.set("color", v); }
-    if let Some(v) = &inherited.font_size { styles.set("font-size", v); }
-    if let Some(v) = &inherited.font_weight { styles.set("font-weight", v); }
-    if let Some(v) = &inherited.font_style { styles.set("font-style", v); }
-    if let Some(v) = &inherited.font_family { styles.set("font-family", v); }
-    if let Some(v) = &inherited.line_height { styles.set("line-height", v); }
-    if let Some(v) = &inherited.text_align { styles.set("text-align", v); }
-    if let Some(v) = &inherited.text_decoration { styles.set("text-decoration", v); }
-    if let Some(v) = &inherited.visibility { styles.set("visibility", v); }
-    if let Some(v) = &inherited.white_space { styles.set("white-space", v); }
+    if let Some(v) = &inherited.color {
+        styles.set("color", v);
+    }
+    if let Some(v) = &inherited.font_size {
+        styles.set("font-size", v);
+    }
+    if let Some(v) = &inherited.font_weight {
+        styles.set("font-weight", v);
+    }
+    if let Some(v) = &inherited.font_style {
+        styles.set("font-style", v);
+    }
+    if let Some(v) = &inherited.font_family {
+        styles.set("font-family", v);
+    }
+    if let Some(v) = &inherited.line_height {
+        styles.set("line-height", v);
+    }
+    if let Some(v) = &inherited.text_align {
+        styles.set("text-align", v);
+    }
+    if let Some(v) = &inherited.text_decoration {
+        styles.set("text-decoration", v);
+    }
+    if let Some(v) = &inherited.visibility {
+        styles.set("visibility", v);
+    }
+    if let Some(v) = &inherited.white_space {
+        styles.set("white-space", v);
+    }
 }
 
 fn inherited_from_styles(styles: &StyleMap) -> InheritedStyles {

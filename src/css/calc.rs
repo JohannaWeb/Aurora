@@ -6,7 +6,7 @@
 //! Operator precedence: `*` `/` bind tighter than `+` `-`.
 //! All lengths are resolved to px at evaluation time.
 
-use super::length::{parse_length_value, LengthValue};
+use super::length::{LengthValue, parse_length_value};
 
 pub struct CalcContext {
     pub available: f32,
@@ -51,9 +51,7 @@ fn eval_expr(s: &str, ctx: &CalcContext) -> Option<f32> {
             b'+' | b'-' if depth == 0 && i > 0 => {
                 // Exclude unary minus: the char before must be a digit, %, or closing paren.
                 let prev = s[..i].trim_end();
-                if !prev.is_empty()
-                    && !prev.ends_with(['*', '/', '+', '-', '('])
-                {
+                if !prev.is_empty() && !prev.ends_with(['*', '/', '+', '-', '(']) {
                     split = Some((i, bytes[i]));
                     break; // rightmost split found
                 }
@@ -65,7 +63,11 @@ fn eval_expr(s: &str, ctx: &CalcContext) -> Option<f32> {
     if let Some((pos, op)) = split {
         let left = eval_expr(s[..pos].trim(), ctx)?;
         let right = eval_term(s[pos + 1..].trim(), ctx)?;
-        return Some(if op == b'+' { left + right } else { left - right });
+        return Some(if op == b'+' {
+            left + right
+        } else {
+            left - right
+        });
     }
 
     eval_term(s, ctx)
@@ -92,8 +94,12 @@ fn eval_term(s: &str, ctx: &CalcContext) -> Option<f32> {
     if let Some((pos, op)) = split {
         let left = eval_term(s[..pos].trim(), ctx)?;
         let right = eval_factor(s[pos + 1..].trim(), ctx)?;
-        return Some(if op == b'*' { left * right } else {
-            if right == 0.0 { return None; }
+        return Some(if op == b'*' {
+            left * right
+        } else {
+            if right == 0.0 {
+                return None;
+            }
             left / right
         });
     }
@@ -112,19 +118,28 @@ fn eval_factor(s: &str, ctx: &CalcContext) -> Option<f32> {
 
     // min(a, b, …)
     if let Some(args_str) = strip_fn(s, "min") {
-        let vals: Vec<f32> = split_args(args_str).iter().filter_map(|a| eval_expr(a, ctx)).collect();
+        let vals: Vec<f32> = split_args(args_str)
+            .iter()
+            .filter_map(|a| eval_expr(a, ctx))
+            .collect();
         return vals.into_iter().reduce(f32::min);
     }
 
     // max(a, b, …)
     if let Some(args_str) = strip_fn(s, "max") {
-        let vals: Vec<f32> = split_args(args_str).iter().filter_map(|a| eval_expr(a, ctx)).collect();
+        let vals: Vec<f32> = split_args(args_str)
+            .iter()
+            .filter_map(|a| eval_expr(a, ctx))
+            .collect();
         return vals.into_iter().reduce(f32::max);
     }
 
     // clamp(min, val, max)
     if let Some(args_str) = strip_fn(s, "clamp") {
-        let parts: Vec<f32> = split_args(args_str).iter().filter_map(|a| eval_expr(a, ctx)).collect();
+        let parts: Vec<f32> = split_args(args_str)
+            .iter()
+            .filter_map(|a| eval_expr(a, ctx))
+            .collect();
         if parts.len() == 3 {
             return Some(parts[1].clamp(parts[0], parts[2]));
         }

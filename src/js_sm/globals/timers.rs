@@ -18,8 +18,20 @@ pub(in crate::js_sm) unsafe fn install_timers(
     define_fn(cx, global, c"setInterval", Some(set_interval), 2);
     define_fn(cx, global, c"clearTimeout", Some(clear_timer), 1);
     define_fn(cx, global, c"clearInterval", Some(clear_timer), 1);
-    define_fn(cx, global, c"requestAnimationFrame", Some(request_animation_frame), 1);
-    define_fn(cx, global, c"cancelAnimationFrame", Some(cancel_animation_frame), 1);
+    define_fn(
+        cx,
+        global,
+        c"requestAnimationFrame",
+        Some(request_animation_frame),
+        1,
+    );
+    define_fn(
+        cx,
+        global,
+        c"cancelAnimationFrame",
+        Some(cancel_animation_frame),
+        1,
+    );
     define_fn(cx, global, c"requestIdleCallback", Some(set_timeout), 2);
     define_fn(cx, global, c"cancelIdleCallback", Some(clear_timer), 1);
     define_fn(cx, global, c"queueMicrotask", Some(queue_microtask), 1);
@@ -33,7 +45,12 @@ unsafe extern "C" fn set_interval(cx: *mut RawJSContext, argc: u32, vp: *mut Val
     register_timer(cx, argc, vp, true)
 }
 
-unsafe fn register_timer(cx: *mut RawJSContext, argc: u32, vp: *mut Value, is_interval: bool) -> bool {
+unsafe fn register_timer(
+    cx: *mut RawJSContext,
+    argc: u32,
+    vp: *mut Value,
+    is_interval: bool,
+) -> bool {
     let mut cx = JSContext::from_ptr(NonNull::new(cx).unwrap());
     let args = CallArgs::from_vp(vp, argc);
 
@@ -79,7 +96,11 @@ unsafe extern "C" fn clear_timer(cx: *mut RawJSContext, argc: u32, vp: *mut Valu
     true
 }
 
-unsafe extern "C" fn request_animation_frame(cx: *mut RawJSContext, argc: u32, vp: *mut Value) -> bool {
+unsafe extern "C" fn request_animation_frame(
+    cx: *mut RawJSContext,
+    argc: u32,
+    vp: *mut Value,
+) -> bool {
     let mut cx = JSContext::from_ptr(NonNull::new(cx).unwrap());
     let args = CallArgs::from_vp(vp, argc);
 
@@ -95,12 +116,19 @@ unsafe extern "C" fn request_animation_frame(cx: *mut RawJSContext, argc: u32, v
     rooted!(&in(cx) let global = state.global);
     store_callback(&mut cx, global.handle(), id, cb_val.handle());
 
-    state.window.animation_frames.push(AnimationFrameEntry { id });
+    state
+        .window
+        .animation_frames
+        .push(AnimationFrameEntry { id });
     args.rval().set(Int32Value(id as i32));
     true
 }
 
-unsafe extern "C" fn cancel_animation_frame(cx: *mut RawJSContext, argc: u32, vp: *mut Value) -> bool {
+unsafe extern "C" fn cancel_animation_frame(
+    cx: *mut RawJSContext,
+    argc: u32,
+    vp: *mut Value,
+) -> bool {
     clear_timer(cx, argc, vp)
 }
 

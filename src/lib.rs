@@ -1,7 +1,7 @@
 //! Aurora browser engine — library interface for integration tests.
 
-pub mod render;
 pub(crate) mod blitz_document;
+pub mod render;
 
 // Re-export modules needed by integration tests and the shared runner pipeline.
 pub(crate) mod atlas;
@@ -11,10 +11,10 @@ pub(crate) mod fetch;
 pub(crate) mod font;
 pub(crate) mod html;
 pub(crate) mod identity;
-pub(crate) mod js_engine;
-pub(crate) mod js_sm;
 #[cfg(feature = "engine-boa")]
 pub(crate) mod js_boa;
+pub(crate) mod js_engine;
+pub(crate) mod js_sm;
 pub(crate) mod layout;
 pub(crate) mod media;
 pub(crate) mod runner;

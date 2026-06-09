@@ -1,7 +1,7 @@
 use crate::identity::Identity;
 
-use super::capability::{require_file_access, require_network_access};
 use super::FetchError;
+use super::capability::{require_file_access, require_network_access};
 
 pub fn fetch_html(url: &str, identity: &Identity) -> Result<String, FetchError> {
     fetch_string(url, identity)

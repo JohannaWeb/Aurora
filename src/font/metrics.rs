@@ -12,4 +12,3 @@ pub fn get_atlas_texture() -> (&'static [u8], u32, u32) {
     let atlas = get_glyph_atlas();
     (&atlas.texture, atlas.width, atlas.height)
 }
-

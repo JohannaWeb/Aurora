@@ -105,19 +105,54 @@ impl BoaRuntime {
         let event = JsObject::with_null_proto();
         let target_id = self.registry.node_id(target).unwrap_or(0);
 
-        let _ = event.set(js_string!("type"), js_string!(event_type), false, &mut self.context);
-        let _ = event.set(js_string!("bubbles"), JsValue::from(true), false, &mut self.context);
-        let _ = event.set(js_string!("cancelable"), JsValue::from(true), false, &mut self.context);
-        let _ = event.set(js_string!("defaultPrevented"), JsValue::from(false), false, &mut self.context);
-        let _ = event.set(js_string!("isTrusted"), JsValue::from(true), false, &mut self.context);
-        let _ = event.set(js_string!("timeStamp"), JsValue::from(0.0), false, &mut self.context);
+        let _ = event.set(
+            js_string!("type"),
+            js_string!(event_type),
+            false,
+            &mut self.context,
+        );
+        let _ = event.set(
+            js_string!("bubbles"),
+            JsValue::from(true),
+            false,
+            &mut self.context,
+        );
+        let _ = event.set(
+            js_string!("cancelable"),
+            JsValue::from(true),
+            false,
+            &mut self.context,
+        );
+        let _ = event.set(
+            js_string!("defaultPrevented"),
+            JsValue::from(false),
+            false,
+            &mut self.context,
+        );
+        let _ = event.set(
+            js_string!("isTrusted"),
+            JsValue::from(true),
+            false,
+            &mut self.context,
+        );
+        let _ = event.set(
+            js_string!("timeStamp"),
+            JsValue::from(0.0),
+            false,
+            &mut self.context,
+        );
 
         // target and currentTarget — the DOM node's JS object if available.
         if let Some(target_node) = self.registry.lookup(target_id) {
             if let Some(js_target) = self.registry.nodes.borrow().get(&target_id) {
                 // We can't easily get the JS object here without a full mirror;
                 // set the node id as a proxy for now.
-                let _ = event.set(js_string!("_targetId"), JsValue::from(target_id), false, &mut self.context);
+                let _ = event.set(
+                    js_string!("_targetId"),
+                    JsValue::from(target_id),
+                    false,
+                    &mut self.context,
+                );
             }
         }
 
@@ -125,7 +160,12 @@ impl BoaRuntime {
         let ev_clone = event.clone();
         let prevent_fn = NativeFunction::from_copy_closure_with_captures(
             |_this, _args, ev: &JsObject, ctx| {
-                let _ = ev.set(js_string!("defaultPrevented"), JsValue::from(true), false, ctx);
+                let _ = ev.set(
+                    js_string!("defaultPrevented"),
+                    JsValue::from(true),
+                    false,
+                    ctx,
+                );
                 Ok(JsValue::undefined())
             },
             ev_clone,
@@ -179,13 +219,21 @@ impl BoaRuntime {
 
     /// Fire the DOMContentLoaded event on the document.
     pub fn fire_dom_content_loaded(&mut self) {
+        self.fire_lifecycle_event("DOMContentLoaded");
+    }
+
+    pub fn fire_load(&mut self) {
+        self.fire_lifecycle_event("load");
+    }
+
+    fn fire_lifecycle_event(&mut self, event_type: &str) {
         let doc_node = self.document.clone();
-        let event = self.build_event_object("DOMContentLoaded", &doc_node);
+        let event = self.build_event_object(event_type, &doc_node);
 
         // Fire document-level listeners.
         let doc_id = self.registry.node_id(&doc_node);
         if let Some(id) = doc_id {
-            let listeners = self.registry.get_listeners(id, "DOMContentLoaded");
+            let listeners = self.registry.get_listeners(id, event_type);
             for listener in listeners {
                 let _ = listener.call(
                     &JsValue::undefined(),
@@ -195,10 +243,12 @@ impl BoaRuntime {
             }
         }
 
-        // Also fire window-level DOMContentLoaded listeners.
-        let script = "if (typeof window._domContentLoadedListeners !== 'undefined') { \
-            window._domContentLoadedListeners.forEach(function(fn) { try { fn(); } catch(e) {} }); \
-        }";
+        // Also fire window-level listeners stored by the Boa global shim.
+        let script = format!(
+            "if (typeof window._eventListeners !== 'undefined' && window._eventListeners[{event_type:?}]) {{ \
+                window._eventListeners[{event_type:?}].forEach(function(fn) {{ try {{ fn(); }} catch(e) {{}} }}); \
+            }}"
+        );
         let _ = self.context.eval(Source::from_bytes(script));
         let _ = self.context.run_jobs();
         self.drain_microtasks();
@@ -351,11 +401,19 @@ impl crate::js_engine::JsRuntime for BoaRuntime {
         BoaRuntime::set_shared_state(self, layout_tree, stylesheet, viewport)
     }
 
-    fn clear_dirty_bits(&mut self) { self.registry.clear_dirty_bits(); }
-    fn has_dirty_bits(&self) -> bool { self.registry.has_dirty_bits() }
-    fn take_needs_reflow(&mut self) -> bool { self.registry.take_needs_reflow() }
+    fn clear_dirty_bits(&mut self) {
+        self.registry.clear_dirty_bits();
+    }
+    fn has_dirty_bits(&self) -> bool {
+        self.registry.has_dirty_bits()
+    }
+    fn take_needs_reflow(&mut self) -> bool {
+        self.registry.take_needs_reflow()
+    }
 
-    fn tick(&mut self, now: Instant) -> bool { BoaRuntime::tick(self, now) }
+    fn tick(&mut self, now: Instant) -> bool {
+        BoaRuntime::tick(self, now)
+    }
 
     fn drain_animation_frame_callbacks(&mut self, now: Instant) -> bool {
         BoaRuntime::drain_animation_frame_callbacks(self, now)
@@ -365,11 +423,23 @@ impl crate::js_engine::JsRuntime for BoaRuntime {
         BoaRuntime::dispatch_event(self, node, event_type)
     }
 
-    fn next_deadline(&self) -> Option<Instant> { BoaRuntime::next_deadline(self) }
+    fn fire_dom_content_loaded(&mut self) {
+        BoaRuntime::fire_dom_content_loaded(self)
+    }
+
+    fn fire_load(&mut self) {
+        BoaRuntime::fire_load(self)
+    }
+
+    fn next_deadline(&self) -> Option<Instant> {
+        BoaRuntime::next_deadline(self)
+    }
 
     fn has_animation_frame_callbacks(&self) -> bool {
         BoaRuntime::has_animation_frame_callbacks(self)
     }
 
-    fn has_ready_work(&self, now: Instant) -> bool { BoaRuntime::has_ready_work(self, now) }
+    fn has_ready_work(&self, now: Instant) -> bool {
+        BoaRuntime::has_ready_work(self, now)
+    }
 }

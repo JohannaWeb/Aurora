@@ -1,14 +1,14 @@
-use taffy::prelude::{AlignSelf, Dimension, *};
 use std::collections::HashMap;
+use taffy::prelude::{AlignSelf, Dimension, *};
 
 use crate::css::DisplayMode;
-use crate::style::{StyledNode, StyleTree};
 use crate::dom::Node;
+use crate::style::{StyleTree, StyledNode};
 
 use super::constants::BLOCK_VERTICAL_PADDING;
-use super::{LayoutBox, LayoutKind, Rect, ViewportSize};
 use super::taffy_adapter::style_to_taffy_with_viewport;
 use super::text_metrics::{font_size_from_styles, line_height_from_styles};
+use super::{LayoutBox, LayoutKind, Rect, ViewportSize};
 
 /// Per-node context stored in the Taffy tree.
 /// For text leaf nodes we keep the text and font metrics so the measure
@@ -72,12 +72,18 @@ fn measure_text_node(
         AvailableSpace::MaxContent | AvailableSpace::MinContent => f32::MAX,
     };
 
-    let (width, height) = text_content_size(&ctx.text, ctx.font_size, ctx.line_height, available_width);
+    let (width, height) =
+        text_content_size(&ctx.text, ctx.font_size, ctx.line_height, available_width);
     Size { width, height }
 }
 
 /// Measure text size using Parley for accurate glyph metrics and line-breaking.
-fn text_content_size(text: &str, font_size: f32, _line_height: f32, available_width: f32) -> (f32, f32) {
+fn text_content_size(
+    text: &str,
+    font_size: f32,
+    _line_height: f32,
+    available_width: f32,
+) -> (f32, f32) {
     super::parley_text::layout_lines(text, font_size, Some(available_width))
 }
 
@@ -188,14 +194,20 @@ fn convert_taffy_to_layout_box(
         if !node_id_map.contains_key(&child_ptr) {
             continue;
         }
-        let child_layout_box = convert_taffy_to_layout_box(taffy, child_styled_node, node_id_map, x, y);
+        let child_layout_box =
+            convert_taffy_to_layout_box(taffy, child_styled_node, node_id_map, x, y);
         children.push(child_layout_box);
     }
 
     LayoutBox {
         node,
         kind,
-        rect: Rect { x, y, width, height },
+        rect: Rect {
+            x,
+            y,
+            width,
+            height,
+        },
         styles,
         margin,
         border,
@@ -227,19 +239,27 @@ fn determine_layout_kind(styled_node: &StyledNode) -> LayoutKind {
             if tag_name.eq_ignore_ascii_case("img") {
                 let alt = el.attributes.get("alt").cloned();
                 let src = el.attributes.get("src").cloned();
-                LayoutKind::Image { alt, src, display_mode }
+                LayoutKind::Image {
+                    alt,
+                    src,
+                    display_mode,
+                }
             } else if tag_name.eq_ignore_ascii_case("video") {
                 let src = el.attributes.get("src").cloned();
                 let poster = el.attributes.get("poster").cloned();
-                LayoutKind::Media { src, poster, display_mode }
+                LayoutKind::Media {
+                    src,
+                    poster,
+                    display_mode,
+                }
             } else if matches!(tag_name.as_str(), "textarea" | "input" | "button") {
                 LayoutKind::Control { tag_name }
             } else {
                 match display_mode {
                     DisplayMode::Inline => LayoutKind::Inline { tag_name },
-                    DisplayMode::InlineBlock | DisplayMode::InlineFlex | DisplayMode::InlineGrid => {
-                        LayoutKind::InlineBlock { tag_name }
-                    }
+                    DisplayMode::InlineBlock
+                    | DisplayMode::InlineFlex
+                    | DisplayMode::InlineGrid => LayoutKind::InlineBlock { tag_name },
                     _ => LayoutKind::Block { tag_name },
                 }
             }

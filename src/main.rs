@@ -6,10 +6,10 @@ mod fetch;
 mod font;
 mod html;
 mod identity;
-mod js_engine;
-mod js_sm;
 #[cfg(feature = "engine-boa")]
 mod js_boa;
+mod js_engine;
+mod js_sm;
 mod layout;
 mod media;
 pub mod render;

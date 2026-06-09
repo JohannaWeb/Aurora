@@ -4,8 +4,16 @@
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Default)]
 pub struct Px(pub f32);
 
-impl From<f32> for Px { fn from(f: f32) -> Self { Px(f) } }
-impl From<Px> for f32 { fn from(p: Px) -> Self { p.0 } }
+impl From<f32> for Px {
+    fn from(f: f32) -> Self {
+        Px(f)
+    }
+}
+impl From<Px> for f32 {
+    fn from(p: Px) -> Self {
+        p.0
+    }
+}
 
 /// An RGBA color, each channel 0–255.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -17,9 +25,24 @@ pub struct Rgba {
 }
 
 impl Rgba {
-    pub const TRANSPARENT: Self = Self { r: 0, g: 0, b: 0, a: 0 };
-    pub const WHITE: Self = Self { r: 255, g: 255, b: 255, a: 255 };
-    pub const BLACK: Self = Self { r: 0, g: 0, b: 0, a: 255 };
+    pub const TRANSPARENT: Self = Self {
+        r: 0,
+        g: 0,
+        b: 0,
+        a: 0,
+    };
+    pub const WHITE: Self = Self {
+        r: 255,
+        g: 255,
+        b: 255,
+        a: 255,
+    };
+    pub const BLACK: Self = Self {
+        r: 0,
+        g: 0,
+        b: 0,
+        a: 255,
+    };
 
     pub fn new(r: u8, g: u8, b: u8, a: u8) -> Self {
         Self { r, g, b, a }
@@ -41,7 +64,12 @@ pub struct Bounds {
 
 impl Bounds {
     pub fn new(x: Px, y: Px, width: Px, height: Px) -> Self {
-        Self { x, y, width, height }
+        Self {
+            x,
+            y,
+            width,
+            height,
+        }
     }
 
     pub fn right(&self) -> Px {
@@ -64,7 +92,12 @@ pub struct BorderEdge {
 
 impl BorderEdge {
     pub fn zero() -> Self {
-        Self { top: Px(0.0), right: Px(0.0), bottom: Px(0.0), left: Px(0.0) }
+        Self {
+            top: Px(0.0),
+            right: Px(0.0),
+            bottom: Px(0.0),
+            left: Px(0.0),
+        }
     }
 }
 
@@ -78,18 +111,17 @@ pub trait RenderBackend {
     fn stroke_rect(&mut self, bounds: Bounds, border: BorderEdge, color: Rgba, opacity: f32);
 
     /// Draw a text string.
-    fn draw_text(
-        &mut self,
-        text: &str,
-        x: Px,
-        y: Px,
-        font_size: Px,
-        color: Rgba,
-        opacity: f32,
-    );
+    fn draw_text(&mut self, text: &str, x: Px, y: Px, font_size: Px, color: Rgba, opacity: f32);
 
     /// Draw a decoded image (RGBA pixels) into the given bounds.
-    fn draw_image(&mut self, bounds: Bounds, pixels: &[u8], img_width: u32, img_height: u32, opacity: f32);
+    fn draw_image(
+        &mut self,
+        bounds: Bounds,
+        pixels: &[u8],
+        img_width: u32,
+        img_height: u32,
+        opacity: f32,
+    );
 
     /// Draw a placeholder (for images that haven't loaded).
     fn draw_image_placeholder(&mut self, bounds: Bounds, opacity: f32);
@@ -134,7 +166,7 @@ pub enum DrawCommand {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum InvalidationLevel {
     None,
-    Paint,   // Only repaint (e.g. opacity, color change)
-    Layout,  // Recompute positions (e.g. width, height, margin)
-    Style,   // Recompute CSS cascade (e.g. class change, new styles)
+    Paint,  // Only repaint (e.g. opacity, color change)
+    Layout, // Recompute positions (e.g. width, height, margin)
+    Style,  // Recompute CSS cascade (e.g. class change, new styles)
 }

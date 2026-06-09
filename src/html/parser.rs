@@ -6,7 +6,7 @@ use std::rc::Rc;
 use html5ever::interface::QualName;
 use html5ever::tendril::{StrTendril, TendrilSink};
 use html5ever::tree_builder::{ElementFlags, NodeOrText, QuirksMode, TreeSink};
-use html5ever::{parse_document, Attribute, ParseOpts};
+use html5ever::{Attribute, ParseOpts, parse_document};
 use markup5ever::ExpandedName;
 
 use crate::dom::{DocumentMode, Node, NodePtr};
