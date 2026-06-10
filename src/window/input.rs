@@ -120,10 +120,12 @@ impl WindowInput {
             println!("JS: Processing {} scripts...", scripts.len());
             let fetched: Vec<Option<String>> = {
                 let handles: Vec<_> = scripts
-                    .into_iter()
-                    .map(|(source, is_url)| {
+                    .iter()
+                    .map(|script| {
                         let url_str = url.to_string();
                         let identity = self.identity.clone();
+                        let source = script.source.clone();
+                        let is_url = script.is_url;
                         std::thread::spawn(move || {
                             crate::runner::pipeline::fetch_script(
                                 source,
@@ -141,10 +143,13 @@ impl WindowInput {
             };
             let mut rt: Box<dyn JsRuntime> =
                 Box::new(crate::js_sm::SmRuntime::new(Rc::clone(&new_dom)));
-            for content in fetched.into_iter().flatten() {
+            for (script, content) in scripts.iter().zip(fetched.into_iter()) {
+                let Some(content) = content else { continue };
+                rt.set_current_script(Some(&script.node));
                 if let Err(e) = rt.execute(&content) {
                     eprintln!("JS Error: {}", e);
                 }
+                rt.set_current_script(None);
             }
             Some(rt)
         } else {

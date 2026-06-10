@@ -4,9 +4,9 @@ use std::ffi::c_void;
 use std::ptr::NonNull;
 
 use mozjs::context::JSContext;
+use mozjs::jsapi::JS::{Handle, MutableHandle};
 use mozjs::jsapi::JSContext as RawJSContext;
 use mozjs::jsapi::JSObject;
-use mozjs::jsapi::JS::{Handle, MutableHandle};
 use mozjs::rooted;
 
 use super::utils::{

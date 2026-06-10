@@ -98,10 +98,11 @@ order of likelihood:
    DOM, Polymer's `_attachDom` may route into a Shady code path that throws
    inside a `try {} catch {}` it owns.
 
-A probe instrumented into the upgrade shim (logging `ctor.template`,
-`el._template`, `el.root`, `el.__dataEnabled`, child count for `ytd-app` /
-`ytd-masthead` right after connect) is in flight to discriminate between
-these; results should be appended to this document.
+A probe is already wired into the upgrade shim (logging `ctor.template`,
+`el._template`, `el.root`, `el.__dataEnabled`, and child counts for
+`ytd-app` / `ytd-masthead` right after connect). Capture a run with
+`AURORA_DEBUG_YOUTUBE=1` and append the result to this document so the
+template-resolution failure can be pinned down instead of inferred.
 
 ## Contributing causes (confirmed, independent of the primary one)
 
@@ -175,25 +176,26 @@ Three separate design choices compound into total silence:
 
 ## Recommended next steps (ordered)
 
-1. **Land the template probe** (instrument `tryUpgrade` post-connect; already
-   written) and confirm which of the three template-resolution suspects holds.
-2. Fix the confirmed template path — most likely making the upgrade shim
-   preserve class-side `template` resolution, or implementing whatever
-   dom-module needs.
-3. Add a bounded timer/microtask pump between script executions in
-   `run_scripts` so boot-time `setTimeout(0)` chains run when YT expects.
-4. Make `requestIdleCallback` pass a real `IdleDeadline` object.
-5. Either implement MessagePort delivery (deliver on the same checkpoint as
-   promise jobs) or remove the `MessageChannel` constructor so feature
-   detection fails honestly.
-6. Kill the O(document) scan per `customElements.define` — boot should drop
-   from ~108 s to seconds.
-7. After hydration works, expect the next wall at `youtubei/v1/browse`
-   (innertube data fetches) per the standing prediction; the homepage does
-   embed `ytInitialData` inline (verified, 2 occurrences in the served HTML),
-   so first paint may not need it.
+1. Run the existing template probe for `ytd-app` and `ytd-masthead`, then
+   record which template-resolution path is actually failing.
+2. Fix the confirmed template path. The likely fixes are preserving
+   class-side `template` resolution through the upgrade shim or implementing
+   the `dom-module` behavior YouTube expects.
+3. Remove the O(document) scan from `customElements.define`. It is currently
+   dominating boot time and will continue to make the page feel broken even
+   after hydration starts working.
+4. Add a bounded timer/microtask pump between script executions in
+   `run_scripts`, then make `requestIdleCallback` pass a real `IdleDeadline`
+   object.
+5. Either implement `MessagePort` delivery on the same checkpoint as promise
+   jobs or remove the `MessageChannel` constructor so feature detection fails
+   honestly.
+6. After hydration works, expect the next wall at `youtubei/v1/browse`
+   (innertube data fetches). The homepage does embed `ytInitialData` inline
+   (verified, 2 occurrences in the served HTML), so first paint may not need
+   it.
 
 ---
 
-*Appendix pending: probe output for `ctor.template` / `el._template` /
-`el.root` on `ytd-app` and `ytd-masthead`.*
+*Appendix pending: captured probe output for `ctor.template` / `el._template`
+/ `el.root` on `ytd-app` and `ytd-masthead`.*

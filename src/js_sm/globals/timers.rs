@@ -32,17 +32,31 @@ pub(in crate::js_sm) unsafe fn install_timers(
         Some(cancel_animation_frame),
         1,
     );
-    define_fn(cx, global, c"requestIdleCallback", Some(set_timeout), 2);
+    define_fn(
+        cx,
+        global,
+        c"requestIdleCallback",
+        Some(request_idle_callback),
+        2,
+    );
     define_fn(cx, global, c"cancelIdleCallback", Some(clear_timer), 1);
     define_fn(cx, global, c"queueMicrotask", Some(queue_microtask), 1);
 }
 
 unsafe extern "C" fn set_timeout(cx: *mut RawJSContext, argc: u32, vp: *mut Value) -> bool {
-    register_timer(cx, argc, vp, false)
+    register_timer(cx, argc, vp, false, false)
 }
 
 unsafe extern "C" fn set_interval(cx: *mut RawJSContext, argc: u32, vp: *mut Value) -> bool {
-    register_timer(cx, argc, vp, true)
+    register_timer(cx, argc, vp, true, false)
+}
+
+unsafe extern "C" fn request_idle_callback(
+    cx: *mut RawJSContext,
+    argc: u32,
+    vp: *mut Value,
+) -> bool {
+    register_timer(cx, argc, vp, false, true)
 }
 
 unsafe fn register_timer(
@@ -50,6 +64,7 @@ unsafe fn register_timer(
     argc: u32,
     vp: *mut Value,
     is_interval: bool,
+    is_idle: bool,
 ) -> bool {
     let mut cx = JSContext::from_ptr(NonNull::new(cx).unwrap());
     let args = CallArgs::from_vp(vp, argc);
@@ -67,13 +82,30 @@ unsafe fn register_timer(
     rooted!(&in(cx) let global = state.global);
     store_callback(&mut cx, global.handle(), id, cb_val.handle());
 
-    let delay_ms = arg_to_f64(&args, 1).max(0.0);
+    let idle_timeout = if is_idle {
+        if args.argc_ > 1 && args.get(1).get().is_object() {
+            rooted!(&in(cx) let opts = args.get(1).get().to_object_or_null());
+            let delay_ms = get_prop_f64(&mut cx, opts.handle(), c"timeout").max(0.0);
+            Some(Duration::from_millis(delay_ms as u64))
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+    let delay_ms = if is_idle {
+        idle_timeout.map(|d| d.as_millis() as f64).unwrap_or(0.0)
+    } else {
+        arg_to_f64(&args, 1).max(0.0)
+    };
     let delay = Duration::from_millis(delay_ms as u64);
 
     state.window.timers.push(TimerEntry {
         id,
         deadline: Instant::now() + delay,
         interval: is_interval.then_some(delay),
+        is_idle,
+        idle_timeout,
     });
 
     args.rval().set(Int32Value(id as i32));

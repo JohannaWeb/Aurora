@@ -38,6 +38,8 @@ pub struct ElementNode {
     pub attributes: BTreeMap<String, String>,
     /// Child node pointers.
     pub children: Vec<NodePtr>,
+    /// Parsed `<template>` contents, stored separately from light DOM children.
+    pub template_contents: Option<NodePtr>,
 }
 
 impl Node {
@@ -60,6 +62,7 @@ impl Node {
             tag_name: tag_name.into(),
             attributes,
             children,
+            template_contents: None,
         })))
     }
 

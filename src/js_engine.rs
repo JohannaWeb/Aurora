@@ -12,6 +12,7 @@ use crate::layout::{LayoutTree, ViewportSize};
 /// `Box<dyn JsRuntime>` without any generic parameters leaking into callers.
 pub(crate) trait JsRuntime {
     fn execute(&mut self, script: &str) -> Result<(), String>;
+    fn set_current_script(&mut self, script: Option<&NodePtr>);
 
     fn set_shared_state(
         &mut self,

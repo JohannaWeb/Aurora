@@ -36,7 +36,11 @@ pub(in crate::js_sm) unsafe fn create_js_node(cx: &mut JSContext, node: NodePtr)
     let (node_type, node_name, tag_name, text_content) = match &*node.borrow() {
         Node::Element(el) => {
             let tc = collect_text_content(&node);
-            (1i32, el.tag_name.to_uppercase(), el.tag_name.clone(), tc)
+            if el.tag_name == "#document-fragment" {
+                (11i32, "#document-fragment".to_string(), "".to_string(), tc)
+            } else {
+                (1i32, el.tag_name.to_uppercase(), el.tag_name.clone(), tc)
+            }
         }
         Node::Text(t) => (3i32, "#text".to_string(), "".to_string(), t.clone()),
         Node::Document { .. } => (9i32, "#document".to_string(), "".to_string(), String::new()),
@@ -163,28 +167,105 @@ pub(in crate::js_sm) unsafe fn create_js_node(cx: &mut JSContext, node: NodePtr)
             }
 
             if tag_name.eq_ignore_ascii_case("template") {
-                // content shares the same node_id so template.innerHTML and
-                // template.content.innerHTML both operate on the same NodePtr.
-                // Without this, Lit/Polymer sets innerHTML on the template element
-                // but reads template.content which was a separate empty fragment.
+                let content_node = if let Node::Element(el) = &*node.borrow() {
+                    el.template_contents
+                        .clone()
+                        .unwrap_or_else(|| Node::document(Vec::new()))
+                } else {
+                    Node::document(Vec::new())
+                };
+                let content_node_id = state.registry.register(content_node);
                 let content_obj = new_plain_object(cx);
                 rooted!(&in(cx) let content_root = content_obj);
-                set_prop_i32(cx, content_root.handle(), c"__node_id__", node_id as i32);
+                set_prop_i32(
+                    cx,
+                    content_root.handle(),
+                    c"__node_id__",
+                    content_node_id as i32,
+                );
                 set_prop_i32(cx, content_root.handle(), c"nodeType", 11);
                 set_prop_str(cx, content_root.handle(), c"nodeName", "#document-fragment");
-                define_accessor(cx, content_root.handle(), c"innerHTML", Some(get_inner_html), Some(set_inner_html));
-                define_accessor(cx, content_root.handle(), c"textContent", Some(get_text_content), Some(set_text_content));
-                define_fn(cx, content_root.handle(), c"appendChild", Some(node_append_child), 1);
-                define_fn(cx, content_root.handle(), c"insertBefore", Some(node_insert_before), 2);
-                define_fn(cx, content_root.handle(), c"removeChild", Some(node_remove_child), 1);
-                define_fn(cx, content_root.handle(), c"cloneNode", Some(node_clone_node), 1);
-                define_fn(cx, content_root.handle(), c"querySelector", Some(node_query_selector), 1);
-                define_fn(cx, content_root.handle(), c"querySelectorAll", Some(node_query_selector_all), 1);
-                define_getter(cx, content_root.handle(), c"childNodes", Some(get_child_nodes));
+                define_accessor(
+                    cx,
+                    content_root.handle(),
+                    c"innerHTML",
+                    Some(get_inner_html),
+                    Some(set_inner_html),
+                );
+                define_accessor(
+                    cx,
+                    content_root.handle(),
+                    c"textContent",
+                    Some(get_text_content),
+                    Some(set_text_content),
+                );
+                define_fn(
+                    cx,
+                    content_root.handle(),
+                    c"appendChild",
+                    Some(node_append_child),
+                    1,
+                );
+                define_fn(
+                    cx,
+                    content_root.handle(),
+                    c"insertBefore",
+                    Some(node_insert_before),
+                    2,
+                );
+                define_fn(
+                    cx,
+                    content_root.handle(),
+                    c"removeChild",
+                    Some(node_remove_child),
+                    1,
+                );
+                define_fn(
+                    cx,
+                    content_root.handle(),
+                    c"cloneNode",
+                    Some(node_clone_node),
+                    1,
+                );
+                define_fn(
+                    cx,
+                    content_root.handle(),
+                    c"querySelector",
+                    Some(node_query_selector),
+                    1,
+                );
+                define_fn(
+                    cx,
+                    content_root.handle(),
+                    c"querySelectorAll",
+                    Some(node_query_selector_all),
+                    1,
+                );
+                define_getter(
+                    cx,
+                    content_root.handle(),
+                    c"childNodes",
+                    Some(get_child_nodes),
+                );
                 define_getter(cx, content_root.handle(), c"children", Some(get_children));
-                define_getter(cx, content_root.handle(), c"firstChild", Some(get_first_child));
-                define_getter(cx, content_root.handle(), c"lastChild", Some(get_last_child));
-                define_getter(cx, content_root.handle(), c"childElementCount", Some(get_child_element_count));
+                define_getter(
+                    cx,
+                    content_root.handle(),
+                    c"firstChild",
+                    Some(get_first_child),
+                );
+                define_getter(
+                    cx,
+                    content_root.handle(),
+                    c"lastChild",
+                    Some(get_last_child),
+                );
+                define_getter(
+                    cx,
+                    content_root.handle(),
+                    c"childElementCount",
+                    Some(get_child_element_count),
+                );
                 set_prop_obj(cx, obj_root.handle(), c"content", content_obj);
             }
 
@@ -205,6 +286,20 @@ pub(in crate::js_sm) unsafe fn create_js_node(cx: &mut JSContext, node: NodePtr)
                 Some(node_return_first_arg_or_this),
                 1,
             );
+        }
+
+        if tag_name.contains('-') {
+            let global_raw = state.global;
+            if !global_raw.is_null() {
+                rooted!(&in(cx) let global = global_raw);
+                rooted!(&in(cx) let node_val = ObjectValue(obj));
+                call_named_global_fn(
+                    cx,
+                    global.handle(),
+                    c"__aurora_track_custom_element__",
+                    node_val.handle().get(),
+                );
+            }
         }
 
         // <video>/<audio> — decorate with the HTMLMediaElement surface
@@ -1519,7 +1614,22 @@ unsafe extern "C" fn node_append_child(cx: *mut RawJSContext, argc: u32, vp: *mu
 
     if let (Some(child_id), Some(parent_node)) = (child_node_id, state.registry.lookup(parent_id)) {
         if let Some(child_node) = state.registry.lookup(child_id) {
+            let is_fragment = if child_val.is_object() {
+                let child_obj = child_val.to_object_or_null();
+                rooted!(&in(cx) let child_root = child_obj);
+                get_prop_i32(&mut cx, child_root.handle(), c"nodeType") == 11
+            } else {
+                false
+            };
             let child_tag = debug_tag_for_node(&child_node);
+            if is_fragment {
+                let fragment_children = clone_fragment_children(&child_node);
+                for fragment_child in fragment_children {
+                    append_child_node(&mut cx, &parent_node, parent_id, fragment_child);
+                }
+                args.rval().set(args.get(0).get());
+                return true;
+            }
             match &mut *parent_node.borrow_mut() {
                 Node::Element(el) => {
                     el.children.push(child_node);
@@ -1731,7 +1841,10 @@ unsafe fn call_connected_callback(cx: &mut JSContext, node_val: Value) {
     }
 
     set_prop_bool(cx, node_root.handle(), c"__ce_connected__", true);
-    log::info!("[ce] connectedCallback firing on <{}>", tag_name.as_deref().unwrap_or("?"));
+    log::info!(
+        "[ce] connectedCallback firing on <{}>",
+        tag_name.as_deref().unwrap_or("?")
+    );
 
     rooted!(&in(cx) let mut rval = UndefinedValue());
     let empty = HandleValueArray::empty();
@@ -1744,7 +1857,11 @@ unsafe fn call_connected_callback(cx: &mut JSContext, node_val: Value) {
     );
     if !ok {
         let err = pending_exception_string(cx);
-        log::error!("[ce] connectedCallback <{}> threw: {}", tag_name.as_deref().unwrap_or("?"), err);
+        log::error!(
+            "[ce] connectedCallback <{}> threw: {}",
+            tag_name.as_deref().unwrap_or("?"),
+            err
+        );
         clear_pending_exception(cx);
     }
 }
@@ -1760,12 +1877,27 @@ unsafe extern "C" fn node_clone_node(cx: *mut RawJSContext, argc: u32, vp: *mut 
             return true;
         }
     };
+    let this_is_fragment = if args.thisv().get().is_object() {
+        let this_obj = args.thisv().get().to_object_or_null();
+        rooted!(&in(cx) let this_root = this_obj);
+        get_prop_i32(&mut cx, this_root.handle(), c"nodeType") == 11
+    } else {
+        false
+    };
     let cloned = {
         let state = &*get_state_ptr(&cx);
-        state
-            .registry
-            .lookup(node_id)
-            .map(|n| clone_node_rs(&n, deep))
+        state.registry.lookup(node_id).map(|n| {
+            if this_is_fragment {
+                let children = if deep {
+                    clone_fragment_children(&n)
+                } else {
+                    vec![]
+                };
+                crate::dom::Node::element("#document-fragment", children)
+            } else {
+                clone_node_rs(&n, deep)
+            }
+        })
     };
     match cloned {
         Some(ptr) => {
@@ -2132,6 +2264,27 @@ pub(super) unsafe extern "C" fn doc_get_elements_by_class(
     true
 }
 
+pub(super) unsafe extern "C" fn doc_current_script_getter(
+    cx: *mut RawJSContext,
+    argc: u32,
+    vp: *mut Value,
+) -> bool {
+    let mut cx = JSContext::from_ptr(NonNull::new(cx).unwrap());
+    let args = CallArgs::from_vp(vp, argc);
+    let state = &mut *get_state_ptr(&cx);
+    let Some(node_id) = state.current_script_node_id else {
+        args.rval().set(NullValue());
+        return true;
+    };
+    let Some(node) = state.registry.lookup(node_id) else {
+        args.rval().set(NullValue());
+        return true;
+    };
+    let obj = create_js_node(&mut cx, node);
+    args.rval().set(ObjectValue(obj));
+    true
+}
+
 pub(super) unsafe extern "C" fn doc_create_element(
     cx: *mut RawJSContext,
     argc: u32,
@@ -2204,8 +2357,12 @@ pub(super) unsafe extern "C" fn doc_import_node(
     let src_obj = args.get(0).get().to_object_or_null();
     rooted!(&in(cx) let src_root = src_obj);
     rooted!(&in(cx) let mut id_val = UndefinedValue());
-    if !wrappers2::JS_GetProperty(&mut cx, src_root.handle(), NODE_ID_PROP, id_val.handle_mut())
-        || !id_val.get().is_number()
+    if !wrappers2::JS_GetProperty(
+        &mut cx,
+        src_root.handle(),
+        NODE_ID_PROP,
+        id_val.handle_mut(),
+    ) || !id_val.get().is_number()
     {
         args.rval().set(NullValue());
         return true;
@@ -2213,7 +2370,10 @@ pub(super) unsafe extern "C" fn doc_import_node(
     let node_id = id_val.get().to_number() as u32;
     let cloned = {
         let state = &*get_state_ptr(&cx);
-        state.registry.lookup(node_id).map(|n| clone_node_rs(&n, deep))
+        state
+            .registry
+            .lookup(node_id)
+            .map(|n| clone_node_rs(&n, deep))
     };
     match cloned {
         Some(ptr) => {
@@ -3170,16 +3330,34 @@ fn clone_node_rs(node: &NodePtr, deep: bool) -> NodePtr {
     match &*node.borrow() {
         Node::Text(t) => crate::dom::Node::text(t.clone()),
         Node::Element(el) => {
+            if el.tag_name == "#document-fragment" {
+                let children = if deep {
+                    el.children.iter().map(|c| clone_node_rs(c, true)).collect()
+                } else {
+                    vec![]
+                };
+                return crate::dom::Node::element("#document-fragment", children);
+            }
             let children = if deep {
                 el.children.iter().map(|c| clone_node_rs(c, true)).collect()
             } else {
                 vec![]
             };
-            crate::dom::Node::element_with_attributes(
+            let cloned = crate::dom::Node::element_with_attributes(
                 el.tag_name.clone(),
                 el.attributes.clone(),
                 children,
-            )
+            );
+            if let Node::Element(cloned_el) = &mut *cloned.borrow_mut() {
+                cloned_el.template_contents = el.template_contents.as_ref().map(|content| {
+                    if deep {
+                        clone_node_rs(content, true)
+                    } else {
+                        crate::dom::Node::document(Vec::new())
+                    }
+                });
+            }
+            cloned
         }
         Node::Document { children, .. } => {
             let kids = if deep {
@@ -3190,6 +3368,45 @@ fn clone_node_rs(node: &NodePtr, deep: bool) -> NodePtr {
             crate::dom::Node::document(kids)
         }
     }
+}
+
+fn clone_fragment_children(node: &NodePtr) -> Vec<NodePtr> {
+    match &*node.borrow() {
+        Node::Element(el) => el
+            .children
+            .iter()
+            .map(|child| clone_node_rs(child, true))
+            .collect(),
+        Node::Document { children, .. } => children
+            .iter()
+            .map(|child| clone_node_rs(child, true))
+            .collect(),
+        Node::Text(_) => vec![],
+    }
+}
+
+unsafe fn append_child_node(
+    cx: &mut JSContext,
+    parent_node: &NodePtr,
+    parent_id: u32,
+    child_node: NodePtr,
+) {
+    let child_obj = create_js_node(cx, child_node.clone());
+    let state = &mut *get_state_ptr(cx);
+    let child_id = state.registry.node_id(&child_node);
+    match &mut *parent_node.borrow_mut() {
+        Node::Element(el) => {
+            el.children.push(child_node);
+        }
+        Node::Document { children, .. } => {
+            children.push(child_node);
+        }
+        _ => {}
+    }
+    if let Some(child_id) = child_id {
+        queue_childlist_mutation(state, parent_id, vec![child_id], vec![]);
+    }
+    call_connected_callback(cx, ObjectValue(child_obj));
 }
 
 // ── node_contains helper ──────────────────────────────────────────────────────

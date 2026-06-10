@@ -1,15 +1,21 @@
-pub(crate) fn extract_scripts(node: &crate::dom::NodePtr) -> Vec<(String, bool)> {
+pub(crate) struct ExtractedScript {
+    pub(crate) source: String,
+    pub(crate) is_url: bool,
+    pub(crate) node: crate::dom::NodePtr,
+}
+
+pub(crate) fn extract_scripts(node: &crate::dom::NodePtr) -> Vec<ExtractedScript> {
     let mut scripts = Vec::new();
     walk(node, &mut scripts);
     scripts
 }
 
-fn walk(node: &crate::dom::NodePtr, scripts: &mut Vec<(String, bool)>) {
+fn walk(node: &crate::dom::NodePtr, scripts: &mut Vec<ExtractedScript>) {
     let node_borrow = node.borrow();
 
     match &*node_borrow {
         crate::dom::Node::Element(el) if el.tag_name == "script" => {
-            collect_script(el, scripts);
+            collect_script(node, el, scripts);
         }
         crate::dom::Node::Element(el) => {
             for child in &el.children {
@@ -25,7 +31,11 @@ fn walk(node: &crate::dom::NodePtr, scripts: &mut Vec<(String, bool)>) {
     }
 }
 
-fn collect_script(el: &crate::dom::ElementNode, scripts: &mut Vec<(String, bool)>) {
+fn collect_script(
+    node: &crate::dom::NodePtr,
+    el: &crate::dom::ElementNode,
+    scripts: &mut Vec<ExtractedScript>,
+) {
     // `<script type="application/json">`, `type="module"`, `type="importmap"`,
     // etc. are not classic scripts. Feeding their contents to the classic-script
     // evaluator either throws a syntax error (JSON object literals, `import`/
@@ -36,7 +46,11 @@ fn collect_script(el: &crate::dom::ElementNode, scripts: &mut Vec<(String, bool)
     }
 
     if let Some(src) = el.attributes.get("src") {
-        scripts.push((src.clone(), true));
+        scripts.push(ExtractedScript {
+            source: src.clone(),
+            is_url: true,
+            node: node.clone(),
+        });
         return;
     }
 
@@ -49,7 +63,11 @@ fn collect_script(el: &crate::dom::ElementNode, scripts: &mut Vec<(String, bool)
     }
 
     if !content.is_empty() {
-        scripts.push((content, false));
+        scripts.push(ExtractedScript {
+            source: content,
+            is_url: false,
+            node: node.clone(),
+        });
     }
 }
 

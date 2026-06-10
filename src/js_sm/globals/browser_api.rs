@@ -3,7 +3,9 @@ use std::ptr::NonNull;
 
 use mozjs::context::{JSContext, RawJSContext};
 use mozjs::jsapi::{CallArgs, JSObject, Value};
-use mozjs::jsval::{BooleanValue, DoubleValue, NullValue, ObjectValue, StringValue, UndefinedValue};
+use mozjs::jsval::{
+    BooleanValue, DoubleValue, NullValue, ObjectValue, StringValue, UndefinedValue,
+};
 use mozjs::rooted;
 use mozjs::rust::wrappers2;
 
@@ -148,9 +150,21 @@ pub(in crate::js_sm) unsafe fn install_browser_apis(
 
     // ResizeObserver / IntersectionObserver stubs; MutationObserver is real.
     mutation_observer::install_mutation_observer(cx, global);
-    define_ctor(cx, global, c"IntersectionObserver", Some(intersection_observer_ctor), 1);
-    define_ctor(cx, global, c"ResizeObserver",       Some(resize_observer_ctor),       1);
-    define_ctor(cx, global, c"PerformanceObserver",  Some(performance_observer_ctor),  1);
+    define_ctor(
+        cx,
+        global,
+        c"IntersectionObserver",
+        Some(intersection_observer_ctor),
+        1,
+    );
+    define_ctor(cx, global, c"ResizeObserver", Some(resize_observer_ctor), 1);
+    define_ctor(
+        cx,
+        global,
+        c"PerformanceObserver",
+        Some(performance_observer_ctor),
+        1,
+    );
 
     // URL constructor stub
     define_ctor(cx, global, c"URL", Some(url_ctor), 2);
@@ -194,10 +208,6 @@ pub(in crate::js_sm) unsafe fn install_browser_apis(
     // WebSocket — define_ctor sets JSFUN_CONSTRUCTOR so `new WebSocket(...)`
     // works (plain define_fn produces an uncallable-with-`new` function).
     define_ctor(cx, global, c"WebSocket", Some(websocket_ctor), 2);
-
-    // MessageChannel / MessagePort scheduler stub. MessageEvent itself comes
-    // from install_youtube_polyfills's JS Event/CustomEvent prototype chain.
-    define_ctor_with_prototype(cx, global, c"MessageChannel", Some(message_channel_ctor), 0);
 
     // MediaSource / SourceBuffer / HTMLMediaElement surface — gives YouTube's
     // player a real (if non-functional-decode) object graph to drive instead
@@ -872,51 +882,27 @@ unsafe extern "C" fn window_open(cx: *mut RawJSContext, argc: u32, vp: *mut Valu
     true
 }
 
-unsafe fn new_message_port(cx: &mut JSContext) -> *mut JSObject {
-    let port = new_plain_object(cx);
-    rooted!(&in(cx) let port_root = port);
-    define_fn(cx, port_root.handle(), c"postMessage", Some(noop), 1);
-    define_fn(cx, port_root.handle(), c"start", Some(noop), 0);
-    define_fn(cx, port_root.handle(), c"close", Some(noop), 0);
-    define_fn(cx, port_root.handle(), c"addEventListener", Some(noop), 2);
-    define_fn(
-        cx,
-        port_root.handle(),
-        c"removeEventListener",
-        Some(noop),
-        2,
-    );
-    set_prop_null(cx, port_root.handle(), c"onmessage");
-    port
-}
-
-unsafe extern "C" fn message_channel_ctor(
-    cx: *mut RawJSContext,
-    argc: u32,
-    vp: *mut Value,
-) -> bool {
-    let mut cx = JSContext::from_ptr(NonNull::new(cx).unwrap());
-    let args = CallArgs::from_vp(vp, argc);
-    let channel = new_plain_object(&mut cx);
-    rooted!(&in(cx) let channel_root = channel);
-    let port1 = new_message_port(&mut cx);
-    let port2 = new_message_port(&mut cx);
-    set_prop_obj(&mut cx, channel_root.handle(), c"port1", port1);
-    set_prop_obj(&mut cx, channel_root.handle(), c"port2", port2);
-    args.rval().set(ObjectValue(channel));
-    true
-}
-
 unsafe fn new_storage_object(cx: &mut JSContext, is_session: bool) -> *mut JSObject {
     let obj = new_plain_object(cx);
     rooted!(&in(cx) let obj_root = obj);
     set_prop_bool(cx, obj_root.handle(), c"__storage_session__", is_session);
     define_fn(cx, obj_root.handle(), c"getItem", Some(storage_get_item), 1);
     define_fn(cx, obj_root.handle(), c"setItem", Some(storage_set_item), 2);
-    define_fn(cx, obj_root.handle(), c"removeItem", Some(storage_remove_item), 1);
+    define_fn(
+        cx,
+        obj_root.handle(),
+        c"removeItem",
+        Some(storage_remove_item),
+        1,
+    );
     define_fn(cx, obj_root.handle(), c"clear", Some(storage_clear), 0);
     define_fn(cx, obj_root.handle(), c"key", Some(storage_key), 1);
-    define_getter(cx, obj_root.handle(), c"length", Some(storage_length_getter));
+    define_getter(
+        cx,
+        obj_root.handle(),
+        c"length",
+        Some(storage_length_getter),
+    );
     obj
 }
 
@@ -1271,6 +1257,59 @@ unsafe fn install_youtube_polyfills(cx: &mut JSContext, global: mozjs::gc::Handl
             };
             globalThis.MessageEvent.prototype = Object.create(globalThis.Event.prototype);
 
+            globalThis.MessagePort = function MessagePort() {};
+            globalThis.MessagePort.prototype.postMessage = function(data) {
+                var target = this.__peer__;
+                if (!target || target.__closed__) return;
+                queueMicrotask(function() {
+                    if (target.__closed__) return;
+                    var event = new MessageEvent('message', { data: data, origin: '', source: null });
+                    event.target = target;
+                    event.currentTarget = target;
+                    var handler = target.onmessage;
+                    if (typeof handler === 'function') {
+                        try { handler.call(target, event); } catch (e) { setTimeout(function(){ throw e; }, 0); }
+                    }
+                    var listeners = target.__listeners || [];
+                    for (var i = 0; i < listeners.length; i++) {
+                        try { listeners[i].call(target, event); } catch (e) { setTimeout(function(){ throw e; }, 0); }
+                    }
+                });
+            };
+            globalThis.MessagePort.prototype.start = function() {};
+            globalThis.MessagePort.prototype.close = function() {
+                this.__closed__ = true;
+                this.onmessage = null;
+                this.__listeners = [];
+                this.__peer__ = null;
+            };
+            globalThis.MessagePort.prototype.addEventListener = function(type, listener) {
+                if (type !== 'message' || typeof listener !== 'function') return;
+                if (!this.__listeners) this.__listeners = [];
+                this.__listeners.push(listener);
+            };
+            globalThis.MessagePort.prototype.removeEventListener = function(type, listener) {
+                if (type !== 'message' || !this.__listeners) return;
+                this.__listeners = this.__listeners.filter(function(fn) { return fn !== listener; });
+            };
+            globalThis.MessagePort.prototype.constructor = globalThis.MessagePort;
+
+            globalThis.MessageChannel = function MessageChannel() {
+                var port1 = Object.create(globalThis.MessagePort.prototype);
+                var port2 = Object.create(globalThis.MessagePort.prototype);
+                port1.__peer__ = port2;
+                port2.__peer__ = port1;
+                port1.onmessage = null;
+                port2.onmessage = null;
+                port1.__listeners = [];
+                port2.__listeners = [];
+                port1.__closed__ = false;
+                port2.__closed__ = false;
+                this.port1 = port1;
+                this.port2 = port2;
+            };
+            globalThis.MessageChannel.prototype.constructor = globalThis.MessageChannel;
+
             globalThis.PromiseRejectionEvent = function PromiseRejectionEvent(type, init) {
                 globalThis.Event.call(this, type, init);
                 init = init || {};
@@ -1317,6 +1356,8 @@ unsafe fn install_youtube_polyfills(cx: &mut JSContext, global: mozjs::gc::Handl
         r#"
         (function() {
             var registry = {};
+            var pending = Object.create(null);
+            var domModules = Object.create(null);
             var patchedCreateElement = false;
             function trace(msg) {
                 console.log('[yt-life] ' + msg);
@@ -1328,6 +1369,107 @@ unsafe fn install_youtube_polyfills(cx: &mut JSContext, global: mozjs::gc::Handl
                 var message = error && (error.name || 'Error') + ': ' + (error.message || '');
                 var stack = error && error.stack ? ('\n' + error.stack) : '';
                 console.log('[yt-life] ERROR ' + where + ': ' + (message || String(error)) + stack);
+            }
+
+            function shouldTrack(name) {
+                return !!name && name.indexOf('-') >= 0;
+            }
+
+            function getElementId(el) {
+                if (!el) return '';
+                try {
+                    if (typeof el.id === 'string' && el.id) return el.id;
+                } catch (e) {}
+                try {
+                    if (typeof el.getAttribute === 'function') {
+                        return el.getAttribute('id') || '';
+                    }
+                } catch (e) {}
+                return '';
+            }
+
+            function findTemplateForDomModule(el) {
+                if (!el) return null;
+                try {
+                    if (el.__aurora_template__) return el.__aurora_template__;
+                } catch (e) {}
+
+                var tpl = null;
+                try {
+                    if (typeof el.querySelector === 'function') {
+                        tpl = el.querySelector('template');
+                    }
+                } catch (e) {}
+
+                if (!tpl) {
+                    try {
+                        if (el.content && el.content.nodeType === 11) {
+                            tpl = el.content;
+                        }
+                    } catch (e) {}
+                }
+
+                if (tpl) {
+                    try { el.__aurora_template__ = tpl; } catch (e) {}
+                }
+                return tpl;
+            }
+
+            function registerDomModule(el) {
+                var id = getElementId(el);
+                if (!id) return null;
+                var tpl = findTemplateForDomModule(el);
+                if (!tpl) return null;
+                domModules[id] = tpl;
+                return tpl;
+            }
+
+            function installTemplateAccessor(name, ctor) {
+                if (!ctor || ctor.__aurora_template_accessor__) return;
+                var descriptor = Object.getOwnPropertyDescriptor(ctor, 'template');
+                var originalGetter = descriptor && descriptor.get;
+                var originalValue = descriptor && Object.prototype.hasOwnProperty.call(descriptor, 'value')
+                    ? descriptor.value
+                    : undefined;
+                var ownTemplate = originalValue;
+
+                try {
+                    Object.defineProperty(ctor, 'template', {
+                        configurable: true,
+                        enumerable: descriptor ? descriptor.enumerable : false,
+                        get: function() {
+                            var template = ownTemplate;
+                            if (!template && originalGetter) {
+                                try {
+                                    template = originalGetter.call(this);
+                                } catch (e) {
+                                    template = null;
+                                }
+                            }
+                            if (template) return template;
+                            var moduleId = name || (this && this.is) || '';
+                            if (moduleId && domModules[moduleId]) {
+                                return domModules[moduleId];
+                            }
+                            return null;
+                        },
+                        set: function(value) {
+                            ownTemplate = value;
+                        }
+                    });
+                    ctor.__aurora_template_accessor__ = true;
+                } catch (e) {
+                    // If the property is not configurable, leave the original in place.
+                }
+            }
+
+            function shouldReplayConstructor(ctor) {
+                if (typeof ctor !== 'function') return false;
+                var source = '';
+                try {
+                    source = Function.prototype.toString.call(ctor);
+                } catch (e) {}
+                return source.indexOf('class ') !== 0;
             }
 
             // Upgrade: swap the plain stub element's prototype to the
@@ -1348,44 +1490,36 @@ unsafe fn install_youtube_polyfills(cx: &mut JSContext, global: mozjs::gc::Handl
                 if (shouldTraceName(name)) trace('upgrade ' + name + ' connect=' + (connect !== false));
                 try {
                     Object.setPrototypeOf(el, ctor.prototype);
-                    var hadObjectInitializeProperties =
-                        Object.prototype.hasOwnProperty.call(Object.prototype, '_initializeProperties');
-                    var oldObjectInitializeProperties = Object.prototype._initializeProperties;
-                    if (typeof el._initializeProperties !== 'function') {
-                        try {
-                            Object.defineProperty(el, '_initializeProperties', {
+                    if (shouldReplayConstructor(ctor)) {
+                        var hadObjectInitializeProperties =
+                            Object.prototype.hasOwnProperty.call(Object.prototype, '_initializeProperties');
+                        var oldObjectInitializeProperties = Object.prototype._initializeProperties;
+                        if (typeof el._initializeProperties !== 'function') {
+                            try {
+                                Object.defineProperty(el, '_initializeProperties', {
+                                    value: function(){},
+                                    configurable: true,
+                                    writable: true
+                                });
+                            } catch (e) {
+                                el._initializeProperties = function(){};
+                            }
+                        }
+                        if (typeof Object.prototype._initializeProperties !== 'function') {
+                            Object.defineProperty(Object.prototype, '_initializeProperties', {
                                 value: function(){},
                                 configurable: true,
                                 writable: true
                             });
-                        } catch (e) {
-                            el._initializeProperties = function(){};
                         }
-                    }
-                    if (typeof Object.prototype._initializeProperties !== 'function') {
-                        Object.defineProperty(Object.prototype, '_initializeProperties', {
-                            value: function(){},
-                            configurable: true,
-                            writable: true
-                        });
-                    }
-                    var oldHTMLElement = globalThis.HTMLElement;
-                    if (typeof oldHTMLElement === 'function') {
-                        var HTMLElementDuringUpgrade = function HTMLElement() {};
-                        HTMLElementDuringUpgrade.prototype = oldHTMLElement.prototype;
-                        try { Object.setPrototypeOf(HTMLElementDuringUpgrade, oldHTMLElement); } catch (e) {}
-                        globalThis.HTMLElement = HTMLElementDuringUpgrade;
-                    }
-                    try {
-                        ctor.call(el);
-                    } finally {
-                        if (typeof oldHTMLElement === 'function') {
-                            globalThis.HTMLElement = oldHTMLElement;
-                        }
-                        if (hadObjectInitializeProperties) {
-                            Object.prototype._initializeProperties = oldObjectInitializeProperties;
-                        } else {
-                            delete Object.prototype._initializeProperties;
+                        try {
+                            ctor.call(el);
+                        } finally {
+                            if (hadObjectInitializeProperties) {
+                                Object.prototype._initializeProperties = oldObjectInitializeProperties;
+                            } else {
+                                delete Object.prototype._initializeProperties;
+                            }
                         }
                     }
                 } catch (e) {
@@ -1399,6 +1533,9 @@ unsafe fn install_youtube_polyfills(cx: &mut JSContext, global: mozjs::gc::Handl
                             el.connectedCallback();
                         }
                     } catch (e) { traceError('connectedCallback ' + name, e); }
+                }
+                if (name === 'dom-module') {
+                    registerDomModule(el);
                 }
                 if (globalThis.__aurora_debug_youtube__ && (name === 'ytd-app' || name === 'ytd-masthead')) {
                     try {
@@ -1419,10 +1556,41 @@ unsafe fn install_youtube_polyfills(cx: &mut JSContext, global: mozjs::gc::Handl
                 }
             }
 
+            function rememberPending(el) {
+                if (!el || el.nodeType !== 1) return;
+                var name = el.localName || (el.tagName ? el.tagName.toLowerCase() : '');
+                if (!shouldTrack(name)) return;
+                var ctor = registry[name];
+                if (ctor) {
+                    tryUpgrade(el, true);
+                    return;
+                }
+                if (!pending[name]) pending[name] = [];
+                pending[name].push(el);
+            }
+
+            function flushPending(name) {
+                var list = pending[name];
+                if (!list || !list.length) return;
+                pending[name] = [];
+                for (var i = 0; i < list.length; i++) {
+                    tryUpgrade(list[i], true);
+                }
+            }
+
+            function primeTree(root) {
+                if (!root) return;
+                rememberPending(root);
+                if (typeof root.querySelectorAll === 'function') {
+                    var all = root.querySelectorAll('*');
+                    for (var i = 0; i < all.length; i++) { rememberPending(all[i]); }
+                }
+            }
+
             function upgradeTree(root) {
                 if (!root) return;
                 try {
-                    tryUpgrade(root, true);
+                    primeTree(root);
                     if (typeof root.querySelectorAll === 'function') {
                         var all = root.querySelectorAll('*');
                         for (var i = 0; i < all.length; i++) { tryUpgrade(all[i], true); }
@@ -1441,6 +1609,7 @@ unsafe fn install_youtube_polyfills(cx: &mut JSContext, global: mozjs::gc::Handl
                 document.createElement = function(tagName, options) {
                     var el = orig(tagName, options);
                     if (String(tagName).indexOf('-') >= 0 && shouldTraceName(String(tagName))) trace('createElement ' + tagName);
+                    rememberPending(el);
                     tryUpgrade(el, false);
                     return el;
                 };
@@ -1450,13 +1619,10 @@ unsafe fn install_youtube_polyfills(cx: &mut JSContext, global: mozjs::gc::Handl
                 define: function(name, ctor, opts) {
                     if (shouldTraceName(name)) trace('define ' + name);
                     registry[name] = ctor;
-                    ensureCreateElementPatch();
-                    if (typeof document !== 'undefined' && typeof document.querySelectorAll === 'function') {
-                        try {
-                            var existing = document.querySelectorAll(name);
-                            for (var i = 0; i < existing.length; i++) { tryUpgrade(existing[i], true); }
-                        } catch (e) { traceError('upgrade existing ' + name, e); }
+                    if (name.indexOf('-') >= 0) {
+                        installTemplateAccessor(name, ctor);
                     }
+                    flushPending(name);
                 },
                 get: function(name) { return registry[name]; },
                 whenDefined: function(name) {
@@ -1468,8 +1634,12 @@ unsafe fn install_youtube_polyfills(cx: &mut JSContext, global: mozjs::gc::Handl
                         };
                     });
                 },
-                upgrade: function(root) { trace('customElements.upgrade'); upgradeTree(root); }
+                upgrade: function(root) { trace('customElements.upgrade'); upgradeTree(root); },
+                __aurora_track_custom_element__: function(el) { rememberPending(el); }
             };
+
+            globalThis.__aurora_init_custom_elements__ = function() { ensureCreateElementPatch(); };
+            globalThis.__aurora_track_custom_element__ = function(el) { rememberPending(el); };
         })();
     "#,
     );
@@ -2038,13 +2208,7 @@ unsafe extern "C" fn url_search_params_ctor(
     let args = CallArgs::from_vp(vp, argc);
     let obj = new_plain_object(&mut cx);
     rooted!(&in(cx) let obj_root = obj);
-    define_fn(
-        &mut cx,
-        obj_root.handle(),
-        c"get",
-        Some(prompt_null),
-        1,
-    );
+    define_fn(&mut cx, obj_root.handle(), c"get", Some(prompt_null), 1);
     define_fn(&mut cx, obj_root.handle(), c"set", Some(noop), 2);
     define_fn(&mut cx, obj_root.handle(), c"append", Some(noop), 2);
     define_fn(&mut cx, obj_root.handle(), c"delete", Some(noop), 1);
@@ -2092,13 +2256,7 @@ unsafe extern "C" fn headers_ctor(cx: *mut RawJSContext, argc: u32, vp: *mut Val
     let args = CallArgs::from_vp(vp, argc);
     let obj = new_plain_object(&mut cx);
     rooted!(&in(cx) let obj_root = obj);
-    define_fn(
-        &mut cx,
-        obj_root.handle(),
-        c"get",
-        Some(prompt_null),
-        1,
-    );
+    define_fn(&mut cx, obj_root.handle(), c"get", Some(prompt_null), 1);
     define_fn(&mut cx, obj_root.handle(), c"set", Some(noop), 2);
     define_fn(&mut cx, obj_root.handle(), c"append", Some(noop), 2);
     define_fn(&mut cx, obj_root.handle(), c"delete", Some(noop), 1);

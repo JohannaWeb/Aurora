@@ -9,7 +9,7 @@ use mozjs::jsval::{BooleanValue, ObjectValue};
 use mozjs::rooted;
 use mozjs::rust::wrappers2;
 
-use crate::dom::NodePtr;
+use crate::dom::{Node, NodePtr};
 use crate::js_sm::utils::*;
 
 use api::*;
@@ -235,10 +235,25 @@ pub(in crate::js_sm) unsafe fn install_document(
         Some(return_null_doc),
         0,
     );
+    define_getter(
+        cx,
+        doc_root.handle(),
+        c"currentScript",
+        Some(doc_current_script_getter),
+    );
 
     // Register as global property
     rooted!(&in(cx) let doc_val = ObjectValue(doc_obj));
     wrappers2::JS_SetProperty(cx, global, c"document".as_ptr(), doc_val.handle());
+
+    call_named_global_fn(
+        cx,
+        global,
+        c"__aurora_init_custom_elements__",
+        mozjs::jsval::UndefinedValue(),
+    );
+
+    prime_custom_elements(cx, document);
 }
 
 unsafe fn install_head_body(
@@ -269,6 +284,31 @@ unsafe fn install_head_body(
     } else {
         set_prop_null(cx, doc_root, c"body");
         set_prop_null(cx, doc_root, c"documentElement");
+    }
+}
+
+unsafe fn prime_custom_elements(cx: &mut JSContext, node: &NodePtr) {
+    let children = {
+        let borrowed = node.borrow();
+        match &*borrowed {
+            Node::Document { children, .. } => {
+                for child in children.iter() {
+                    prime_custom_elements(cx, child);
+                }
+                return;
+            }
+            Node::Element(el) => {
+                if el.tag_name.contains('-') {
+                    let _ = create_js_node(cx, node.clone());
+                }
+                el.children.clone()
+            }
+            Node::Text(_) => Vec::new(),
+        }
+    };
+
+    for child in children {
+        prime_custom_elements(cx, &child);
     }
 }
 

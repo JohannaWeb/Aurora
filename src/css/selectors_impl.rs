@@ -242,15 +242,13 @@ impl<'i> selectors::parser::Parser<'i> for AurSelectorParser {
                 let lang = parser.expect_ident_or_string()?.to_owned();
                 Ok(AurNonTSPseudoClass::Lang(CssString(lang.to_string())))
             }
-            "host" => {
-                match SelectorList::parse(&AurSelectorParser, parser, ParseRelative::No) {
-                    Ok(list) => Ok(AurNonTSPseudoClass::HostWith(Box::new(list))),
-                    Err(_) => {
-                        while parser.next().is_ok() {}
-                        Ok(AurNonTSPseudoClass::Host)
-                    }
+            "host" => match SelectorList::parse(&AurSelectorParser, parser, ParseRelative::No) {
+                Ok(list) => Ok(AurNonTSPseudoClass::HostWith(Box::new(list))),
+                Err(_) => {
+                    while parser.next().is_ok() {}
+                    Ok(AurNonTSPseudoClass::Host)
                 }
-            }
+            },
             _ => {
                 // Drain the argument list so the parser stays in sync.
                 while parser.next().is_ok() {}
@@ -466,7 +464,13 @@ impl<'a> selectors::Element for CascadeElement<'a> {
                     return false;
                 }
                 selector_list.slice().iter().any(|sel| {
-                    element_matches(sel, self.element, self.ancestors, self.siblings, self.sibling_index)
+                    element_matches(
+                        sel,
+                        self.element,
+                        self.ancestors,
+                        self.siblings,
+                        self.sibling_index,
+                    )
                 })
             }
             // All other state pseudo-classes need runtime interaction tracking.

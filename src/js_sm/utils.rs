@@ -165,6 +165,21 @@ pub(super) unsafe fn get_prop_i32(
     }
 }
 
+/// Read a property and coerce it to f64. Missing/non-numeric values read as `0.0`.
+pub(super) unsafe fn get_prop_f64(
+    cx: &mut JSContext,
+    obj: mozjs::gc::Handle<*mut JSObject>,
+    name: &CStr,
+) -> f64 {
+    rooted!(&in(cx) let mut val = UndefinedValue());
+    if wrappers2::JS_GetProperty(cx, obj, name.as_ptr(), val.handle_mut()) && val.get().is_number()
+    {
+        val.get().to_number()
+    } else {
+        0.0
+    }
+}
+
 // ── Function definition ──────────────────────────────────────────────────────
 
 pub(super) unsafe fn define_fn(

@@ -4,6 +4,8 @@ use std::ptr;
 use std::rc::Rc;
 use std::time::Instant;
 
+use mozjs::context::RawJSContext;
+use mozjs::jsapi::{CallArgs, JSObject};
 use mozjs::jsapi::{OnNewGlobalHookOption, Value};
 use mozjs::jsval::{DoubleValue, UndefinedValue};
 use mozjs::realm::AutoRealm;
@@ -26,6 +28,48 @@ use super::mutation_observer::drain_mutation_observers;
 use super::registry::NodeRegistry;
 use super::state::SmState;
 use super::utils::*;
+
+unsafe fn make_idle_deadline(
+    cx: &mut mozjs::context::JSContext,
+    did_timeout: bool,
+    time_remaining_ms: f64,
+) -> *mut JSObject {
+    let obj = new_plain_object(cx);
+    rooted!(&in(cx) let obj_root = obj);
+    set_prop_bool(cx, obj_root.handle(), c"didTimeout", did_timeout);
+    set_prop_f64(
+        cx,
+        obj_root.handle(),
+        c"__aurora_time_remaining_ms__",
+        time_remaining_ms,
+    );
+    define_fn(
+        cx,
+        obj_root.handle(),
+        c"timeRemaining",
+        Some(idle_deadline_time_remaining),
+        0,
+    );
+    obj
+}
+
+unsafe extern "C" fn idle_deadline_time_remaining(
+    cx: *mut RawJSContext,
+    argc: u32,
+    vp: *mut Value,
+) -> bool {
+    let mut cx = mozjs::context::JSContext::from_ptr(std::ptr::NonNull::new(cx).unwrap());
+    let args = CallArgs::from_vp(vp, argc);
+    let this_obj = args.thisv().get().to_object_or_null();
+    let remaining = if this_obj.is_null() {
+        0.0
+    } else {
+        rooted!(&in(cx) let this_root = this_obj);
+        get_prop_f64(&mut cx, this_root.handle(), c"__aurora_time_remaining_ms__")
+    };
+    args.rval().set(DoubleValue(remaining));
+    true
+}
 
 pub struct SmRuntime {
     rt: Runtime,
@@ -52,13 +96,17 @@ impl SmRuntime {
 
         // Install our custom Promise job queue BEFORE any realm/global work.
         // This replaces the need for UseInternalJobQueues (which crashes post-init).
-        let mut job_queue = Box::new(AuroraJobQueue { pending: Vec::new(), total_enqueued: 0 });
+        let mut job_queue = Box::new(AuroraJobQueue {
+            pending: Vec::new(),
+            total_enqueued: 0,
+        });
         let js_queue = unsafe { install_job_queue(rt.cx(), &mut *job_queue) };
 
         let state = Box::new(SmState {
             document: document.clone(),
             registry: NodeRegistry::new(),
             window: WindowCapture::new(),
+            current_script_node_id: None,
             global: ptr::null_mut(),
             mutation_observers: Vec::new(),
         });
@@ -82,6 +130,9 @@ impl SmRuntime {
 
             // Set state pointer on context so native callbacks can access it
             JS_SetContextPrivate(cx, state_ptr as *mut std::ffi::c_void);
+            // Make the raw global available before bootstrapping helpers that
+            // need to call back into JS during document priming.
+            (*state_ptr).global = *global;
 
             let mut realm = AutoRealm::new_from_handle(cx, global.handle());
             let (global_handle, realm_ref) = realm.global_and_reborrow();
@@ -90,8 +141,6 @@ impl SmRuntime {
             let window_cap = install_globals(realm_ref, global_handle, &document);
             install_document(realm_ref, global_handle, &document);
 
-            // Store the global pointer in state (for callback GC rooting)
-            (*state_ptr).global = *global_handle;
             // Replace the WindowCapture with the one returned from install_globals
             (*state_ptr).window = window_cap;
             // Register document for query dispatch
@@ -129,13 +178,8 @@ impl SmRuntime {
             let options = CompileOptionsWrapper::new(cx, "inline", 1);
             let mut realm = AutoRealm::new_from_handle(cx, global.handle());
             let (global_handle, realm_ref) = realm.global_and_reborrow();
-            let result = evaluate_script(
-                realm_ref,
-                global_handle,
-                script,
-                rval.handle_mut(),
-                options,
-            );
+            let result =
+                evaluate_script(realm_ref, global_handle, script, rval.handle_mut(), options);
             // Drain native Promise reactions (jq_enqueue_promise_job → q.pending)
             // and queueMicrotask callbacks in a loop until both queues are empty.
             // Without this loop, Promise chains never resolve during script eval.
@@ -158,7 +202,11 @@ impl SmRuntime {
             }
             let total_jobs = self.job_queue.total_enqueued - enqueued_before;
             if total_jobs > 0 || total_microtasks > 0 {
-                log::info!("[execute] drained {} promise jobs, {} microtasks", total_jobs, total_microtasks);
+                log::info!(
+                    "[execute] drained {} promise jobs, {} microtasks",
+                    total_jobs,
+                    total_microtasks
+                );
             }
             match result {
                 Ok(_) => Ok(()),
@@ -170,6 +218,11 @@ impl SmRuntime {
         };
 
         result
+    }
+
+    pub fn set_current_script(&mut self, script: Option<&NodePtr>) {
+        self.state.current_script_node_id =
+            script.map(|node| self.state.registry.register(node.clone()));
     }
 
     pub fn set_shared_state(
@@ -252,7 +305,19 @@ impl SmRuntime {
             // Fire ready timers
             for entry in &ready {
                 let id = entry.id;
-                call_stored_callback(realm_ref, global_handle, id, &[]);
+                if entry.is_idle {
+                    let deadline =
+                        make_idle_deadline(realm_ref, entry.idle_timeout.is_some(), 50.0);
+                    rooted!(&in(realm_ref) let deadline_val = mozjs::jsval::ObjectValue(deadline));
+                    call_stored_callback(
+                        realm_ref,
+                        global_handle,
+                        id,
+                        &[deadline_val.handle().get()],
+                    );
+                } else {
+                    call_stored_callback(realm_ref, global_handle, id, &[]);
+                }
                 clear_pending_exception(realm_ref);
                 // Drain Promise reactions queued by this timer callback.
                 mozjs::rust::wrappers2::RunJobs(realm_ref);
@@ -275,6 +340,8 @@ impl SmRuntime {
                         id: entry.id,
                         deadline: now + interval,
                         interval: Some(interval),
+                        is_idle: false,
+                        idle_timeout: None,
                     });
             }
         }
@@ -417,6 +484,10 @@ impl SmRuntime {
 impl crate::js_engine::JsRuntime for SmRuntime {
     fn execute(&mut self, script: &str) -> Result<(), String> {
         SmRuntime::execute(self, script)
+    }
+
+    fn set_current_script(&mut self, script: Option<&crate::dom::NodePtr>) {
+        SmRuntime::set_current_script(self, script)
     }
 
     fn set_shared_state(

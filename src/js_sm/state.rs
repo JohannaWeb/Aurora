@@ -10,6 +10,7 @@ pub(super) struct SmState {
     pub(super) document: NodePtr,
     pub(super) registry: NodeRegistry,
     pub(super) window: WindowCapture,
+    pub(super) current_script_node_id: Option<u32>,
     /// Raw pointer to the JS global object.  Always valid while SmRuntime is alive.
     pub(super) global: *mut JSObject,
     /// Active `MutationObserver.observe()` registrations and their pending records.

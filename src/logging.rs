@@ -116,16 +116,16 @@ pub fn init() {
         // ── Default level ─────────────────────────────────────────────────────
         .level(log::LevelFilter::Info)
         // ── Aurora channels ───────────────────────────────────────────────────
-        .level_for("aurora::net",    log::LevelFilter::Info)
-        .level_for("aurora::html",   log::LevelFilter::Info)
-        .level_for("aurora::parser", log::LevelFilter::Off)  // opt-in: flip to Trace
-        .level_for("aurora::css",    log::LevelFilter::Warn)
-        .level_for("aurora::js",     log::LevelFilter::Info) // TEMP: was Warn — need [yt-life]/console.log traces for custom-element debugging
-        .level_for("aurora::api",    log::LevelFilter::Warn)
+        .level_for("aurora::net", log::LevelFilter::Info)
+        .level_for("aurora::html", log::LevelFilter::Info)
+        .level_for("aurora::parser", log::LevelFilter::Off) // opt-in: flip to Trace
+        .level_for("aurora::css", log::LevelFilter::Warn)
+        .level_for("aurora::js", log::LevelFilter::Info) // TEMP: was Warn — need [yt-life]/console.log traces for custom-element debugging
+        .level_for("aurora::api", log::LevelFilter::Warn)
         .level_for("aurora::layout", log::LevelFilter::Debug)
         .level_for("aurora::render", log::LevelFilter::Debug)
         // ── Silence noisy deps ────────────────────────────────────────────────
-        .level_for("selectors",      log::LevelFilter::Off)
+        .level_for("selectors", log::LevelFilter::Off)
         .chain(std::io::stderr())
         .chain(fern::log_file(&log_path).expect("could not open log file"))
         .apply()

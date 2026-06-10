@@ -47,7 +47,13 @@ pub(super) unsafe fn install_mutation_observer(
     cx: &mut JSContext,
     global: mozjs::gc::Handle<*mut JSObject>,
 ) {
-    define_ctor(cx, global, c"MutationObserver", Some(mutation_observer_ctor), 1);
+    define_ctor(
+        cx,
+        global,
+        c"MutationObserver",
+        Some(mutation_observer_ctor),
+        1,
+    );
 }
 
 unsafe extern "C" fn mutation_observer_ctor(
@@ -73,11 +79,39 @@ unsafe extern "C" fn mutation_observer_ctor(
     let obj = new_plain_object(&mut cx);
     rooted!(&in(cx) let obj_root = obj);
     set_prop_i32(&mut cx, obj_root.handle(), c"__mo_id__", observer_id as i32);
-    set_prop_i32(&mut cx, obj_root.handle(), c"__mo_cb_id__", callback_id as i32);
-    set_prop_i32(&mut cx, obj_root.handle(), c"__mo_self_id__", self_id as i32);
-    define_fn(&mut cx, obj_root.handle(), c"observe", Some(mutation_observer_observe), 2);
-    define_fn(&mut cx, obj_root.handle(), c"disconnect", Some(mutation_observer_disconnect), 0);
-    define_fn(&mut cx, obj_root.handle(), c"takeRecords", Some(mutation_observer_take_records), 0);
+    set_prop_i32(
+        &mut cx,
+        obj_root.handle(),
+        c"__mo_cb_id__",
+        callback_id as i32,
+    );
+    set_prop_i32(
+        &mut cx,
+        obj_root.handle(),
+        c"__mo_self_id__",
+        self_id as i32,
+    );
+    define_fn(
+        &mut cx,
+        obj_root.handle(),
+        c"observe",
+        Some(mutation_observer_observe),
+        2,
+    );
+    define_fn(
+        &mut cx,
+        obj_root.handle(),
+        c"disconnect",
+        Some(mutation_observer_disconnect),
+        0,
+    );
+    define_fn(
+        &mut cx,
+        obj_root.handle(),
+        c"takeRecords",
+        Some(mutation_observer_take_records),
+        0,
+    );
 
     // Keep the observer object itself alive and retrievable so it can be
     // passed as the second argument to the callback on delivery.
@@ -153,7 +187,9 @@ unsafe extern "C" fn mutation_observer_disconnect(
         rooted!(&in(cx) let this_root = this_obj);
         let observer_id = get_prop_i32(&mut cx, this_root.handle(), c"__mo_id__") as u32;
         let state = &mut *get_state_ptr(&cx);
-        state.mutation_observers.retain(|e| e.observer_id != observer_id);
+        state
+            .mutation_observers
+            .retain(|e| e.observer_id != observer_id);
     }
 
     args.rval().set(UndefinedValue());
@@ -277,7 +313,11 @@ fn node_contains(root: &NodePtr, needle: &NodePtr) -> bool {
 /// Called at task/microtask checkpoints from `SmRuntime`. Loops to handle
 /// observers whose callbacks themselves trigger further mutations.
 pub(in crate::js_sm) unsafe fn drain_mutation_observers(cx: &mut JSContext, state: &mut SmState) {
-    if state.mutation_observers.iter().all(|e| e.pending.is_empty()) {
+    if state
+        .mutation_observers
+        .iter()
+        .all(|e| e.pending.is_empty())
+    {
         return;
     }
 
@@ -288,7 +328,11 @@ pub(in crate::js_sm) unsafe fn drain_mutation_observers(cx: &mut JSContext, stat
         let mut work: Vec<(u32, u32, Vec<MutationRecordData>)> = Vec::new();
         for entry in state.mutation_observers.iter_mut() {
             if !entry.pending.is_empty() {
-                work.push((entry.callback_id, entry.self_id, std::mem::take(&mut entry.pending)));
+                work.push((
+                    entry.callback_id,
+                    entry.self_id,
+                    std::mem::take(&mut entry.pending),
+                ));
             }
         }
         if work.is_empty() {
@@ -301,9 +345,20 @@ pub(in crate::js_sm) unsafe fn drain_mutation_observers(cx: &mut JSContext, stat
 
             let self_name = cb_prop_name(self_id);
             rooted!(&in(cx) let mut self_val = UndefinedValue());
-            wrappers2::JS_GetProperty(cx, global.handle(), self_name.as_ptr(), self_val.handle_mut());
+            wrappers2::JS_GetProperty(
+                cx,
+                global.handle(),
+                self_name.as_ptr(),
+                self_val.handle_mut(),
+            );
 
-            call_observer_callback(cx, global.handle(), callback_id, arr_root.get(), self_val.get());
+            call_observer_callback(
+                cx,
+                global.handle(),
+                callback_id,
+                arr_root.get(),
+                self_val.get(),
+            );
             clear_pending_exception(cx);
         }
     }
@@ -370,7 +425,11 @@ unsafe fn build_mutation_record(
     set_prop_null(cx, obj_root.handle(), c"nextSibling");
 
     match rec {
-        MutationRecordData::ChildList { target, added, removed } => {
+        MutationRecordData::ChildList {
+            target,
+            added,
+            removed,
+        } => {
             set_prop_str(cx, obj_root.handle(), c"type", "childList");
             set_target(cx, obj_root.handle(), state, *target);
             set_prop_null(cx, obj_root.handle(), c"attributeName");

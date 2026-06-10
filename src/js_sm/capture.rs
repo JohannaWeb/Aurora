@@ -8,6 +8,8 @@ pub(super) struct TimerEntry {
     pub(super) id: u32,
     pub(super) deadline: Instant,
     pub(super) interval: Option<Duration>,
+    pub(super) is_idle: bool,
+    pub(super) idle_timeout: Option<Duration>,
 }
 
 #[derive(Clone)]

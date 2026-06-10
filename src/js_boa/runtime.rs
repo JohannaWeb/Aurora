@@ -392,6 +392,8 @@ impl crate::js_engine::JsRuntime for BoaRuntime {
             .map_err(|e| e.to_string())
     }
 
+    fn set_current_script(&mut self, _script: Option<&crate::dom::NodePtr>) {}
+
     fn set_shared_state(
         &mut self,
         layout_tree: Rc<RefCell<crate::layout::LayoutTree>>,
