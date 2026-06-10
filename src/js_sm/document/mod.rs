@@ -131,6 +131,20 @@ pub(in crate::js_sm) unsafe fn install_document(
     define_fn(
         cx,
         doc_root.handle(),
+        c"importNode",
+        Some(doc_import_node),
+        2,
+    );
+    define_fn(
+        cx,
+        doc_root.handle(),
+        c"adoptNode",
+        Some(doc_import_node),
+        1,
+    );
+    define_fn(
+        cx,
+        doc_root.handle(),
         c"createEvent",
         Some(doc_create_event),
         1,

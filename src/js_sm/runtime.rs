@@ -21,6 +21,8 @@ use super::capture::WindowCapture;
 use super::document::install_document;
 use super::engine::get_engine_handle;
 use super::globals::install_globals;
+use super::job_queue::{AuroraJobQueue, install_job_queue, remove_job_queue};
+use super::mutation_observer::drain_mutation_observers;
 use super::registry::NodeRegistry;
 use super::state::SmState;
 use super::utils::*;
@@ -30,7 +32,17 @@ pub struct SmRuntime {
     document: NodePtr,
     // Box for stable address used by JS_SetContextPrivate
     state: Box<SmState>,
+    // Box for stable address passed as *const c_void to the C++ job queue
+    job_queue: Box<AuroraJobQueue>,
+    // Opaque JS::JobQueue* installed on the context; freed in Drop
+    js_queue: *mut mozjs::jsapi::JS::JobQueue,
     sync_reflow_callback: Option<Box<dyn Fn()>>,
+}
+
+impl Drop for SmRuntime {
+    fn drop(&mut self) {
+        unsafe { remove_job_queue(self.js_queue) };
+    }
 }
 
 impl SmRuntime {
@@ -38,11 +50,17 @@ impl SmRuntime {
         let handle = get_engine_handle();
         let mut rt = Runtime::new(handle);
 
+        // Install our custom Promise job queue BEFORE any realm/global work.
+        // This replaces the need for UseInternalJobQueues (which crashes post-init).
+        let mut job_queue = Box::new(AuroraJobQueue { pending: Vec::new(), total_enqueued: 0 });
+        let js_queue = unsafe { install_job_queue(rt.cx(), &mut *job_queue) };
+
         let state = Box::new(SmState {
             document: document.clone(),
             registry: NodeRegistry::new(),
             window: WindowCapture::new(),
             global: ptr::null_mut(),
+            mutation_observers: Vec::new(),
         });
 
         // We need the state pointer before setting up globals (globals set it)
@@ -92,6 +110,8 @@ impl SmRuntime {
             rt,
             document,
             state,
+            job_queue,
+            js_queue,
             sync_reflow_callback: None,
         }
     }
@@ -107,22 +127,43 @@ impl SmRuntime {
             rooted!(&in(cx) let global = global_raw);
             rooted!(&in(cx) let mut rval = UndefinedValue());
             let options = CompileOptionsWrapper::new(cx, "inline", 1);
-            // Keep the realm entered across both evaluation and exception
-            // retrieval: `evaluate_script` exits its own realm guard on return,
-            // so fetching the pending exception afterwards (with no realm
-            // entered) segfaults inside JS_GetPendingException.
             let mut realm = AutoRealm::new_from_handle(cx, global.handle());
+            let (global_handle, realm_ref) = realm.global_and_reborrow();
             let result = evaluate_script(
-                &mut realm,
-                global.handle(),
+                realm_ref,
+                global_handle,
                 script,
                 rval.handle_mut(),
                 options,
             );
+            // Drain native Promise reactions (jq_enqueue_promise_job → q.pending)
+            // and queueMicrotask callbacks in a loop until both queues are empty.
+            // Without this loop, Promise chains never resolve during script eval.
+            let enqueued_before = self.job_queue.total_enqueued;
+            let mut total_microtasks = 0usize;
+            for _ in 0..1000 {
+                mozjs::rust::wrappers2::RunJobs(realm_ref);
+                drain_mutation_observers(realm_ref, &mut self.state);
+                let ids: Vec<u32> = self.state.window.microtask_ids.drain(..).collect();
+                if ids.is_empty() {
+                    break;
+                }
+                total_microtasks += ids.len();
+                for id in ids {
+                    call_stored_callback(realm_ref, global_handle, id, &[]);
+                    delete_callback(realm_ref, global_handle, id);
+                    clear_pending_exception(realm_ref);
+                }
+                drain_mutation_observers(realm_ref, &mut self.state);
+            }
+            let total_jobs = self.job_queue.total_enqueued - enqueued_before;
+            if total_jobs > 0 || total_microtasks > 0 {
+                log::info!("[execute] drained {} promise jobs, {} microtasks", total_jobs, total_microtasks);
+            }
             match result {
                 Ok(_) => Ok(()),
                 Err(()) => {
-                    let msg = pending_exception_string(&mut realm);
+                    let msg = pending_exception_string(realm_ref);
                     Err(msg)
                 }
             }
@@ -176,7 +217,10 @@ impl SmRuntime {
 
     pub fn tick(&mut self, now: Instant) -> bool {
         let ready = self.ready_timers(now);
-        if ready.is_empty() && self.state.window.microtask_ids.is_empty() {
+        if ready.is_empty()
+            && self.state.window.microtask_ids.is_empty()
+            && self.job_queue.pending.is_empty()
+        {
             return false;
         }
 
@@ -201,6 +245,8 @@ impl SmRuntime {
                     delete_callback(realm_ref, global_handle, id);
                     clear_pending_exception(realm_ref);
                 }
+                mozjs::rust::wrappers2::RunJobs(realm_ref);
+                drain_mutation_observers(realm_ref, &mut self.state);
             }
 
             // Fire ready timers
@@ -208,6 +254,9 @@ impl SmRuntime {
                 let id = entry.id;
                 call_stored_callback(realm_ref, global_handle, id, &[]);
                 clear_pending_exception(realm_ref);
+                // Drain Promise reactions queued by this timer callback.
+                mozjs::rust::wrappers2::RunJobs(realm_ref);
+                drain_mutation_observers(realm_ref, &mut self.state);
                 fired = true;
 
                 if entry.interval.is_none() {
@@ -256,6 +305,9 @@ impl SmRuntime {
                 delete_callback(realm_ref, global_handle, entry.id);
                 clear_pending_exception(realm_ref);
             }
+            // Drain Promise reactions queued by rAF callbacks.
+            mozjs::rust::wrappers2::RunJobs(realm_ref);
+            drain_mutation_observers(realm_ref, &mut self.state);
         }
 
         self.state.registry.has_dirty_bits()
@@ -289,6 +341,8 @@ impl SmRuntime {
                 call_stored_callback(realm_ref, global_handle, *id, &[event_val]);
                 clear_pending_exception(realm_ref);
             }
+            mozjs::rust::wrappers2::RunJobs(realm_ref);
+            drain_mutation_observers(realm_ref, &mut self.state);
         }
 
         true
@@ -320,6 +374,8 @@ impl SmRuntime {
                 call_stored_callback(realm_ref, global_handle, *id, &[event_val]);
                 clear_pending_exception(realm_ref);
             }
+            mozjs::rust::wrappers2::RunJobs(realm_ref);
+            drain_mutation_observers(realm_ref, &mut self.state);
         }
     }
 
@@ -334,6 +390,7 @@ impl SmRuntime {
     pub fn has_ready_work(&self, now: Instant) -> bool {
         self.has_animation_frame_callbacks()
             || !self.state.window.microtask_ids.is_empty()
+            || !self.job_queue.pending.is_empty()
             || self.next_deadline().map(|d| d <= now).unwrap_or(false)
     }
 

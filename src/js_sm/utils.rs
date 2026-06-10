@@ -138,6 +138,33 @@ pub(super) unsafe fn get_prop_string(
     None
 }
 
+/// Read a property and coerce it to bool. Missing/non-boolean values read as `false`.
+pub(super) unsafe fn get_prop_bool(
+    cx: &mut JSContext,
+    obj: mozjs::gc::Handle<*mut JSObject>,
+    name: &CStr,
+) -> bool {
+    rooted!(&in(cx) let mut val = UndefinedValue());
+    wrappers2::JS_GetProperty(cx, obj, name.as_ptr(), val.handle_mut())
+        && val.get().is_boolean()
+        && val.get().to_boolean()
+}
+
+/// Read a property and coerce it to i32. Missing/non-numeric values read as `0`.
+pub(super) unsafe fn get_prop_i32(
+    cx: &mut JSContext,
+    obj: mozjs::gc::Handle<*mut JSObject>,
+    name: &CStr,
+) -> i32 {
+    rooted!(&in(cx) let mut val = UndefinedValue());
+    if wrappers2::JS_GetProperty(cx, obj, name.as_ptr(), val.handle_mut()) && val.get().is_number()
+    {
+        val.get().to_number() as i32
+    } else {
+        0
+    }
+}
+
 // ── Function definition ──────────────────────────────────────────────────────
 
 pub(super) unsafe fn define_fn(
@@ -445,6 +472,6 @@ pub(super) unsafe fn pending_exception_string(cx: &mut JSContext) -> String {
 pub(super) unsafe fn clear_pending_exception(cx: &mut JSContext) {
     if wrappers2::JS_IsExceptionPending(cx) {
         let msg = pending_exception_string(cx);
-        eprintln!("JS exception: {}", msg);
+        crate::logging::track_js_exception(&msg);
     }
 }

@@ -79,7 +79,7 @@ fn fnv1a(s: &str) -> u32 {
 // ─── NonTSPseudoClass ─────────────────────────────────────────────────────────
 
 /// Non-tree-structural pseudo-classes (state pseudo-classes, :lang, etc.)
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum AurNonTSPseudoClass {
     Link,
     Visited,
@@ -92,8 +92,23 @@ pub enum AurNonTSPseudoClass {
     Enabled,
     Placeholder,
     Lang(CssString),
+    /// `:host` — matches custom elements (tag names containing `-`).
+    Host,
+    /// `:host(selector)` — matches custom elements that also match the inner selector.
+    HostWith(Box<SelectorList<AuroraSelectorImpl>>),
     /// Catch-all for unrecognised pseudo-classes — always returns false.
     Unknown,
+}
+
+impl std::hash::Hash for AurNonTSPseudoClass {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        std::mem::discriminant(self).hash(state);
+        match self {
+            Self::Lang(s) => s.hash(state),
+            // HostWith: SelectorList has no Hash impl; hash nothing extra.
+            _ => {}
+        }
+    }
 }
 
 impl ToCss for AurNonTSPseudoClass {
@@ -110,6 +125,8 @@ impl ToCss for AurNonTSPseudoClass {
             Self::Enabled => dest.write_str(":enabled"),
             Self::Placeholder => dest.write_str("::placeholder"),
             Self::Lang(l) => write!(dest, ":lang({})", l.0),
+            Self::Host => dest.write_str(":host"),
+            Self::HostWith(_) => dest.write_str(":host(...)"),
             Self::Unknown => dest.write_str(":unknown"),
         }
     }
@@ -155,7 +172,7 @@ impl PseudoElement for AurPseudoElement {
 
 // ─── SelectorImpl ─────────────────────────────────────────────────────────────
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AuroraSelectorImpl;
 
 impl SelectorImpl for AuroraSelectorImpl {
@@ -188,6 +205,10 @@ impl<'i> selectors::parser::Parser<'i> for AurSelectorParser {
         false
     }
 
+    fn parse_slotted(&self) -> bool {
+        true
+    }
+
     fn parse_non_ts_pseudo_class(
         &self,
         _location: cssparser::SourceLocation,
@@ -204,6 +225,7 @@ impl<'i> selectors::parser::Parser<'i> for AurSelectorParser {
             "disabled" => AurNonTSPseudoClass::Disabled,
             "enabled" => AurNonTSPseudoClass::Enabled,
             "placeholder" => AurNonTSPseudoClass::Placeholder,
+            "host" => AurNonTSPseudoClass::Host,
             _ => AurNonTSPseudoClass::Unknown,
         };
         Ok(pc)
@@ -219,6 +241,15 @@ impl<'i> selectors::parser::Parser<'i> for AurSelectorParser {
             "lang" => {
                 let lang = parser.expect_ident_or_string()?.to_owned();
                 Ok(AurNonTSPseudoClass::Lang(CssString(lang.to_string())))
+            }
+            "host" => {
+                match SelectorList::parse(&AurSelectorParser, parser, ParseRelative::No) {
+                    Ok(list) => Ok(AurNonTSPseudoClass::HostWith(Box::new(list))),
+                    Err(_) => {
+                        while parser.next().is_ok() {}
+                        Ok(AurNonTSPseudoClass::Host)
+                    }
+                }
             }
             _ => {
                 // Drain the argument list so the parser stays in sync.
@@ -428,6 +459,15 @@ impl<'a> selectors::Element for CascadeElement<'a> {
                     }
                 }
                 false
+            }
+            AurNonTSPseudoClass::Host => self.element.tag_name.contains('-'),
+            AurNonTSPseudoClass::HostWith(selector_list) => {
+                if !self.element.tag_name.contains('-') {
+                    return false;
+                }
+                selector_list.slice().iter().any(|sel| {
+                    element_matches(sel, self.element, self.ancestors, self.siblings, self.sibling_index)
+                })
             }
             // All other state pseudo-classes need runtime interaction tracking.
             _ => false,

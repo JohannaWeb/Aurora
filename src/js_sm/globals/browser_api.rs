@@ -3,10 +3,12 @@ use std::ptr::NonNull;
 
 use mozjs::context::{JSContext, RawJSContext};
 use mozjs::jsapi::{CallArgs, JSObject, Value};
-use mozjs::jsval::{BooleanValue, NullValue, ObjectValue, UndefinedValue};
+use mozjs::jsval::{BooleanValue, DoubleValue, NullValue, ObjectValue, StringValue, UndefinedValue};
 use mozjs::rooted;
 use mozjs::rust::wrappers2;
 
+use crate::js_sm::mutation_observer;
+use crate::js_sm::state::SmState;
 use crate::js_sm::utils::*;
 
 pub(in crate::js_sm) unsafe fn install_browser_apis(
@@ -85,10 +87,10 @@ pub(in crate::js_sm) unsafe fn install_browser_apis(
     }
     set_prop_obj(cx, global, c"NodeFilter", node_filter);
 
-    // Storage — install minimal localStorage / sessionStorage
-    let ls = new_storage_object(cx);
+    // Storage — in-memory, per-origin localStorage / sessionStorage
+    let ls = new_storage_object(cx, false);
     set_prop_obj(cx, global, c"localStorage", ls);
-    let ss = new_storage_object(cx);
+    let ss = new_storage_object(cx, true);
     set_prop_obj(cx, global, c"sessionStorage", ss);
 
     // Minimal event target stubs for the Event subtypes that
@@ -144,15 +146,11 @@ pub(in crate::js_sm) unsafe fn install_browser_apis(
     // inheritance) that YouTube's bootstrap relies on. See install_youtube_polyfills.
     install_youtube_polyfills(cx, global);
 
-    // ResizeObserver / MutationObserver / IntersectionObserver stubs
-    for name in &[
-        c"MutationObserver",
-        c"IntersectionObserver",
-        c"ResizeObserver",
-        c"PerformanceObserver",
-    ] {
-        define_ctor(cx, global, name, Some(observer_ctor), 1);
-    }
+    // ResizeObserver / IntersectionObserver stubs; MutationObserver is real.
+    mutation_observer::install_mutation_observer(cx, global);
+    define_ctor(cx, global, c"IntersectionObserver", Some(intersection_observer_ctor), 1);
+    define_ctor(cx, global, c"ResizeObserver",       Some(resize_observer_ctor),       1);
+    define_ctor(cx, global, c"PerformanceObserver",  Some(performance_observer_ctor),  1);
 
     // URL constructor stub
     define_ctor(cx, global, c"URL", Some(url_ctor), 2);
@@ -404,7 +402,12 @@ unsafe fn install_promise_stub(cx: &mut JSContext, global: mozjs::gc::Handle<*mu
                 });
             };
 
-            globalThis.Promise = SimplePromise;
+            // SimplePromise kept as a fallback reference but NOT assigned to
+            // globalThis.Promise — SpiderMonkey's native Promise must be used so
+            // that resolve/reject reactions go through jq_enqueue_promise_job and
+            // are drained by RunJobs after each script. The JS polyfill bypassed
+            // the job queue entirely, leaving q.pending always empty.
+            globalThis._SimplePromise = SimplePromise;
         })();
     "#,
     );
@@ -904,33 +907,126 @@ unsafe extern "C" fn message_channel_ctor(
     true
 }
 
-unsafe fn new_storage_object(cx: &mut JSContext) -> *mut JSObject {
+unsafe fn new_storage_object(cx: &mut JSContext, is_session: bool) -> *mut JSObject {
     let obj = new_plain_object(cx);
     rooted!(&in(cx) let obj_root = obj);
+    set_prop_bool(cx, obj_root.handle(), c"__storage_session__", is_session);
     define_fn(cx, obj_root.handle(), c"getItem", Some(storage_get_item), 1);
     define_fn(cx, obj_root.handle(), c"setItem", Some(storage_set_item), 2);
-    define_fn(cx, obj_root.handle(), c"removeItem", Some(noop), 1);
-    define_fn(cx, obj_root.handle(), c"clear", Some(noop), 0);
-    define_fn(cx, obj_root.handle(), c"key", Some(storage_key_null), 1);
-    set_prop_i32(cx, obj_root.handle(), c"length", 0);
+    define_fn(cx, obj_root.handle(), c"removeItem", Some(storage_remove_item), 1);
+    define_fn(cx, obj_root.handle(), c"clear", Some(storage_clear), 0);
+    define_fn(cx, obj_root.handle(), c"key", Some(storage_key), 1);
+    define_getter(cx, obj_root.handle(), c"length", Some(storage_length_getter));
     obj
 }
 
-unsafe extern "C" fn storage_get_item(_cx: *mut RawJSContext, _argc: u32, vp: *mut Value) -> bool {
-    let args = CallArgs::from_vp(vp, _argc);
-    args.rval().set(NullValue());
+/// Resolve `this` (a localStorage/sessionStorage object) to its backing
+/// per-origin map based on the `__storage_session__` flag set at creation.
+unsafe fn storage_map<'a>(
+    cx: &mut JSContext,
+    this: Value,
+    state: &'a mut SmState,
+) -> &'a mut std::collections::BTreeMap<String, String> {
+    let is_session = if this.is_object() {
+        let obj = this.to_object_or_null();
+        rooted!(&in(cx) let obj_root = obj);
+        get_prop_bool(cx, obj_root.handle(), c"__storage_session__")
+    } else {
+        false
+    };
+    if is_session {
+        &mut state.window.session_storage
+    } else {
+        &mut state.window.local_storage
+    }
+}
+
+unsafe extern "C" fn storage_get_item(cx: *mut RawJSContext, argc: u32, vp: *mut Value) -> bool {
+    let mut cx = JSContext::from_ptr(NonNull::new(cx).unwrap());
+    let args = CallArgs::from_vp(vp, argc);
+    let key = arg_to_string(&mut cx, &args, 0);
+    let this = args.thisv().get();
+    let state = &mut *get_state_ptr(&cx);
+    let value = storage_map(&mut cx, this, state).get(&key).cloned();
+    match value {
+        Some(value) => {
+            let js_str = new_js_string(&mut cx, &value);
+            if js_str.is_null() {
+                args.rval().set(NullValue());
+            } else {
+                args.rval().set(StringValue(&*js_str));
+            }
+        }
+        None => args.rval().set(NullValue()),
+    }
     true
 }
 
-unsafe extern "C" fn storage_set_item(_cx: *mut RawJSContext, _argc: u32, vp: *mut Value) -> bool {
-    let args = CallArgs::from_vp(vp, _argc);
+unsafe extern "C" fn storage_set_item(cx: *mut RawJSContext, argc: u32, vp: *mut Value) -> bool {
+    let mut cx = JSContext::from_ptr(NonNull::new(cx).unwrap());
+    let args = CallArgs::from_vp(vp, argc);
+    let key = arg_to_string(&mut cx, &args, 0);
+    let value = arg_to_string(&mut cx, &args, 1);
+    let this = args.thisv().get();
+    let state = &mut *get_state_ptr(&cx);
+    storage_map(&mut cx, this, state).insert(key, value);
     args.rval().set(UndefinedValue());
     true
 }
 
-unsafe extern "C" fn storage_key_null(_cx: *mut RawJSContext, _argc: u32, vp: *mut Value) -> bool {
-    let args = CallArgs::from_vp(vp, _argc);
-    args.rval().set(NullValue());
+unsafe extern "C" fn storage_remove_item(cx: *mut RawJSContext, argc: u32, vp: *mut Value) -> bool {
+    let mut cx = JSContext::from_ptr(NonNull::new(cx).unwrap());
+    let args = CallArgs::from_vp(vp, argc);
+    let key = arg_to_string(&mut cx, &args, 0);
+    let this = args.thisv().get();
+    let state = &mut *get_state_ptr(&cx);
+    storage_map(&mut cx, this, state).remove(&key);
+    args.rval().set(UndefinedValue());
+    true
+}
+
+unsafe extern "C" fn storage_clear(cx: *mut RawJSContext, argc: u32, vp: *mut Value) -> bool {
+    let mut cx = JSContext::from_ptr(NonNull::new(cx).unwrap());
+    let args = CallArgs::from_vp(vp, argc);
+    let this = args.thisv().get();
+    let state = &mut *get_state_ptr(&cx);
+    storage_map(&mut cx, this, state).clear();
+    args.rval().set(UndefinedValue());
+    true
+}
+
+unsafe extern "C" fn storage_key(cx: *mut RawJSContext, argc: u32, vp: *mut Value) -> bool {
+    let mut cx = JSContext::from_ptr(NonNull::new(cx).unwrap());
+    let args = CallArgs::from_vp(vp, argc);
+    let idx = arg_to_f64(&args, 0) as usize;
+    let this = args.thisv().get();
+    let state = &mut *get_state_ptr(&cx);
+    let key = storage_map(&mut cx, this, state).keys().nth(idx).cloned();
+    match key {
+        Some(key) => {
+            let js_str = new_js_string(&mut cx, &key);
+            if js_str.is_null() {
+                args.rval().set(NullValue());
+            } else {
+                args.rval().set(StringValue(&*js_str));
+            }
+        }
+        None => args.rval().set(NullValue()),
+    }
+    true
+}
+
+unsafe extern "C" fn storage_length_getter(
+    cx: *mut RawJSContext,
+    argc: u32,
+    vp: *mut Value,
+) -> bool {
+    let mut cx = JSContext::from_ptr(NonNull::new(cx).unwrap());
+    let args = CallArgs::from_vp(vp, argc);
+    let this = args.thisv().get();
+    let state = &mut *get_state_ptr(&cx);
+    let len = storage_map(&mut cx, this, state).len();
+    args.rval().set(DoubleValue(len as f64));
     true
 }
 
@@ -1223,22 +1319,15 @@ unsafe fn install_youtube_polyfills(cx: &mut JSContext, global: mozjs::gc::Handl
             var registry = {};
             var patchedCreateElement = false;
             function trace(msg) {
-                if (globalThis.__aurora_debug_youtube__) console.log('[yt-life] ' + msg);
+                console.log('[yt-life] ' + msg);
             }
             function shouldTraceName(name) {
-                return globalThis.__aurora_debug_youtube_verbose__ ||
-                    name === 'ytd-app' ||
-                    name === 'ytd-masthead' ||
-                    name === 'ytd-page-manager' ||
-                    name === 'ytd-browse' ||
-                    name === 'ytd-search' ||
-                    name === 'iron-meta';
+                return true;
             }
             function traceError(where, error) {
-                if (!globalThis.__aurora_debug_youtube__) return;
                 var message = error && (error.name || 'Error') + ': ' + (error.message || '');
                 var stack = error && error.stack ? ('\n' + error.stack) : '';
-                console.log('[yt-life] ' + where + ' threw: ' + (message || String(error)) + stack);
+                console.log('[yt-life] ERROR ' + where + ': ' + (message || String(error)) + stack);
             }
 
             // Upgrade: swap the plain stub element's prototype to the
@@ -1310,6 +1399,23 @@ unsafe fn install_youtube_polyfills(cx: &mut JSContext, global: mozjs::gc::Handl
                             el.connectedCallback();
                         }
                     } catch (e) { traceError('connectedCallback ' + name, e); }
+                }
+                if (globalThis.__aurora_debug_youtube__ && (name === 'ytd-app' || name === 'ytd-masthead')) {
+                    try {
+                        var tmpl;
+                        try { tmpl = ctor.template; } catch (e) { tmpl = 'THREW:' + e.message; }
+                        trace('probe ' + name +
+                            ' ctor.template=' + (tmpl === undefined ? 'undefined' : tmpl === null ? 'null' : (typeof tmpl)) +
+                            ' el._template=' + (typeof el._template) +
+                            ' el.root=' + (typeof el.root) +
+                            ' el.shadowRoot=' + (el.shadowRoot ? 'set' : String(el.shadowRoot)) +
+                            ' kids=' + (el.children ? el.children.length : '?') +
+                            ' dataEnabled=' + el.__dataEnabled +
+                            ' dataReady=' + el.__dataReady +
+                            ' ready=' + (typeof el.ready) +
+                            ' stamp=' + (typeof el._stampTemplate) +
+                            ' attachDom=' + (typeof el._attachDom));
+                    } catch (e) { traceError('probe ' + name, e); }
                 }
             }
 
@@ -1840,6 +1946,18 @@ unsafe extern "C" fn get_bounding_client_rect(
     true
 }
 
+macro_rules! named_observer_ctor {
+    ($fn_name:ident, $api:literal) => {
+        unsafe extern "C" fn $fn_name(cx: *mut RawJSContext, argc: u32, vp: *mut Value) -> bool {
+            crate::logging::track_missing_api($api);
+            observer_ctor(cx, argc, vp)
+        }
+    };
+}
+named_observer_ctor!(intersection_observer_ctor, "IntersectionObserver");
+named_observer_ctor!(resize_observer_ctor, "ResizeObserver");
+named_observer_ctor!(performance_observer_ctor, "PerformanceObserver");
+
 unsafe extern "C" fn observer_ctor(cx: *mut RawJSContext, argc: u32, vp: *mut Value) -> bool {
     let mut cx = JSContext::from_ptr(NonNull::new(cx).unwrap());
     let args = CallArgs::from_vp(vp, argc);
@@ -1924,7 +2042,7 @@ unsafe extern "C" fn url_search_params_ctor(
         &mut cx,
         obj_root.handle(),
         c"get",
-        Some(storage_get_item),
+        Some(prompt_null),
         1,
     );
     define_fn(&mut cx, obj_root.handle(), c"set", Some(noop), 2);
@@ -1978,7 +2096,7 @@ unsafe extern "C" fn headers_ctor(cx: *mut RawJSContext, argc: u32, vp: *mut Val
         &mut cx,
         obj_root.handle(),
         c"get",
-        Some(storage_get_item),
+        Some(prompt_null),
         1,
     );
     define_fn(&mut cx, obj_root.handle(), c"set", Some(noop), 2);

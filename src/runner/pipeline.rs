@@ -104,7 +104,7 @@ fn run_scripts(
     }
 
     let total = scripts.len();
-    println!("JS: Processing {} scripts...", total);
+    log::info!("[JS] processing {} scripts", total);
 
     // Fetch all external scripts in parallel, preserving order for execution.
     let fetched: Vec<Option<String>> = {
@@ -136,7 +136,7 @@ fn run_scripts(
         }
         total_script_bytes += content.len();
         if let Err(e) = runtime.execute(&content) {
-            eprintln!("JS Error: {}", e);
+            crate::logging::track_js_exception(&e);
         }
     }
     runtime.fire_dom_content_loaded();
@@ -171,7 +171,7 @@ pub fn fetch_script(
         }
     };
 
-    println!("JS: Fetching external script: {full_url}");
+    log::info!(target: "aurora::net", "[NET] GET {} (script)", full_url);
     let content = match crate::fetch::fetch_string(&full_url, identity) {
         Ok(c) => c,
         Err(e) => {

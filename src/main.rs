@@ -11,6 +11,7 @@ mod js_boa;
 mod js_engine;
 mod js_sm;
 mod layout;
+mod logging;
 mod media;
 pub mod render;
 mod runner;
@@ -21,13 +22,15 @@ pub(crate) use media::MediaCache;
 pub(crate) use runner::{ImageCache, SvgCache, load_missing_images, load_missing_svgs};
 
 fn main() {
-    println!("Aurora: Starting up...");
+    logging::init();
+    log::info!("Aurora: Starting up...");
     install_crypto_provider();
     println!("Aurora: Crypto provider installed.");
 
     let cli = runner::CliOptions::from_env();
     let identity = default_identity(&cli);
     runner::run_browser(cli, identity);
+    logging::print_compat_summary();
 }
 
 fn install_crypto_provider() {

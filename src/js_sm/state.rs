@@ -1,4 +1,5 @@
 use super::capture::WindowCapture;
+use super::mutation_observer::MutationObserverEntry;
 use super::registry::NodeRegistry;
 use crate::dom::NodePtr;
 use mozjs::jsapi::JSObject;
@@ -11,6 +12,8 @@ pub(super) struct SmState {
     pub(super) window: WindowCapture,
     /// Raw pointer to the JS global object.  Always valid while SmRuntime is alive.
     pub(super) global: *mut JSObject,
+    /// Active `MutationObserver.observe()` registrations and their pending records.
+    pub(super) mutation_observers: Vec<MutationObserverEntry>,
 }
 
 // SmState is not Send because NodePtr (Rc) is not Send.

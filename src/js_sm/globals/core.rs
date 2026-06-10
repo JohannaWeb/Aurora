@@ -302,7 +302,7 @@ unsafe extern "C" fn console_log(cx: *mut RawJSContext, argc: u32, vp: *mut Valu
             value_to_string(&mut cx, v.handle())
         })
         .collect();
-    eprintln!("JS: {}", parts.join(" "));
+    log::info!(target: "aurora::js", "[JS] {}", parts.join(" "));
     args.rval().set(UndefinedValue());
     true
 }

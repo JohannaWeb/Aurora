@@ -15,6 +15,7 @@ pub(crate) mod identity;
 pub(crate) mod js_boa;
 pub(crate) mod js_engine;
 pub(crate) mod js_sm;
+pub(crate) mod logging;
 pub(crate) mod layout;
 pub(crate) mod media;
 pub(crate) mod runner;
