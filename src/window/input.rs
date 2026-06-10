@@ -3,7 +3,7 @@ use crate::blitz_document::BlitzDocument;
 use crate::css::Stylesheet;
 use crate::dom::NodePtr;
 use crate::identity::Identity;
-use crate::js_boa::BoaRuntime;
+use crate::js_engine::JsRuntime;
 use crate::layout::{LayoutTree, ViewportSize};
 use crate::media::MediaCache;
 use crate::style::StyleTree;
@@ -22,7 +22,7 @@ pub struct WindowInput {
     pub images: ImageCache,
     pub svgs: crate::SvgCache,
     pub media: MediaCache,
-    pub runtime: Option<BoaRuntime>,
+    pub runtime: Option<Box<dyn JsRuntime>>,
     // The live window renderer uses Blitz DOM + Blitz Paint.
     pub blitz_doc: Option<BlitzDocument>,
     pub(crate) needs_reflow: bool,
@@ -72,10 +72,10 @@ impl WindowInput {
             // Keep the current renderer path in sync with the same content viewport.
             let content_w = content_viewport.width as u32;
             let content_h = content_viewport.height as u32;
-            
+
             // Re-serialize the mutated legacy DOM to HTML, then reload it into blitz_doc.
             // This ensures JS mutations are rendered in the blitz-dom / blitz-paint path.
-            let html = crate::js_boa::serialize_outer_html(&self.dom);
+            let html = crate::js_sm::serialize_outer_html(&self.dom);
             *blitz_doc = BlitzDocument::from_html(
                 &html,
                 self.base_url.as_deref(),
@@ -114,31 +114,42 @@ impl WindowInput {
         let mut new_stylesheet = Stylesheet::from_dom(&new_dom, Some(url), &self.identity);
         new_stylesheet.merge(Stylesheet::user_agent_stylesheet());
 
-        // 4. Initialize scripts/runtime
+        // 4. Initialize scripts/runtime and fetch externals in parallel.
         let scripts = crate::runner::scripts::extract_scripts(&new_dom);
         let new_runtime = if !scripts.is_empty() {
-            println!("Boa: Processing {} scripts...", scripts.len());
-            let mut rt = crate::js_boa::BoaRuntime::new(Rc::clone(&new_dom));
-            for (source, is_url) in scripts {
-                let content = if !is_url {
-                    Some(source)
-                } else {
-                    match crate::fetch::resolve_relative_url(url, &source) {
-                        Ok(full_url) => {
-                            println!("Boa: Fetching external script: {}", full_url);
-                            crate::fetch::fetch_string(&full_url, &self.identity).ok()
-                        }
-                        Err(e) => {
-                            eprintln!("Failed to resolve script URL {}: {}", source, e);
-                            None
-                        }
-                    }
-                };
-                if let Some(script_content) = content {
-                    if let Err(e) = rt.execute(&script_content) {
-                        eprintln!("JS Error: {}", e);
-                    }
+            println!("JS: Processing {} scripts...", scripts.len());
+            let fetched: Vec<Option<String>> = {
+                let handles: Vec<_> = scripts
+                    .iter()
+                    .map(|script| {
+                        let url_str = url.to_string();
+                        let identity = self.identity.clone();
+                        let source = script.source.clone();
+                        let is_url = script.is_url;
+                        std::thread::spawn(move || {
+                            crate::runner::pipeline::fetch_script(
+                                source,
+                                is_url,
+                                Some(&url_str),
+                                &identity,
+                            )
+                        })
+                    })
+                    .collect();
+                handles
+                    .into_iter()
+                    .map(|h| h.join().unwrap_or(None))
+                    .collect()
+            };
+            let mut rt: Box<dyn JsRuntime> =
+                Box::new(crate::js_sm::SmRuntime::new(Rc::clone(&new_dom)));
+            for (script, content) in scripts.iter().zip(fetched.into_iter()) {
+                let Some(content) = content else { continue };
+                rt.set_current_script(Some(&script.node));
+                if let Err(e) = rt.execute(&content) {
+                    eprintln!("JS Error: {}", e);
                 }
+                rt.set_current_script(None);
             }
             Some(rt)
         } else {

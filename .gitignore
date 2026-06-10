@@ -10,3 +10,6 @@ Cargo.lock
 .gemini/
 .goose/
 .opencode/
+
+# Runtime artifacts
+logs/

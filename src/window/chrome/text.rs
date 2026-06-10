@@ -1,6 +1,6 @@
 use peniko::{Color, Fill};
-use vello::kurbo::{Affine, Rect as KRect};
 use vello::Scene;
+use vello::kurbo::{Affine, Rect as KRect};
 
 pub(super) fn text(scene: &mut Scene, value: &str, x: f64, y: f64, size: f32, color: Color) {
     let baseline_y = y + size as f64 * 0.75;

@@ -1,8 +1,8 @@
 use std::collections::BTreeMap;
 
-use super::calc::{eval_calc, CalcContext};
-use super::length::parse_length_value;
 use super::StyleMap;
+use super::calc::{CalcContext, eval_calc};
+use super::length::parse_length_value;
 
 #[allow(dead_code)]
 impl StyleMap {
@@ -153,7 +153,12 @@ impl StyleMap {
         }
     }
 
-    fn resolve_single_value(&self, value: &str, ancestors: &[&StyleMap], depth: u8) -> Option<String> {
+    fn resolve_single_value(
+        &self,
+        value: &str,
+        ancestors: &[&StyleMap],
+        depth: u8,
+    ) -> Option<String> {
         // Guard against circular CSS variable references (e.g. --a: var(--b); --b: var(--a)).
         if depth > 32 {
             return None;
@@ -177,7 +182,9 @@ impl StyleMap {
                 if let Some(val) = self.lookup_variable(var_name, ancestors) {
                     // Resolved — recursively handle any var() inside the resolved value.
                     if val.contains("var(") {
-                        if let Some(resolved) = self.resolve_single_value(&val, ancestors, depth + 1) {
+                        if let Some(resolved) =
+                            self.resolve_single_value(&val, ancestors, depth + 1)
+                        {
                             result.push_str(&resolved);
                         } else {
                             result.push_str(&val);
@@ -187,7 +194,9 @@ impl StyleMap {
                     }
                 } else if let Some(fb) = fallback {
                     // Variable not found — use fallback, which may itself contain var().
-                    if let Some(resolved) = self.resolve_single_value(fb.trim(), ancestors, depth + 1) {
+                    if let Some(resolved) =
+                        self.resolve_single_value(fb.trim(), ancestors, depth + 1)
+                    {
                         result.push_str(&resolved);
                     } else {
                         result.push_str(fb.trim());
@@ -257,10 +266,21 @@ fn split_var_args(s: &str) -> (&str, Option<&str>) {
 /// Resolve a raw CSS length string to px, handling `calc()`, `min()`, `max()`, `clamp()`.
 fn resolve_length(raw: &str, ctx: &CalcContext) -> Option<f32> {
     let raw = raw.trim();
-    if raw.starts_with("calc(") || raw.starts_with("min(") || raw.starts_with("max(") || raw.starts_with("clamp(") {
+    if raw.starts_with("calc(")
+        || raw.starts_with("min(")
+        || raw.starts_with("max(")
+        || raw.starts_with("clamp(")
+    {
         // eval_calc handles all math functions via eval_factor
         return eval_calc(raw, ctx);
     }
-    parse_length_value(raw)
-        .map(|lv| lv.to_px(ctx.available, ctx.font_size, ctx.root_font_size, ctx.viewport_width, ctx.viewport_height))
+    parse_length_value(raw).map(|lv| {
+        lv.to_px(
+            ctx.available,
+            ctx.font_size,
+            ctx.root_font_size,
+            ctx.viewport_width,
+            ctx.viewport_height,
+        )
+    })
 }

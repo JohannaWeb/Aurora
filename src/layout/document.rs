@@ -75,16 +75,23 @@ impl LayoutDocument {
 
         let root_id = match self.root_id {
             Some(id) => id,
-            None => return LayoutBox {
-                node: None,
-                kind: LayoutKind::Viewport,
-                rect: Rect { x: 0.0, y: 0.0, width: 0.0, height: 0.0 },
-                styles: Default::default(),
-                margin: crate::css::Margin::zero(),
-                border: crate::css::EdgeSizes::zero(),
-                padding: crate::css::EdgeSizes::zero(),
-                children: Vec::new(),
-            },
+            None => {
+                return LayoutBox {
+                    node: None,
+                    kind: LayoutKind::Viewport,
+                    rect: Rect {
+                        x: 0.0,
+                        y: 0.0,
+                        width: 0.0,
+                        height: 0.0,
+                    },
+                    styles: Default::default(),
+                    margin: crate::css::Margin::zero(),
+                    border: crate::css::EdgeSizes::zero(),
+                    padding: crate::css::EdgeSizes::zero(),
+                    children: Vec::new(),
+                };
+            }
         };
 
         let viewport = self.viewport;
@@ -162,7 +169,11 @@ impl LayoutDocument {
     ) -> LayoutBox {
         let key = Rc::as_ptr(&styled_node.node) as usize;
 
-        let (x, y, width, height) = match self.node_map.get(&key).and_then(|&id| self.taffy.layout(id).ok()) {
+        let (x, y, width, height) = match self
+            .node_map
+            .get(&key)
+            .and_then(|&id| self.taffy.layout(id).ok())
+        {
             Some(layout) => (
                 parent_x + layout.location.x,
                 parent_y + layout.location.y,
@@ -184,7 +195,12 @@ impl LayoutDocument {
         LayoutBox {
             node: Some(styled_node.node.clone()),
             kind,
-            rect: Rect { x, y, width, height },
+            rect: Rect {
+                x,
+                y,
+                width,
+                height,
+            },
             styles: styles.clone(),
             margin: styles.margin(),
             border: styles.border_width(),

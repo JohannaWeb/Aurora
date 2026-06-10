@@ -91,7 +91,12 @@ pub fn layout_text_with_parley(
                 boxes.push(LayoutBox {
                     node: node.clone(),
                     kind: LayoutKind::Text { text: line_text },
-                    rect: Rect { x, y: line_y, width: line_width, height: line_height },
+                    rect: Rect {
+                        x,
+                        y: line_y,
+                        width: line_width,
+                        height: line_height,
+                    },
                     styles: styles.clone(),
                     margin: Margin::zero(),
                     border: EdgeSizes::zero(),

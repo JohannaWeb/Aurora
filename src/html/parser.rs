@@ -6,7 +6,7 @@ use std::rc::Rc;
 use html5ever::interface::QualName;
 use html5ever::tendril::{StrTendril, TendrilSink};
 use html5ever::tree_builder::{ElementFlags, NodeOrText, QuirksMode, TreeSink};
-use html5ever::{parse_document, Attribute, ParseOpts};
+use html5ever::{Attribute, ParseOpts, parse_document};
 use markup5ever::ExpandedName;
 
 use crate::dom::{DocumentMode, Node, NodePtr};
@@ -152,9 +152,13 @@ impl TreeSink for AuroraTreeSink {
         let node = Node::element_with_attributes(name.local.to_string(), attributes, Vec::new());
 
         if name.local.as_ref() == "template" {
+            let content = Node::document(Vec::new());
             self.template_contents
                 .borrow_mut()
-                .insert(node_key(&node), Node::document(Vec::new()));
+                .insert(node_key(&node), content.clone());
+            if let Node::Element(element) = &mut *node.borrow_mut() {
+                element.template_contents = Some(content);
+            }
         }
 
         HtmlHandle {

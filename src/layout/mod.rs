@@ -2,13 +2,13 @@
 
 mod block;
 mod r#box;
-#[cfg(feature = "taffy-document")]
-pub mod document;
 mod constants;
 mod constraints;
 mod construct;
 mod control;
 mod display;
+#[cfg(feature = "taffy-document")]
+pub mod document;
 mod engine;
 mod flex;
 mod image;

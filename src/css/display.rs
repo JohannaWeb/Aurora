@@ -30,7 +30,6 @@ impl Display for Stylesheet {
     }
 }
 
-
 impl Display for StyleMap {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(f, "{{")?;

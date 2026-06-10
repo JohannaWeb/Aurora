@@ -11,25 +11,29 @@ use std::borrow::Borrow;
 use std::fmt;
 
 use cssparser::ToCss;
-use selectors::attr::{AttrSelectorOperation, AttrSelectorOperator, CaseSensitivity, NamespaceConstraint};
+use selectors::attr::{
+    AttrSelectorOperation, AttrSelectorOperator, CaseSensitivity, NamespaceConstraint,
+};
+use selectors::bloom::BloomFilter;
 use selectors::context::{
     MatchingContext, MatchingForInvalidation, MatchingMode, NeedsSelectorFlags, QuirksMode,
     SelectorCaches,
 };
-use selectors::bloom::BloomFilter;
-use selectors::matching::{matches_selector, ElementSelectorFlags};
+use selectors::matching::{ElementSelectorFlags, matches_selector};
 
 /// Error type for selector parsing — wraps `SelectorParseErrorKind` as opaque.
 #[derive(Debug)]
 pub struct AurSelectorParseError;
 
 impl<'i> From<selectors::parser::SelectorParseErrorKind<'i>> for AurSelectorParseError {
-    fn from(_: selectors::parser::SelectorParseErrorKind<'i>) -> Self { AurSelectorParseError }
+    fn from(_: selectors::parser::SelectorParseErrorKind<'i>) -> Self {
+        AurSelectorParseError
+    }
 }
+use selectors::OpaqueElement;
 use selectors::parser::{
     NonTSPseudoClass, ParseRelative, PseudoElement, SelectorImpl, SelectorList,
 };
-use selectors::OpaqueElement;
 
 use super::ElementData;
 
@@ -75,7 +79,7 @@ fn fnv1a(s: &str) -> u32 {
 // ─── NonTSPseudoClass ─────────────────────────────────────────────────────────
 
 /// Non-tree-structural pseudo-classes (state pseudo-classes, :lang, etc.)
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum AurNonTSPseudoClass {
     Link,
     Visited,
@@ -88,8 +92,23 @@ pub enum AurNonTSPseudoClass {
     Enabled,
     Placeholder,
     Lang(CssString),
+    /// `:host` — matches custom elements (tag names containing `-`).
+    Host,
+    /// `:host(selector)` — matches custom elements that also match the inner selector.
+    HostWith(Box<SelectorList<AuroraSelectorImpl>>),
     /// Catch-all for unrecognised pseudo-classes — always returns false.
     Unknown,
+}
+
+impl std::hash::Hash for AurNonTSPseudoClass {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        std::mem::discriminant(self).hash(state);
+        match self {
+            Self::Lang(s) => s.hash(state),
+            // HostWith: SelectorList has no Hash impl; hash nothing extra.
+            _ => {}
+        }
+    }
 }
 
 impl ToCss for AurNonTSPseudoClass {
@@ -106,6 +125,8 @@ impl ToCss for AurNonTSPseudoClass {
             Self::Enabled => dest.write_str(":enabled"),
             Self::Placeholder => dest.write_str("::placeholder"),
             Self::Lang(l) => write!(dest, ":lang({})", l.0),
+            Self::Host => dest.write_str(":host"),
+            Self::HostWith(_) => dest.write_str(":host(...)"),
             Self::Unknown => dest.write_str(":unknown"),
         }
     }
@@ -117,7 +138,10 @@ impl NonTSPseudoClass for AurNonTSPseudoClass {
         matches!(self, Self::Active | Self::Hover)
     }
     fn is_user_action_state(&self) -> bool {
-        matches!(self, Self::Active | Self::Hover | Self::Focus | Self::FocusWithin)
+        matches!(
+            self,
+            Self::Active | Self::Hover | Self::Focus | Self::FocusWithin
+        )
     }
 }
 
@@ -148,7 +172,7 @@ impl PseudoElement for AurPseudoElement {
 
 // ─── SelectorImpl ─────────────────────────────────────────────────────────────
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AuroraSelectorImpl;
 
 impl SelectorImpl for AuroraSelectorImpl {
@@ -181,6 +205,10 @@ impl<'i> selectors::parser::Parser<'i> for AurSelectorParser {
         false
     }
 
+    fn parse_slotted(&self) -> bool {
+        true
+    }
+
     fn parse_non_ts_pseudo_class(
         &self,
         _location: cssparser::SourceLocation,
@@ -197,6 +225,7 @@ impl<'i> selectors::parser::Parser<'i> for AurSelectorParser {
             "disabled" => AurNonTSPseudoClass::Disabled,
             "enabled" => AurNonTSPseudoClass::Enabled,
             "placeholder" => AurNonTSPseudoClass::Placeholder,
+            "host" => AurNonTSPseudoClass::Host,
             _ => AurNonTSPseudoClass::Unknown,
         };
         Ok(pc)
@@ -213,6 +242,13 @@ impl<'i> selectors::parser::Parser<'i> for AurSelectorParser {
                 let lang = parser.expect_ident_or_string()?.to_owned();
                 Ok(AurNonTSPseudoClass::Lang(CssString(lang.to_string())))
             }
+            "host" => match SelectorList::parse(&AurSelectorParser, parser, ParseRelative::No) {
+                Ok(list) => Ok(AurNonTSPseudoClass::HostWith(Box::new(list))),
+                Err(_) => {
+                    while parser.next().is_ok() {}
+                    Ok(AurNonTSPseudoClass::Host)
+                }
+            },
             _ => {
                 // Drain the argument list so the parser stays in sync.
                 while parser.next().is_ok() {}
@@ -267,7 +303,12 @@ impl<'a> CascadeElement<'a> {
         siblings: &'a [ElementData],
         sibling_index: usize,
     ) -> Self {
-        Self { element, ancestors, siblings, sibling_index }
+        Self {
+            element,
+            ancestors,
+            siblings,
+            sibling_index,
+        }
     }
 }
 
@@ -346,7 +387,9 @@ impl<'a> selectors::Element for CascadeElement<'a> {
     }
 
     fn is_same_type(&self, other: &Self) -> bool {
-        self.element.tag_name.eq_ignore_ascii_case(&other.element.tag_name)
+        self.element
+            .tag_name
+            .eq_ignore_ascii_case(&other.element.tag_name)
     }
 
     fn attr_matches(
@@ -366,15 +409,17 @@ impl<'a> selectors::Element for CascadeElement<'a> {
 
         match operation {
             AttrSelectorOperation::Exists => actual.is_some(),
-            AttrSelectorOperation::WithValue { operator, case_sensitivity, value } => {
+            AttrSelectorOperation::WithValue {
+                operator,
+                case_sensitivity,
+                value,
+            } => {
                 let Some(actual) = actual else { return false };
                 let (a, e) = match case_sensitivity {
                     CaseSensitivity::AsciiCaseInsensitive => {
                         (actual.to_ascii_lowercase(), value.0.to_ascii_lowercase())
                     }
-                    CaseSensitivity::CaseSensitive => {
-                        (actual.to_string(), value.0.clone())
-                    }
+                    CaseSensitivity::CaseSensitive => (actual.to_string(), value.0.clone()),
                 };
                 match operator {
                     AttrSelectorOperator::Equal => a == e,
@@ -413,6 +458,21 @@ impl<'a> selectors::Element for CascadeElement<'a> {
                 }
                 false
             }
+            AurNonTSPseudoClass::Host => self.element.tag_name.contains('-'),
+            AurNonTSPseudoClass::HostWith(selector_list) => {
+                if !self.element.tag_name.contains('-') {
+                    return false;
+                }
+                selector_list.slice().iter().any(|sel| {
+                    element_matches(
+                        sel,
+                        self.element,
+                        self.ancestors,
+                        self.siblings,
+                        self.sibling_index,
+                    )
+                })
+            }
             // All other state pseudo-classes need runtime interaction tracking.
             _ => false,
         }
@@ -450,19 +510,24 @@ impl<'a> selectors::Element for CascadeElement<'a> {
             None => false,
             Some(val) => match case_sensitivity {
                 CaseSensitivity::CaseSensitive => val == &id.0,
-                CaseSensitivity::AsciiCaseInsensitive => {
-                    val.eq_ignore_ascii_case(&id.0)
-                }
+                CaseSensitivity::AsciiCaseInsensitive => val.eq_ignore_ascii_case(&id.0),
             },
         }
     }
 
     fn has_class(&self, name: &CssString, case_sensitivity: CaseSensitivity) -> bool {
-        let class_attr = self.element.attributes.get("class").map(String::as_str).unwrap_or("");
-        class_attr.split_whitespace().any(|cls| match case_sensitivity {
-            CaseSensitivity::CaseSensitive => cls == name.0,
-            CaseSensitivity::AsciiCaseInsensitive => cls.eq_ignore_ascii_case(&name.0),
-        })
+        let class_attr = self
+            .element
+            .attributes
+            .get("class")
+            .map(String::as_str)
+            .unwrap_or("");
+        class_attr
+            .split_whitespace()
+            .any(|cls| match case_sensitivity {
+                CaseSensitivity::CaseSensitive => cls == name.0,
+                CaseSensitivity::AsciiCaseInsensitive => cls.eq_ignore_ascii_case(&name.0),
+            })
     }
 
     fn has_custom_state(&self, _name: &CssString) -> bool {
@@ -496,7 +561,12 @@ pub fn element_matches(
     siblings: &[ElementData],
     sibling_index: usize,
 ) -> bool {
-    let el = CascadeElement { element, ancestors, siblings, sibling_index };
+    let el = CascadeElement {
+        element,
+        ancestors,
+        siblings,
+        sibling_index,
+    };
     let mut caches = SelectorCaches::default();
     let mut ctx = MatchingContext::new(
         MatchingMode::Normal,

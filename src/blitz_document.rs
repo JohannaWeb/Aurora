@@ -8,8 +8,8 @@ use vello::Scene;
 
 use crate::identity::Identity;
 
-use std::sync::{Mutex, OnceLock};
 use std::collections::BTreeMap;
+use std::sync::{Mutex, OnceLock};
 
 static NET_CACHE: OnceLock<Mutex<BTreeMap<String, Vec<u8>>>> = OnceLock::new();
 
@@ -23,7 +23,9 @@ struct AuroraNetProvider {
 
 impl AuroraNetProvider {
     fn new(identity: &Identity) -> std::sync::Arc<Self> {
-        std::sync::Arc::new(Self { identity: identity.clone() })
+        std::sync::Arc::new(Self {
+            identity: identity.clone(),
+        })
     }
 }
 
@@ -107,5 +109,62 @@ impl BlitzDocument {
         self.inner.resolve(0.0);
         let mut painter = VelloScenePainter::new(scene);
         blitz_paint::paint_scene(&mut painter, &mut self.inner, 1.0, width, height, 0, 0);
+    }
+
+    pub fn debug_summary(&self) -> String {
+        let root = self.inner.root_element();
+        let mut counts = NodeCounts::default();
+        collect_node_counts(root, &mut counts);
+
+        let mut top_tags = Vec::new();
+        for &child_id in root.children.iter().take(8) {
+            if let Some(node) = self.inner.get_node(child_id) {
+                if let Some(el) = node.data.downcast_element() {
+                    top_tags.push(el.name.local.to_string());
+                } else if matches!(node.data, blitz_dom::NodeData::Text(_)) {
+                    top_tags.push("#text".to_string());
+                }
+            }
+        }
+
+        format!(
+            "root={} nodes={} elements={} text={} top=[{}] text_len={}",
+            root.data
+                .downcast_element()
+                .map(|el| el.name.local.to_string())
+                .unwrap_or_else(|| "#document".to_string()),
+            counts.total,
+            counts.elements,
+            counts.text,
+            top_tags.join(","),
+            root.text_content().len()
+        )
+    }
+}
+
+#[derive(Default)]
+struct NodeCounts {
+    total: usize,
+    elements: usize,
+    text: usize,
+}
+
+fn collect_node_counts(node: &blitz_dom::Node, counts: &mut NodeCounts) {
+    counts.total += 1;
+    match &node.data {
+        blitz_dom::NodeData::Element(_) | blitz_dom::NodeData::AnonymousBlock(_) => {
+            counts.elements += 1;
+            for &child_id in node.children.iter() {
+                collect_node_counts(node.with(child_id), counts);
+            }
+        }
+        blitz_dom::NodeData::Text(_) => {
+            counts.text += 1;
+        }
+        blitz_dom::NodeData::Document | blitz_dom::NodeData::Comment => {
+            for &child_id in node.children.iter() {
+                collect_node_counts(node.with(child_id), counts);
+            }
+        }
     }
 }

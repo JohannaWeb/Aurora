@@ -1,8 +1,8 @@
 use crate::css::{AlignItems, StyleMap};
 
+use super::super::LayoutBox;
 use super::super::constants::BLOCK_VERTICAL_PADDING;
 use super::super::constraints::clamp_content_height;
-use super::super::LayoutBox;
 use super::spacing::justify_start_and_spacing;
 use super::types::FlexContext;
 

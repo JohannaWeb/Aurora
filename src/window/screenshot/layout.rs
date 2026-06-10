@@ -1,7 +1,7 @@
+use super::ScreenshotImage;
 use super::color::parse_screenshot_color;
 use super::primitives::{draw_border, draw_rect};
 use super::text::render_text_simple;
-use super::ScreenshotImage;
 use image::Rgba;
 
 pub(super) fn render_layout_with_text(

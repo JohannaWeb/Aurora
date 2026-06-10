@@ -1,6 +1,6 @@
+use vello::Scene;
 use vello::kurbo::{Affine, Rect as KRect, RoundedRect};
 use vello::peniko::{Color, Fill};
-use vello::Scene;
 
 pub(super) fn fill_scene_rect(
     scene: &mut Scene,

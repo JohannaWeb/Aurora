@@ -1,4 +1,4 @@
-use rustybuzz::{shape, UnicodeBuffer};
+use rustybuzz::{UnicodeBuffer, shape};
 
 use super::glyph::{PositionedGlyph, TextRun};
 use super::resources::get_font_face;

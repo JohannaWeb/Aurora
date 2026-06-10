@@ -5,8 +5,8 @@ mod primitives;
 mod scrollbar;
 mod text;
 
-use super::input::WindowInput;
 use super::BROWSER_CHROME_HEIGHT;
+use super::input::WindowInput;
 use image::{ImageBuffer, Rgba};
 use std::time::Instant;
 

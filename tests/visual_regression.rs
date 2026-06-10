@@ -82,6 +82,44 @@ fn assert_snapshot_named(fixture_name: &str, snapshot_name: &str, width: u32, he
     );
 }
 
+fn assert_html_snapshot_named(snapshot_name: &str, html: &str, width: u32, height: u32) {
+    let rendered = aurora::render::headless::render_to_image(html, width, height);
+    let snapshot_path = snapshots_dir().join(format!("{}.png", snapshot_name));
+
+    if updating_snapshots() {
+        rendered
+            .save(&snapshot_path)
+            .expect("Failed to save snapshot");
+        println!("Updated snapshot: {}", snapshot_path.display());
+        return;
+    }
+
+    if !snapshot_path.exists() {
+        rendered
+            .save(&snapshot_path)
+            .expect("Failed to save initial snapshot");
+        println!("Created initial snapshot: {}", snapshot_path.display());
+        return;
+    }
+
+    let baseline = image::open(&snapshot_path)
+        .unwrap_or_else(|_| panic!("Failed to load baseline: {}", snapshot_path.display()))
+        .to_rgba8();
+
+    let (diff_ratio, diff_image) = compute_diff(&rendered, &baseline);
+
+    assert!(
+        diff_ratio <= DIFF_THRESHOLD,
+        "Visual regression in '{}': {:.2}% pixels differ (threshold {:.2}%)\n\
+         Diff saved to: {}\n\
+         Run UPDATE_SNAPSHOTS=1 cargo test to update baselines.",
+        snapshot_name,
+        diff_ratio * 100.0,
+        DIFF_THRESHOLD * 100.0,
+        save_diff(snapshot_name, &diff_image).display()
+    );
+}
+
 fn save_diff(name: &str, img: &RgbaImage) -> PathBuf {
     let path = snapshots_dir().join(format!("{}-diff.png", name));
     img.save(&path).expect("Failed to save diff image");
@@ -139,4 +177,24 @@ fn snapshot_google_homepage() {
 #[test]
 fn snapshot_wikipedia_rust() {
     assert_snapshot("wikipedia-rust", 1440, 900);
+}
+
+#[test]
+fn snapshot_hydrated_first_paint_smoke() {
+    let html = r#"
+        <html>
+          <body style="margin:0;background:#081018;color:#f2f6fb;font:20px sans-serif">
+            <div style="padding:32px">
+              <div style="display:inline-block;padding:16px 20px;border-radius:12px;background:#0f1c28;border:1px solid #2f495f">
+                hydrated first paint
+              </div>
+              <div style="margin-top:18px;color:#8ea0b3">
+                this should never be all white
+              </div>
+            </div>
+          </body>
+        </html>
+    "#;
+
+    assert_html_snapshot_named("hydrated-first-paint-smoke", html, 960, 540);
 }

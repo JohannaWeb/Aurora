@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
-use super::url::ParsedUrl;
 use super::FetchError;
+use super::url::ParsedUrl;
 
 pub fn resolve_relative_url(base: &str, relative: &str) -> Result<String, FetchError> {
     if is_absolute_url(relative) {

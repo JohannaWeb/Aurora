@@ -11,6 +11,7 @@ use crate::style::StyleTree;
 use std::cell::RefCell;
 use std::env;
 use std::rc::Rc;
+use std::time::Instant;
 
 pub(crate) fn run_browser(cli: CliOptions, identity: Identity) {
     let html = load_html(cli.input_url.as_deref(), &identity);
@@ -49,7 +50,17 @@ pub(crate) fn run_browser(cli: CliOptions, identity: Identity) {
 
     let content_w = viewport.width as u32;
     let content_h = (viewport.height - crate::window::BROWSER_CHROME_HEIGHT).max(1.0) as u32;
-    let blitz_doc = BlitzDocument::from_html(&html, base_url.as_deref(), &identity, content_w, content_h);
+    // Build the live renderer snapshot from the post-script DOM, not the
+    // original HTML source, so bootstrap mutations (custom elements, template
+    // stamping, connectedCallback writes, etc.) are visible on the first paint.
+    let blitz_doc =
+        build_hydrated_blitz_doc(&dom, base_url.as_deref(), &identity, content_w, content_h);
+    if env::var("AURORA_DEBUG_RENDER").is_ok() {
+        eprintln!(
+            "[render] hydrated first paint: {}",
+            blitz_doc.debug_summary()
+        );
+    }
 
     maybe_open_window(
         dom,
@@ -86,56 +97,129 @@ fn viewport_size() -> ViewportSize {
     }
 }
 
+// Scripts larger than this are skipped as a memory/time safety bound.
+// SpiderMonkey JITs real-world bundles fine, so these budgets are sized for
+// modern multi-MB sites (e.g. YouTube) rather than an interpreter-only engine.
+const MAX_SCRIPT_BYTES: usize = 16 * 1024 * 1024; // 16 MB per script
+const MAX_TOTAL_SCRIPT_BYTES: usize = 32 * 1024 * 1024; // 32 MB across all scripts
+
 fn run_scripts(
     dom: &crate::dom::NodePtr,
     base_url: Option<&str>,
     identity: &Identity,
-) -> Option<crate::js_boa::BoaRuntime> {
+) -> Option<Box<dyn crate::js_engine::JsRuntime>> {
     let scripts = extract_scripts(dom);
     if scripts.is_empty() {
         return None;
     }
 
-    println!("Boa: Processing {} scripts...", scripts.len());
-    let mut runtime = crate::js_boa::BoaRuntime::new(Rc::clone(dom));
-    for (source, is_url) in scripts {
-        let Some(script_content) = script_content(source, is_url, base_url, identity) else {
+    let total = scripts.len();
+    log::info!("[JS] processing {} scripts", total);
+
+    // Fetch all external scripts in parallel, preserving order for execution.
+    let fetched: Vec<Option<String>> = {
+        let handles: Vec<_> = scripts
+            .iter()
+            .map(|script| {
+                let base = base_url.map(str::to_string);
+                let identity = identity.clone();
+                let source = script.source.clone();
+                let is_url = script.is_url;
+                std::thread::spawn(move || fetch_script(source, is_url, base.as_deref(), &identity))
+            })
+            .collect();
+        handles
+            .into_iter()
+            .map(|h| h.join().unwrap_or(None))
+            .collect()
+    };
+
+    let mut runtime: Box<dyn crate::js_engine::JsRuntime> =
+        Box::new(crate::js_sm::SmRuntime::new(Rc::clone(dom)));
+    let mut total_script_bytes = 0usize;
+    for (script, content) in scripts.iter().zip(fetched.into_iter()) {
+        let Some(content) = content else { continue };
+        if total_script_bytes + content.len() > MAX_TOTAL_SCRIPT_BYTES {
+            eprintln!(
+                "JS: skipping script ({} KB, over {}KB total limit)",
+                content.len() / 1024,
+                MAX_TOTAL_SCRIPT_BYTES / 1024
+            );
             continue;
-        };
-        if let Err(e) = runtime.execute(&script_content) {
-            eprintln!("JS Error: {}", e);
         }
+        total_script_bytes += content.len();
+        runtime.set_current_script(Some(&script.node));
+        if let Err(e) = runtime.execute(&content) {
+            crate::logging::track_js_exception(&e);
+        }
+        runtime.set_current_script(None);
+        pump_ready_work(runtime.as_mut());
     }
+    runtime.fire_dom_content_loaded();
+    pump_ready_work(runtime.as_mut());
+    runtime.fire_load();
+    pump_ready_work(runtime.as_mut());
     Some(runtime)
 }
 
-fn script_content(
+fn pump_ready_work(runtime: &mut dyn crate::js_engine::JsRuntime) {
+    for _ in 0..8 {
+        let now = Instant::now();
+        let mut fired = runtime.tick(now);
+        fired |= runtime.drain_animation_frame_callbacks(now);
+        if !fired && !runtime.has_ready_work(now) {
+            break;
+        }
+    }
+}
+
+pub fn fetch_script(
     source: String,
     is_url: bool,
     base_url: Option<&str>,
     identity: &Identity,
 ) -> Option<String> {
     if !is_url {
-        return Some(source);
+        return if source.len() <= MAX_SCRIPT_BYTES {
+            Some(source)
+        } else {
+            eprintln!(
+                "JS: skipping inline script ({} KB, over limit)",
+                source.len() / 1024
+            );
+            None
+        };
     }
 
     let base = base_url?;
-    match crate::fetch::resolve_relative_url(base, &source) {
-        Ok(full_url) => {
-            println!("Boa: Fetching external script: {}", full_url);
-            match crate::fetch::fetch_string(&full_url, identity) {
-                Ok(content) => Some(content),
-                Err(e) => {
-                    eprintln!("Failed to fetch script {}: {}", full_url, e);
-                    None
-                }
-            }
-        }
+    let full_url = match crate::fetch::resolve_relative_url(base, &source) {
+        Ok(u) => u,
         Err(e) => {
-            eprintln!("Failed to resolve script URL {}: {}", source, e);
-            None
+            eprintln!("Failed to resolve script URL {source}: {e}");
+            return None;
         }
+    };
+
+    log::info!(target: "aurora::net", "[NET] GET {} (script)", full_url);
+    let content = match crate::fetch::fetch_string(&full_url, identity) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("Failed to fetch script {full_url}: {e}");
+            return None;
+        }
+    };
+
+    if content.len() > MAX_SCRIPT_BYTES {
+        eprintln!(
+            "JS: skipping {} ({} KB, over {}KB limit)",
+            full_url,
+            content.len() / 1024,
+            MAX_SCRIPT_BYTES / 1024
+        );
+        return None;
     }
+
+    Some(content)
 }
 
 fn print_debug_output(
@@ -165,7 +249,7 @@ fn maybe_open_window(
     images: crate::ImageCache,
     svgs: crate::SvgCache,
     media: crate::MediaCache,
-    runtime: Option<crate::js_boa::BoaRuntime>,
+    runtime: Option<Box<dyn crate::js_engine::JsRuntime>>,
     blitz_doc: BlitzDocument,
 ) {
     let has_screenshot = env::var("AURORA_SCREENSHOT").is_ok();
@@ -199,4 +283,55 @@ fn maybe_open_window(
     } else {
         eprintln!("Headless mode: skipping window");
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::html::Parser;
+
+    #[test]
+    fn hydrated_blitz_doc_reflects_dom_mutations_before_first_paint() {
+        let html = "<html><body><div id='root'>before</div></body></html>";
+        let dom = Parser::new(html).parse_document();
+        let mut runtime = crate::js_sm::SmRuntime::new(dom.clone());
+
+        runtime
+            .execute(
+                r#"
+                document.getElementById("root").textContent = "after";
+                "#,
+            )
+            .unwrap();
+
+        let blitz_doc = build_hydrated_blitz_doc(&dom, None, &headless_identity(), 800, 600);
+        let summary = blitz_doc.debug_summary();
+
+        assert!(summary.contains("text_len=5"), "{summary}");
+        assert!(summary.contains("nodes=5"), "{summary}");
+        assert!(summary.contains("elements=4"), "{summary}");
+    }
+
+    fn headless_identity() -> Identity {
+        Identity::new(
+            "did:headless:test",
+            "Headless",
+            crate::identity::IdentityKind::Agent,
+            [
+                crate::identity::Capability::ReadWorkspace,
+                crate::identity::Capability::NetworkAccess,
+            ],
+        )
+    }
+}
+
+pub(crate) fn build_hydrated_blitz_doc(
+    dom: &crate::dom::NodePtr,
+    base_url: Option<&str>,
+    identity: &Identity,
+    content_w: u32,
+    content_h: u32,
+) -> BlitzDocument {
+    let hydrated_html = crate::js_sm::serialize_outer_html(dom);
+    BlitzDocument::from_html(&hydrated_html, base_url, identity, content_w, content_h)
 }
