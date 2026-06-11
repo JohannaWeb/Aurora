@@ -193,6 +193,19 @@ pub(in crate::js_sm) unsafe fn create_js_node(cx: &mut JSContext, node: NodePtr)
                 Some(element_attach_shadow),
                 1,
             );
+            // ShadyDOM (webcomponents-all-noPatch.js) wraps `attachShadow` and
+            // calls through to `this.node.__shady_attachShadow(...)` to get the
+            // "native" root it then shims. Without this alias the call throws
+            // a TypeError inside Polymer's `_attachDom`, which gets swallowed
+            // and silently aborts `ready()` before the element's template is
+            // attached.
+            define_fn(
+                cx,
+                obj_root.handle(),
+                c"__shady_attachShadow",
+                Some(element_attach_shadow),
+                1,
+            );
             set_prop_null(cx, obj_root.handle(), c"shadowRoot");
             define_fn(
                 cx,
@@ -1252,7 +1265,7 @@ unsafe extern "C" fn node_return_first_arg_or_this(
 /// and shadow DOM merge) — but for a custom-element-heavy site like YouTube,
 /// "the content shows up, just not perfectly isolated" beats "nothing renders
 /// because attachShadow doesn't exist."
-unsafe extern "C" fn element_attach_shadow(
+pub(in crate::js_sm) unsafe extern "C" fn element_attach_shadow(
     cx: *mut RawJSContext,
     argc: u32,
     vp: *mut Value,
@@ -1302,6 +1315,11 @@ unsafe extern "C" fn element_attach_shadow(
     set_prop_str(&mut cx, sr_root.handle(), c"nodeName", "#document-fragment");
     set_prop_str(&mut cx, sr_root.handle(), c"mode", &mode);
     set_prop_bool(&mut cx, sr_root.handle(), c"delegatesFocus", false);
+    // ShadyDOM's attachShadow wrapper returns its own root object `k` and
+    // hybrid-mode callers (Polymer's `_attachDom`) do `k.shadowRoot.appendChild`,
+    // expecting `k` to expose the "native" root it wraps. Self-reference so
+    // that path lands on the same host-proxying object either way.
+    set_prop_obj(&mut cx, sr_root.handle(), c"shadowRoot", sr);
     define_accessor(
         &mut cx,
         sr_root.handle(),
@@ -1398,6 +1416,13 @@ unsafe extern "C" fn element_attach_shadow(
         let host_obj = host_val.get().to_object_or_null();
         rooted!(&in(cx) let host_root = host_obj);
         set_prop_obj(&mut cx, host_root.handle(), c"shadowRoot", sr);
+        // ShadyDOM (noPatch mode, `inUse=true`) wraps every node and exposes
+        // its OWN `attachShadow`/`shadowRoot` that proxy to
+        // `node.__shady_attachShadow`/`node.__shady_shadowRoot` rather than
+        // the plain `shadowRoot` property — without this, `wrap(host).shadowRoot`
+        // stays undefined even after `__shady_attachShadow` runs, and Polymer's
+        // `_attachDom` throws on `k.shadowRoot.appendChild`.
+        set_prop_obj(&mut cx, host_root.handle(), c"__shady_shadowRoot", sr);
     }
 
     args.rval().set(ObjectValue(sr));
@@ -3189,12 +3214,12 @@ unsafe extern "C" fn get_inner_html(cx: *mut RawJSContext, argc: u32, vp: *mut V
                     children
                         .unwrap_or_else(|| el.children.clone())
                         .iter()
-                        .map(|c| crate::js_sm::serialization::serialize_outer_html(c))
+                        .map(|c| crate::dom::serialize_outer_html(c))
                         .collect::<String>()
                 }
                 Node::Document { children, .. } => children
                     .iter()
-                    .map(|c| crate::js_sm::serialization::serialize_outer_html(c))
+                    .map(|c| crate::dom::serialize_outer_html(c))
                     .collect::<String>(),
                 Node::Text(t) => t.clone(),
             })
@@ -3275,7 +3300,7 @@ unsafe extern "C" fn get_outer_html(cx: *mut RawJSContext, argc: u32, vp: *mut V
         state
             .registry
             .lookup(node_id)
-            .map(|n| crate::js_sm::serialization::serialize_outer_html(&n))
+            .map(|n| crate::dom::serialize_outer_html(&n))
             .unwrap_or_default()
     };
     let js_str = new_js_string(&mut cx, &html);

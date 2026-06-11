@@ -574,7 +574,7 @@ fn get_inner_html(
     let external = v8::Local::<v8::External>::try_from(args.data()).unwrap();
     let node_data = unsafe { &*(external.value() as *const NodeData) };
 
-    let html = crate::js_boa::serialize_outer_html(&node_data.node); // Simplified: using existing serializer
+    let html = crate::dom::serialize_outer_html(&node_data.node);
     retval.set(v8_str(scope, &html).into());
 }
 
@@ -608,7 +608,7 @@ fn get_outer_html(
     let external = v8::Local::<v8::External>::try_from(args.data()).unwrap();
     let node_data = unsafe { &*(external.value() as *const NodeData) };
 
-    let html = crate::js_boa::serialize_outer_html(&node_data.node);
+    let html = crate::dom::serialize_outer_html(&node_data.node);
     retval.set(v8_str(scope, &html).into());
 }
 

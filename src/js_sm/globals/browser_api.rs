@@ -9,6 +9,7 @@ use mozjs::jsval::{
 use mozjs::rooted;
 use mozjs::rust::wrappers2;
 
+use crate::js_sm::document::element_attach_shadow;
 use crate::js_sm::mutation_observer;
 use crate::js_sm::state::SmState;
 use crate::js_sm::utils::*;
@@ -564,6 +565,7 @@ unsafe fn install_element_methods(cx: &mut JSContext, proto: mozjs::gc::Handle<*
     define_fn(cx, proto, c"prepend", Some(noop), 1);
     define_fn(cx, proto, c"before", Some(noop), 1);
     define_fn(cx, proto, c"after", Some(noop), 1);
+    define_fn(cx, proto, c"__shady_attachShadow", Some(element_attach_shadow), 1);
 }
 
 unsafe extern "C" fn noop(_cx: *mut RawJSContext, _argc: u32, vp: *mut Value) -> bool {
@@ -1500,6 +1502,42 @@ unsafe fn install_youtube_polyfills(cx: &mut JSContext, global: mozjs::gc::Handl
                         trace('template-build-smoke kids=' +
                             (ptpl.content && ptpl.content.childNodes ? ptpl.content.childNodes.length : '?'));
                     } catch (e) { traceError('template-build-smoke', e); }
+                    try {
+                        var t2 = document.createElement('template');
+                        t2.innerHTML = '<div id="a"><span id="b">x</span></div><p id="c">y</p>';
+                        var c2 = t2.content;
+                        trace('content childNodes.length=' + (c2 && c2.childNodes ? c2.childNodes.length : 'n/a'));
+                        var fc2 = c2 && c2.firstChild;
+                        trace('content.firstChild=' + (fc2 ? (fc2.tagName || fc2.nodeName) : String(fc2)));
+                        if (fc2) {
+                            trace('firstChild.nextSibling=' + (fc2.nextSibling ? (fc2.nextSibling.tagName || fc2.nextSibling.nodeName) : String(fc2.nextSibling)));
+                            trace('firstChild.parentNode===content=' + (fc2.parentNode === c2));
+                        }
+                        var clone2 = c2.cloneNode(true);
+                        trace('clone.childNodes.length=' + (clone2 && clone2.childNodes ? clone2.childNodes.length : 'n/a'));
+                        trace('typeof importNode=' + typeof document.importNode);
+                        if (typeof document.importNode === 'function') {
+                            var imp2 = document.importNode(c2, true);
+                            trace('importNode.childNodes.length=' + (imp2 && imp2.childNodes ? imp2.childNodes.length : 'n/a'));
+                        }
+                    } catch (e) { traceError('template-content-probe', e); }
+                    try {
+                        var t3 = document.createElement('template');
+                        t3.innerHTML = '<!--css-build:shady--><!--scope--><yt-guide-manager id="guide-service" disabled="[[standalone]]" guide-persistent-and-visible="[[guidePersistentAndVisible]]"></yt-guide-manager><div id="x">y</div>';
+                        var c3 = t3.content;
+                        trace('comment-prefixed childNodes.length=' + (c3 && c3.childNodes ? c3.childNodes.length : 'n/a'));
+                        var fc3 = c3 && c3.firstChild;
+                        trace('comment-prefixed firstChild=' + (fc3 ? (fc3.nodeType + ':' + (fc3.tagName || fc3.nodeName)) : String(fc3)));
+                        if (fc3) {
+                            trace('comment-prefixed firstChild.nextSibling=' + (fc3.nextSibling ? (fc3.nextSibling.nodeType + ':' + (fc3.nextSibling.tagName || fc3.nextSibling.nodeName)) : String(fc3.nextSibling)));
+                        }
+                        if (c3 && c3.childNodes) {
+                            for (var ci = 0; ci < c3.childNodes.length; ci++) {
+                                var cn = c3.childNodes[ci];
+                                trace('comment-prefixed childNodes[' + ci + ']=' + cn.nodeType + ':' + (cn.tagName || cn.nodeName));
+                            }
+                        }
+                    } catch (e) { traceError('comment-prefixed-probe', e); }
                 }
                 try {
                     var app = el || (typeof document !== 'undefined' && document.querySelector
@@ -1871,7 +1909,24 @@ unsafe fn install_youtube_polyfills(cx: &mut JSContext, global: mozjs::gc::Handl
                         if (shouldTraceName(name)) trace('connectedCallback ' + name);
                         el.connectedCallback();
                     }
-                } catch (e) { traceError('connectedCallback ' + name, e); }
+                } catch (e) {
+                    traceError('connectedCallback ' + name, e);
+                    if (globalThis.__aurora_debug_youtube__ && name === 'ytd-app') {
+                        try {
+                            trace('post-error $ type=' + typeof el.$ + ' keys=' + (el.$ ? Object.keys(el.$).join(',') : 'n/a'));
+                            var gv = el.$ && el.$.guide;
+                            trace('post-error $.guide=' + (gv ? (gv.tagName || typeof gv) : String(gv)));
+                            trace('post-error root===shadowRoot=' + (el.root === el.shadowRoot) +
+                                ' root type=' + typeof el.root);
+                            var sr = el.shadowRoot;
+                            trace('post-error shadowRoot childNodes=' + (sr && sr.childNodes ? sr.childNodes.length : 'n/a'));
+                            var g = sr && typeof sr.querySelector === 'function' ? sr.querySelector('#guide') : null;
+                            trace('post-error shadowRoot.querySelector(#guide)=' + (g ? (g.tagName || 'found') : String(g)));
+                            trace('post-error _template type=' + typeof el._template +
+                                ' typeof _stampTemplate=' + typeof el._stampTemplate);
+                        } catch (e2) { traceError('post-error probe', e2); }
+                    }
+                }
             }
 
             function rememberPending(el) {

@@ -25,10 +25,10 @@ fn serialize_node(node: &NodePtr, out: &mut String, is_rawtext: bool) {
                 out.push('"');
             }
             out.push('>');
-            
+
             // Rawtext tags like <style> and <script> should not have their child text nodes HTML-escaped.
             let el_is_raw = matches!(el.tag_name.to_ascii_lowercase().as_str(), "script" | "style");
-            
+
             for child in &el.children {
                 serialize_node(child, out, el_is_raw);
             }
@@ -104,4 +104,3 @@ mod tests {
         );
     }
 }
-

@@ -1,7 +1,7 @@
 #![allow(unsafe_op_in_unsafe_fn)]
 mod api;
 
-pub(in crate::js_sm) use api::create_js_node;
+pub(in crate::js_sm) use api::{create_js_node, element_attach_shadow};
 
 use mozjs::context::JSContext;
 use mozjs::jsapi::JSObject;
