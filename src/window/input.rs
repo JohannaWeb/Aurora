@@ -142,7 +142,15 @@ impl WindowInput {
                     .collect()
             };
             let mut rt: Box<dyn JsRuntime> =
-                Box::new(crate::js_sm::SmRuntime::new(Rc::clone(&new_dom)));
+                crate::js_engine::create_runtime(crate::js_engine::EngineKind::from_env(), &new_dom)
+                    .unwrap_or_else(|e| {
+                        log::warn!("[JS] {e}; falling back to SpiderMonkey");
+                        crate::js_engine::create_runtime(
+                            crate::js_engine::EngineKind::SpiderMonkey,
+                            &new_dom,
+                        )
+                        .expect("SpiderMonkey backend is always available")
+                    });
             for (script, content) in scripts.iter().zip(fetched.into_iter()) {
                 let Some(content) = content else { continue };
                 rt.set_current_script(Some(&script.node));

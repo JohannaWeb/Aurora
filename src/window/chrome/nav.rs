@@ -12,7 +12,7 @@ pub(super) fn paint_nav_and_url(scene: &mut Scene, width: u32, display_url: &str
         16.0,
         130.0,
         24.0,
-        Color::from_rgb8(199, 206, 212),
+        Color::from_rgb8(150, 99, 121),
     );
     text(
         scene,
@@ -20,7 +20,7 @@ pub(super) fn paint_nav_and_url(scene: &mut Scene, width: u32, display_url: &str
         58.0,
         130.0,
         24.0,
-        Color::from_rgb8(199, 206, 212),
+        Color::from_rgb8(150, 99, 121),
     );
     text(
         scene,
@@ -28,7 +28,7 @@ pub(super) fn paint_nav_and_url(scene: &mut Scene, width: u32, display_url: &str
         100.0,
         130.0,
         24.0,
-        Color::from_rgb8(199, 206, 212),
+        Color::from_rgb8(150, 99, 121),
     );
     let urlbar_w = (width as f64 - 390.0).max(360.0);
     fill_scene_rect(
@@ -37,7 +37,7 @@ pub(super) fn paint_nav_and_url(scene: &mut Scene, width: u32, display_url: &str
         124.0,
         urlbar_w,
         42.0,
-        Color::from_rgb8(11, 17, 23),
+        Color::from_rgb8(255, 249, 251),
     );
     stroke_scene_rect(
         scene,
@@ -45,7 +45,7 @@ pub(super) fn paint_nav_and_url(scene: &mut Scene, width: u32, display_url: &str
         124.0,
         urlbar_w,
         42.0,
-        Color::from_rgb8(38, 48, 58),
+        Color::from_rgb8(227, 186, 202),
     );
     stroke_scene_rect(
         scene,
@@ -53,7 +53,7 @@ pub(super) fn paint_nav_and_url(scene: &mut Scene, width: u32, display_url: &str
         130.0,
         69.0,
         30.0,
-        Color::from_rgb8(36, 79, 61),
+        Color::from_rgb8(226, 156, 184),
     );
     text(
         scene,
@@ -61,16 +61,23 @@ pub(super) fn paint_nav_and_url(scene: &mut Scene, width: u32, display_url: &str
         163.0,
         136.0,
         13.0,
-        Color::from_rgb8(65, 204, 120),
+        Color::from_rgb8(198, 87, 133),
     );
-    text(scene, "/", 231.0, 130.0, 24.0, Color::from_rgb8(40, 49, 58));
+    text(
+        scene,
+        "/",
+        231.0,
+        130.0,
+        24.0,
+        Color::from_rgb8(188, 137, 159),
+    );
     text(
         scene,
         &truncate_chrome_text(display_url, 43),
         269.0,
         135.0,
         16.0,
-        Color::from_rgb8(122, 130, 139),
+        Color::from_rgb8(149, 113, 129),
     );
     let diag_x = width as f64 - 610.0;
     fill_scene_rect(
@@ -79,7 +86,7 @@ pub(super) fn paint_nav_and_url(scene: &mut Scene, width: u32, display_url: &str
         128.0,
         355.0,
         32.0,
-        Color::from_rgb8(18, 24, 33),
+        Color::from_rgb8(255, 244, 248),
     );
     stroke_scene_rect(
         scene,
@@ -87,14 +94,14 @@ pub(super) fn paint_nav_and_url(scene: &mut Scene, width: u32, display_url: &str
         128.0,
         355.0,
         32.0,
-        Color::from_rgb8(29, 38, 48),
+        Color::from_rgb8(231, 194, 209),
     );
     text(
         scene,
-        "dom 412 · style 38 · layout 96",
+        "snapshot · shell 412 nodes",
         diag_x + 13.0,
         136.0,
         12.0,
-        Color::from_rgb8(112, 121, 132),
+        Color::from_rgb8(160, 120, 140),
     );
 }

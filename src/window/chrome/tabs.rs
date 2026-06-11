@@ -5,15 +5,29 @@ use super::text::text;
 use crate::window::scene_helpers::{fill_scene_rect, stroke_scene_rect};
 
 pub(super) fn paint_tabs(scene: &mut Scene, width: u32) {
-    fill_scene_rect(scene, 14.0, 70.0, 175.0, 40.0, Color::from_rgb8(14, 23, 23));
-    stroke_scene_rect(scene, 14.0, 70.0, 175.0, 40.0, Color::from_rgb8(26, 58, 50));
+    fill_scene_rect(
+        scene,
+        14.0,
+        70.0,
+        175.0,
+        40.0,
+        Color::from_rgb8(255, 227, 238),
+    );
+    stroke_scene_rect(
+        scene,
+        14.0,
+        70.0,
+        175.0,
+        40.0,
+        Color::from_rgb8(225, 164, 189),
+    );
     text(
         scene,
         "aurora · sove...",
         45.0,
         82.0,
         14.0,
-        Color::from_rgb8(240, 245, 242),
+        Color::from_rgb8(110, 60, 81),
     );
     text(
         scene,
@@ -21,7 +35,7 @@ pub(super) fn paint_tabs(scene: &mut Scene, width: u32) {
         235.0,
         82.0,
         14.0,
-        Color::from_rgb8(98, 107, 117),
+        Color::from_rgb8(165, 120, 139),
     );
     text(
         scene,
@@ -29,7 +43,7 @@ pub(super) fn paint_tabs(scene: &mut Scene, width: u32) {
         425.0,
         82.0,
         14.0,
-        Color::from_rgb8(98, 107, 117),
+        Color::from_rgb8(165, 120, 139),
     );
     text(
         scene,
@@ -37,7 +51,7 @@ pub(super) fn paint_tabs(scene: &mut Scene, width: u32) {
         616.0,
         82.0,
         14.0,
-        Color::from_rgb8(98, 107, 117),
+        Color::from_rgb8(165, 120, 139),
     );
     text(
         scene,
@@ -45,7 +59,7 @@ pub(super) fn paint_tabs(scene: &mut Scene, width: u32) {
         807.0,
         82.0,
         14.0,
-        Color::from_rgb8(98, 107, 117),
+        Color::from_rgb8(165, 120, 139),
     );
     text(
         scene,
@@ -53,7 +67,7 @@ pub(super) fn paint_tabs(scene: &mut Scene, width: u32) {
         969.0,
         77.0,
         22.0,
-        Color::from_rgb8(111, 120, 130),
+        Color::from_rgb8(176, 128, 148),
     );
     text(
         scene,
@@ -61,6 +75,6 @@ pub(super) fn paint_tabs(scene: &mut Scene, width: u32) {
         width as f64 - 330.0,
         82.0,
         13.0,
-        Color::from_rgb8(88, 97, 107),
+        Color::from_rgb8(164, 117, 137),
     );
 }

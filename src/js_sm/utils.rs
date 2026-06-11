@@ -132,7 +132,7 @@ pub(super) unsafe fn get_prop_string(
     {
         let raw = val.get().to_string();
         if !raw.is_null() {
-            return Some(jsstr_to_string(cx.raw_cx(), NonNull::new_unchecked(raw)));
+            return Some(jsstr_to_string(cx, NonNull::new_unchecked(raw)));
         }
     }
     None
@@ -318,7 +318,7 @@ pub(super) unsafe fn value_to_string(cx: &mut JSContext, val: mozjs::gc::Handle<
     if raw.is_null() {
         return String::new();
     }
-    jsstr_to_string(cx.raw_cx(), NonNull::new_unchecked(raw))
+    jsstr_to_string(cx, NonNull::new_unchecked(raw))
 }
 
 pub(super) unsafe fn arg_to_string(
@@ -452,7 +452,7 @@ pub(super) unsafe fn eval_bootstrap(
     src: &str,
 ) {
     rooted!(&in(cx) let mut rval = UndefinedValue());
-    let options = CompileOptionsWrapper::new(cx, label.to_str().unwrap_or("bootstrap"), 1);
+    let options = CompileOptionsWrapper::new(cx, label.to_owned(), 1);
     if evaluate_script(cx, global, src, rval.handle_mut(), options).is_err() {
         let msg = pending_exception_string(cx);
         eprintln!("JS bootstrap error ({}): {}", label.to_string_lossy(), msg);

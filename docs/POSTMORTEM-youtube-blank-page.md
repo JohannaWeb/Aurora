@@ -40,6 +40,29 @@ checkpoint-based delivery). **Verified working:** the post-fix run produces an
 empty compat summary — zero missing APIs, zero tracked JS exceptions. They were
 real gaps, but they were not the cause of the blank page.
 
+## Current status
+
+What is already in place:
+
+- Parsed `<template>` contents survive parsing and cloning.
+- `document.currentScript` is wired through the runner and SpiderMonkey bridge.
+- `customElements` upgrades preserve constructor/template lookup more cleanly.
+- `template.content` is now a real fragment wrapper with stable identity.
+- The YouTube probe logs `ctor.template`, `app._template`, `app.root`,
+  `app.shadowRoot`, and `attachShadow()` calls for `ytd-app` and
+  `ytd-masthead`.
+
+What is still missing:
+
+- A live YouTube probe run with `AURORA_DEBUG_YOUTUBE=1` so we can see which
+  branch actually fails.
+- If the probe shows template lookup is fine, the remaining work is in the
+  attach/stamp path (`attachShadow`, `_attachDom`, or fragment insertion).
+- If the probe shows template lookup is not fine, the remaining work is in
+  `dom-module` registration or the custom-elements upgrade shim.
+- After hydration works, the next likely issues are boot-time scheduler/timer
+  behavior and the O(document) `customElements.define` scan.
+
 ## Boot timeline (from `logs/aurora_20260610_083436.log`)
 
 | Time | Event |

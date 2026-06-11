@@ -6,6 +6,56 @@ use crate::css::Stylesheet;
 use crate::dom::NodePtr;
 use crate::layout::{LayoutTree, ViewportSize};
 
+/// Which JS engine backend to construct. SpiderMonkey is the main engine;
+/// Boa and V8 are optional backends behind the `engine-boa` / `v8` features.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum EngineKind {
+    SpiderMonkey,
+    Boa,
+    V8,
+}
+
+impl EngineKind {
+    /// Engine selection via `AURORA_JS_ENGINE` (`spidermonkey`/`sm`, `boa`,
+    /// `v8`). Unset or unrecognized values fall back to SpiderMonkey.
+    pub(crate) fn from_env() -> Self {
+        match std::env::var("AURORA_JS_ENGINE").as_deref() {
+            Ok("boa") => Self::Boa,
+            Ok("v8") => Self::V8,
+            _ => Self::SpiderMonkey,
+        }
+    }
+}
+
+/// Dependency-injection seam: every place that needs a JS runtime asks this
+/// factory instead of naming a concrete engine type. Engines compiled out via
+/// features return `Err` so callers can fall back rather than fail to build.
+pub(crate) fn create_runtime(kind: EngineKind, dom: &NodePtr) -> Result<Box<dyn JsRuntime>, String> {
+    match kind {
+        EngineKind::SpiderMonkey => Ok(Box::new(crate::js_sm::SmRuntime::new(dom.clone()))),
+        EngineKind::Boa => {
+            #[cfg(feature = "engine-boa")]
+            {
+                Ok(Box::new(crate::js_boa::BoaRuntime::new(dom.clone())))
+            }
+            #[cfg(not(feature = "engine-boa"))]
+            {
+                Err("Boa backend not compiled in (build with --features engine-boa)".to_string())
+            }
+        }
+        EngineKind::V8 => {
+            #[cfg(feature = "v8")]
+            {
+                Ok(Box::new(crate::js_v8::V8Runtime::new(dom.clone())))
+            }
+            #[cfg(not(feature = "v8"))]
+            {
+                Err("V8 backend not compiled in (build with --features v8)".to_string())
+            }
+        }
+    }
+}
+
 /// Common interface implemented by every JS engine backend (SpiderMonkey, Boa, …).
 ///
 /// All methods take `&mut self` so the trait is object-safe and can be stored as

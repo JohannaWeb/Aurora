@@ -135,7 +135,12 @@ fn run_scripts(
     };
 
     let mut runtime: Box<dyn crate::js_engine::JsRuntime> =
-        Box::new(crate::js_sm::SmRuntime::new(Rc::clone(dom)));
+        crate::js_engine::create_runtime(crate::js_engine::EngineKind::from_env(), dom)
+            .unwrap_or_else(|e| {
+                log::warn!("[JS] {e}; falling back to SpiderMonkey");
+                crate::js_engine::create_runtime(crate::js_engine::EngineKind::SpiderMonkey, dom)
+                    .expect("SpiderMonkey backend is always available")
+            });
     let mut total_script_bytes = 0usize;
     for (script, content) in scripts.iter().zip(fetched.into_iter()) {
         let Some(content) = content else { continue };

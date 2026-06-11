@@ -1,6 +1,8 @@
 use crate::css::Stylesheet;
 use crate::dom::NodePtr;
 use crate::layout::{LayoutTree, ViewportSize};
+use mozjs::gc::RootedTraceableBox;
+use mozjs::jsapi::{Heap, JSObject};
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::rc::Rc;
@@ -20,6 +22,7 @@ pub(super) struct NodeRegistry {
     pub(super) stylesheet: Option<Rc<RefCell<Stylesheet>>>,
     pub(super) viewport: Option<Rc<RefCell<ViewportSize>>>,
     pub(super) document: Option<NodePtr>,
+    pub(super) js_wrappers: BTreeMap<u32, RootedTraceableBox<Heap<*mut JSObject>>>,
     /// event listeners: node_id → event_type → Vec<callback_id>
     /// callback_id N means `window.__cb{N}__` holds the JS function.
     pub(super) listeners: BTreeMap<u32, BTreeMap<String, Vec<u32>>>,
@@ -36,6 +39,7 @@ impl NodeRegistry {
             stylesheet: None,
             viewport: None,
             document: None,
+            js_wrappers: BTreeMap::new(),
             listeners: BTreeMap::new(),
         }
     }
@@ -59,6 +63,16 @@ impl NodeRegistry {
 
     pub(super) fn lookup(&self, id: u32) -> Option<NodePtr> {
         self.nodes.get(&id).cloned()
+    }
+
+    pub(super) fn lookup_js_wrapper(&self, id: u32) -> Option<*mut JSObject> {
+        self.js_wrappers.get(&id).map(|wrapper| wrapper.get())
+    }
+
+    pub(super) fn cache_js_wrapper(&mut self, id: u32, obj: *mut JSObject) {
+        self.js_wrappers
+            .entry(id)
+            .or_insert_with(|| RootedTraceableBox::from_box(Heap::boxed(obj)));
     }
 
     pub(super) fn add_listener(&mut self, node_id: u32, event_type: String, cb_id: u32) {

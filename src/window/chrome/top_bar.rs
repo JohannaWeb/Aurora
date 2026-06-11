@@ -12,7 +12,7 @@ pub(super) fn paint_top_bar(scene: &mut Scene, width: u32) {
         0.0,
         width as f64,
         BROWSER_CHROME_HEIGHT as f64,
-        Color::from_rgb8(7, 11, 15),
+        Color::from_rgb8(255, 241, 246),
     );
     stroke_scene_rect(
         scene,
@@ -20,7 +20,7 @@ pub(super) fn paint_top_bar(scene: &mut Scene, width: u32) {
         0.5,
         width as f64 - 1.0,
         BROWSER_CHROME_HEIGHT as f64 - 1.0,
-        Color::from_rgb8(27, 34, 42),
+        Color::from_rgb8(232, 194, 209),
     );
     fill_scene_rect(
         scene,
@@ -28,7 +28,7 @@ pub(super) fn paint_top_bar(scene: &mut Scene, width: u32) {
         31.0,
         18.0,
         18.0,
-        Color::from_rgb8(53, 208, 127),
+        Color::from_rgb8(255, 171, 204),
     );
     text(
         scene,
@@ -36,7 +36,7 @@ pub(super) fn paint_top_bar(scene: &mut Scene, width: u32) {
         43.0,
         32.0,
         14.0,
-        Color::from_rgb8(243, 246, 248),
+        Color::from_rgb8(105, 54, 76),
     );
     text(
         scene,
@@ -44,7 +44,7 @@ pub(super) fn paint_top_bar(scene: &mut Scene, width: u32) {
         137.0,
         32.0,
         13.0,
-        Color::from_rgb8(66, 80, 95),
+        Color::from_rgb8(150, 99, 121),
     );
     text(
         scene,
@@ -52,7 +52,7 @@ pub(super) fn paint_top_bar(scene: &mut Scene, width: u32) {
         width as f64 / 2.0 - 240.0,
         32.0,
         14.0,
-        Color::from_rgb8(140, 146, 155),
+        Color::from_rgb8(165, 120, 139),
     );
     let engine_x = width as f64 - 193.0;
     stroke_scene_rect(
@@ -61,7 +61,7 @@ pub(super) fn paint_top_bar(scene: &mut Scene, width: u32) {
         25.0,
         148.0,
         31.0,
-        Color::from_rgb8(194, 203, 213),
+        Color::from_rgb8(214, 162, 186),
     );
     text(
         scene,
@@ -69,6 +69,6 @@ pub(super) fn paint_top_bar(scene: &mut Scene, width: u32) {
         engine_x + 13.0,
         32.0,
         13.0,
-        Color::from_rgb8(194, 203, 213),
+        Color::from_rgb8(150, 99, 121),
     );
 }

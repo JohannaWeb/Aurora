@@ -10,6 +10,8 @@ mod identity;
 mod js_boa;
 mod js_engine;
 mod js_sm;
+#[cfg(feature = "v8")]
+mod js_v8;
 mod layout;
 mod logging;
 mod media;

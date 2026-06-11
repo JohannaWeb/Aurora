@@ -9,13 +9,14 @@ default = []
 media-ffmpeg = ["dep:ffmpeg-next"]
 taffy-document = []
 engine-boa = ["dep:boa_engine", "dep:boa_gc"]
+v8 = ["dep:v8"]
 
 [dependencies]
 rustls = { version = "0.23", features = ["ring"] } # still needed for install_crypto_provider()
 wgpu = "29.0.3"
 vello = "0.9.0"
 pollster = "0.4.0"
-mozjs = "0.14"
+mozjs = "0.16.0"
 log = "0.4"
 fern = "0.7"
 chrono = "0.4"
@@ -45,4 +46,5 @@ blitz-html = "0.3.0-alpha.4"
 blitz-paint = "0.3.0-alpha.4"
 blitz-traits = "=0.3.0-alpha.4"
 anyrender_vello = "0.10.1"
+v8 = { version = "150.0.0", optional = true }
 # vello_svg removed: v0.9.0 links against vello 0.7 + usvg 0.46, incompatible with our vello 0.9 + usvg 0.47

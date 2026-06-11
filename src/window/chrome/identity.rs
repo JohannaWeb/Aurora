@@ -12,7 +12,7 @@ pub(super) fn paint_identity(scene: &mut Scene, width: u32) {
         124.0,
         205.0,
         42.0,
-        Color::from_rgb8(11, 17, 23),
+        Color::from_rgb8(255, 247, 250),
     );
     stroke_scene_rect(
         scene,
@@ -20,7 +20,7 @@ pub(super) fn paint_identity(scene: &mut Scene, width: u32) {
         124.0,
         205.0,
         42.0,
-        Color::from_rgb8(38, 48, 58),
+        Color::from_rgb8(229, 188, 204),
     );
     fill_scene_rect(
         scene,
@@ -28,7 +28,7 @@ pub(super) fn paint_identity(scene: &mut Scene, width: u32) {
         130.0,
         30.0,
         30.0,
-        Color::from_rgb8(51, 209, 122),
+        Color::from_rgb8(255, 176, 205),
     );
     text(
         scene,
@@ -36,7 +36,7 @@ pub(super) fn paint_identity(scene: &mut Scene, width: u32) {
         identity_x + 15.0,
         137.0,
         12.0,
-        Color::from_rgb8(6, 34, 20),
+        Color::from_rgb8(116, 54, 80),
     );
     text(
         scene,
@@ -44,6 +44,6 @@ pub(super) fn paint_identity(scene: &mut Scene, width: u32) {
         identity_x + 51.0,
         136.0,
         12.0,
-        Color::from_rgb8(238, 243, 246),
+        Color::from_rgb8(116, 54, 80),
     );
 }

@@ -152,7 +152,7 @@ impl TreeSink for AuroraTreeSink {
         let node = Node::element_with_attributes(name.local.to_string(), attributes, Vec::new());
 
         if name.local.as_ref() == "template" {
-            let content = Node::document(Vec::new());
+            let content = Node::document_fragment(Vec::new());
             self.template_contents
                 .borrow_mut()
                 .insert(node_key(&node), content.clone());

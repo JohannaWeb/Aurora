@@ -52,6 +52,10 @@ impl Node {
         Rc::new(RefCell::new(Self::Document { children, mode }))
     }
 
+    pub fn document_fragment(children: Vec<NodePtr>) -> NodePtr {
+        Self::element("#document-fragment", children)
+    }
+
     /// Create an element node with tag name, attributes, and children.
     pub fn element_with_attributes(
         tag_name: impl Into<String>,

@@ -26,6 +26,9 @@ const NODE_ID_PROP: *const std::ffi::c_char = c"__node_id__".as_ptr();
 pub(in crate::js_sm) unsafe fn create_js_node(cx: &mut JSContext, node: NodePtr) -> *mut JSObject {
     let state = &mut *get_state_ptr(cx);
     let node_id = state.registry.register(node.clone());
+    if let Some(existing) = state.registry.lookup_js_wrapper(node_id) {
+        return existing;
+    }
 
     let obj = new_plain_object(cx);
     rooted!(&in(cx) let obj_root = obj);
@@ -59,6 +62,7 @@ pub(in crate::js_sm) unsafe fn create_js_node(cx: &mut JSContext, node: NodePtr)
         );
 
         // Mirror common attributes
+        let mut template_content_to_persist: Option<NodePtr> = None;
         if let Node::Element(el) = &*node.borrow() {
             let id_val = el.attributes.get("id").cloned().unwrap_or_default();
             let class_val = el.attributes.get("class").cloned().unwrap_or_default();
@@ -167,106 +171,17 @@ pub(in crate::js_sm) unsafe fn create_js_node(cx: &mut JSContext, node: NodePtr)
             }
 
             if tag_name.eq_ignore_ascii_case("template") {
-                let content_node = if let Node::Element(el) = &*node.borrow() {
-                    el.template_contents
-                        .clone()
-                        .unwrap_or_else(|| Node::document(Vec::new()))
-                } else {
-                    Node::document(Vec::new())
-                };
-                let content_node_id = state.registry.register(content_node);
-                let content_obj = new_plain_object(cx);
-                rooted!(&in(cx) let content_root = content_obj);
-                set_prop_i32(
-                    cx,
-                    content_root.handle(),
-                    c"__node_id__",
-                    content_node_id as i32,
-                );
-                set_prop_i32(cx, content_root.handle(), c"nodeType", 11);
-                set_prop_str(cx, content_root.handle(), c"nodeName", "#document-fragment");
-                define_accessor(
-                    cx,
-                    content_root.handle(),
-                    c"innerHTML",
-                    Some(get_inner_html),
-                    Some(set_inner_html),
-                );
-                define_accessor(
-                    cx,
-                    content_root.handle(),
-                    c"textContent",
-                    Some(get_text_content),
-                    Some(set_text_content),
-                );
-                define_fn(
-                    cx,
-                    content_root.handle(),
-                    c"appendChild",
-                    Some(node_append_child),
-                    1,
-                );
-                define_fn(
-                    cx,
-                    content_root.handle(),
-                    c"insertBefore",
-                    Some(node_insert_before),
-                    2,
-                );
-                define_fn(
-                    cx,
-                    content_root.handle(),
-                    c"removeChild",
-                    Some(node_remove_child),
-                    1,
-                );
-                define_fn(
-                    cx,
-                    content_root.handle(),
-                    c"cloneNode",
-                    Some(node_clone_node),
-                    1,
-                );
-                define_fn(
-                    cx,
-                    content_root.handle(),
-                    c"querySelector",
-                    Some(node_query_selector),
-                    1,
-                );
-                define_fn(
-                    cx,
-                    content_root.handle(),
-                    c"querySelectorAll",
-                    Some(node_query_selector_all),
-                    1,
-                );
-                define_getter(
-                    cx,
-                    content_root.handle(),
-                    c"childNodes",
-                    Some(get_child_nodes),
-                );
-                define_getter(cx, content_root.handle(), c"children", Some(get_children));
-                define_getter(
-                    cx,
-                    content_root.handle(),
-                    c"firstChild",
-                    Some(get_first_child),
-                );
-                define_getter(
-                    cx,
-                    content_root.handle(),
-                    c"lastChild",
-                    Some(get_last_child),
-                );
-                define_getter(
-                    cx,
-                    content_root.handle(),
-                    c"childElementCount",
-                    Some(get_child_element_count),
-                );
+                // Script-created templates have no parsed contents yet; create
+                // the fragment and persist it (below, once this scope's shared
+                // borrow ends) so later `innerHTML` writes land in the same
+                // fragment this JS `content` object wraps.
+                let content_node = el
+                    .template_contents
+                    .clone()
+                    .unwrap_or_else(|| Node::document_fragment(Vec::new()));
+                let content_obj = create_js_node(cx, content_node.clone());
                 set_prop_obj(cx, obj_root.handle(), c"content", content_obj);
+                template_content_to_persist = Some(content_node);
             }
 
             // Shadow DOM — see element_attach_shadow for how this maps onto
@@ -286,6 +201,14 @@ pub(in crate::js_sm) unsafe fn create_js_node(cx: &mut JSContext, node: NodePtr)
                 Some(node_return_first_arg_or_this),
                 1,
             );
+        }
+
+        if let Some(content) = template_content_to_persist.take() {
+            if let Node::Element(el) = &mut *node.borrow_mut() {
+                if el.template_contents.is_none() {
+                    el.template_contents = Some(content);
+                }
+            }
         }
 
         if tag_name.contains('-') {
@@ -328,6 +251,21 @@ pub(in crate::js_sm) unsafe fn create_js_node(cx: &mut JSContext, node: NodePtr)
         set_prop_str(cx, obj_root.handle(), c"textContent", &text_content);
         set_prop_str(cx, obj_root.handle(), c"data", &text_content);
         set_prop_i32(cx, obj_root.handle(), c"length", text_content.len() as i32);
+    } else if node_type == 11 {
+        define_accessor(
+            cx,
+            obj_root.handle(),
+            c"innerHTML",
+            Some(get_inner_html),
+            Some(set_inner_html),
+        );
+        define_accessor(
+            cx,
+            obj_root.handle(),
+            c"textContent",
+            Some(get_text_content),
+            Some(set_text_content),
+        );
     }
 
     // Common geometry stubs
@@ -582,8 +520,76 @@ pub(in crate::js_sm) unsafe fn create_js_node(cx: &mut JSContext, node: NodePtr)
         Some(get_last_element_child),
     );
     set_prop_null(cx, obj_root.handle(), c"offsetParent");
+    assign_dom_wrapper_prototype(cx, obj, node_type, &tag_name);
+    state.registry.cache_js_wrapper(node_id, obj);
 
     obj
+}
+
+unsafe fn assign_dom_wrapper_prototype(
+    cx: &mut JSContext,
+    obj: *mut JSObject,
+    node_type: i32,
+    tag_name: &str,
+) {
+    let ctor_name = match node_type {
+        11 => c"DocumentFragment",
+        9 => c"Document",
+        3 => c"Text",
+        1 => match tag_name {
+            "template" => c"HTMLTemplateElement",
+            "script" => c"HTMLScriptElement",
+            "div" => c"HTMLDivElement",
+            "span" => c"HTMLSpanElement",
+            "body" => c"HTMLBodyElement",
+            "head" => c"HTMLHeadElement",
+            "html" => c"HTMLHtmlElement",
+            "a" => c"HTMLAnchorElement",
+            "img" => c"HTMLImageElement",
+            "input" => c"HTMLInputElement",
+            "textarea" => c"HTMLTextAreaElement",
+            "canvas" => c"HTMLCanvasElement",
+            "video" => c"HTMLVideoElement",
+            "audio" => c"HTMLAudioElement",
+            _ => c"HTMLElement",
+        },
+        _ => c"Node",
+    };
+
+    let global_raw = (*get_state_ptr(cx)).global;
+    if global_raw.is_null() {
+        return;
+    }
+
+    rooted!(&in(cx) let obj_root = obj);
+    rooted!(&in(cx) let global_root = global_raw);
+    rooted!(&in(cx) let mut ctor_val = UndefinedValue());
+    if !wrappers2::JS_GetProperty(
+        cx,
+        global_root.handle(),
+        ctor_name.as_ptr(),
+        ctor_val.handle_mut(),
+    ) || !ctor_val.get().is_object()
+    {
+        return;
+    }
+
+    let ctor = ctor_val.get().to_object_or_null();
+    rooted!(&in(cx) let ctor_root = ctor);
+    rooted!(&in(cx) let mut proto_val = UndefinedValue());
+    if !wrappers2::JS_GetProperty(
+        cx,
+        ctor_root.handle(),
+        c"prototype".as_ptr(),
+        proto_val.handle_mut(),
+    ) || !proto_val.get().is_object()
+    {
+        return;
+    }
+
+    let proto = proto_val.get().to_object_or_null();
+    rooted!(&in(cx) let proto_root = proto);
+    wrappers2::JS_SetPrototype(cx, obj_root.handle(), proto_root.handle());
 }
 
 pub(super) unsafe fn make_class_list(
@@ -1262,6 +1268,25 @@ unsafe extern "C" fn element_attach_shadow(
         }
     };
 
+    let host = {
+        let state = &mut *get_state_ptr(&mut cx);
+        state.registry.lookup(node_id)
+    };
+    if let Some(host) = host {
+        if let crate::dom::Node::Element(el) = &*host.borrow() {
+            if matches!(el.tag_name.as_str(), "ytd-app" | "ytd-masthead")
+                && crate::js_sm::utils::debug_youtube_enabled()
+            {
+                log::info!(
+                    target: "aurora::js",
+                    "[yt-life] attachShadow {} id={}",
+                    el.tag_name,
+                    node_id
+                );
+            }
+        }
+    }
+
     let mode = if argc > 0 && args.get(0).get().is_object() {
         let opts = args.get(0).get().to_object_or_null();
         rooted!(&in(cx) let opts_root = opts);
@@ -1421,7 +1446,7 @@ unsafe extern "C" fn class_list_contains(cx: *mut RawJSContext, argc: u32, vp: *
             let raw = val.get().to_string();
             if !raw.is_null() {
                 use mozjs::conversions::jsstr_to_string;
-                let s = jsstr_to_string(cx.raw_cx(), NonNull::new_unchecked(raw));
+                let s = jsstr_to_string(&cx, NonNull::new_unchecked(raw));
                 s.split_whitespace().any(|c| c == target)
             } else {
                 false
@@ -3150,11 +3175,23 @@ unsafe extern "C" fn get_inner_html(cx: *mut RawJSContext, argc: u32, vp: *mut V
             .registry
             .lookup(node_id)
             .map(|n| match &*n.borrow() {
-                Node::Element(el) => el
-                    .children
-                    .iter()
-                    .map(|c| crate::js_sm::serialization::serialize_outer_html(c))
-                    .collect::<String>(),
+                Node::Element(el) => {
+                    let children = if el.tag_name.eq_ignore_ascii_case("template") {
+                        el.template_contents.as_ref().and_then(|content| {
+                            match &*content.borrow() {
+                                Node::Element(fragment_el) => Some(fragment_el.children.clone()),
+                                _ => None,
+                            }
+                        })
+                    } else {
+                        None
+                    };
+                    children
+                        .unwrap_or_else(|| el.children.clone())
+                        .iter()
+                        .map(|c| crate::js_sm::serialization::serialize_outer_html(c))
+                        .collect::<String>()
+                }
                 Node::Document { children, .. } => children
                     .iter()
                     .map(|c| crate::js_sm::serialization::serialize_outer_html(c))
@@ -3190,10 +3227,31 @@ unsafe extern "C" fn set_inner_html(cx: *mut RawJSContext, argc: u32, vp: *mut V
     if let Some(node) = node {
         let fragment = crate::html::Parser::new(&format!("<body>{}</body>", html)).parse_document();
         let new_children = extract_body_children(&fragment);
-        match &mut *node.borrow_mut() {
-            Node::Element(el) => el.children = new_children,
-            Node::Document { children, .. } => *children = new_children,
-            _ => {}
+        let template_content = match &mut *node.borrow_mut() {
+            Node::Element(el) => {
+                if el.tag_name.eq_ignore_ascii_case("template") {
+                    // Per spec, template.innerHTML reads and writes the
+                    // template's content fragment, not its light children.
+                    Some(
+                        el.template_contents
+                            .get_or_insert_with(|| Node::document_fragment(Vec::new()))
+                            .clone(),
+                    )
+                } else {
+                    el.children = new_children.clone();
+                    None
+                }
+            }
+            Node::Document { children, .. } => {
+                *children = new_children.clone();
+                None
+            }
+            _ => None,
+        };
+        if let Some(content) = template_content {
+            if let Node::Element(fragment_el) = &mut *content.borrow_mut() {
+                fragment_el.children = new_children;
+            }
         }
         let state = &mut *get_state_ptr(&cx);
         state.registry.mark_needs_reflow();
@@ -3353,7 +3411,7 @@ fn clone_node_rs(node: &NodePtr, deep: bool) -> NodePtr {
                     if deep {
                         clone_node_rs(content, true)
                     } else {
-                        crate::dom::Node::document(Vec::new())
+                        crate::dom::Node::document_fragment(Vec::new())
                     }
                 });
             }

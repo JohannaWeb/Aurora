@@ -175,7 +175,7 @@ impl SmRuntime {
         let result = unsafe {
             rooted!(&in(cx) let global = global_raw);
             rooted!(&in(cx) let mut rval = UndefinedValue());
-            let options = CompileOptionsWrapper::new(cx, "inline", 1);
+            let options = CompileOptionsWrapper::new(cx, c"inline".to_owned(), 1);
             let mut realm = AutoRealm::new_from_handle(cx, global.handle());
             let (global_handle, realm_ref) = realm.global_and_reborrow();
             let result =

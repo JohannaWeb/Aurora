@@ -15,6 +15,8 @@ pub(crate) mod identity;
 pub(crate) mod js_boa;
 pub(crate) mod js_engine;
 pub(crate) mod js_sm;
+#[cfg(feature = "v8")]
+pub(crate) mod js_v8;
 pub(crate) mod layout;
 pub(crate) mod logging;
 pub(crate) mod media;
