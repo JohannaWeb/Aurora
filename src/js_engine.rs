@@ -30,7 +30,10 @@ impl EngineKind {
 /// Dependency-injection seam: every place that needs a JS runtime asks this
 /// factory instead of naming a concrete engine type. Engines compiled out via
 /// features return `Err` so callers can fall back rather than fail to build.
-pub(crate) fn create_runtime(kind: EngineKind, dom: &NodePtr) -> Result<Box<dyn JsRuntime>, String> {
+pub(crate) fn create_runtime(
+    kind: EngineKind,
+    dom: &NodePtr,
+) -> Result<Box<dyn JsRuntime>, String> {
     match kind {
         EngineKind::SpiderMonkey => Ok(Box::new(crate::js_sm::SmRuntime::new(dom.clone()))),
         EngineKind::Boa => {

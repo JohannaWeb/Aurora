@@ -68,7 +68,7 @@ impl WindowInput {
             &self.identity,
         );
 
-        if let Some(blitz_doc) = &mut self.blitz_doc {
+        if self.blitz_doc.is_some() {
             // Keep the current renderer path in sync with the same content viewport.
             let content_w = content_viewport.width as u32;
             let content_h = content_viewport.height as u32;
@@ -76,7 +76,7 @@ impl WindowInput {
             // Re-serialize the mutated legacy DOM to HTML, then reload it into blitz_doc.
             // This ensures JS mutations are rendered in the blitz-dom / blitz-paint path.
             let html = crate::js_sm::serialize_outer_html(&self.dom);
-            *blitz_doc = BlitzDocument::from_html(
+            self.blitz_doc = BlitzDocument::try_from_html(
                 &html,
                 self.base_url.as_deref(),
                 &self.identity,
@@ -141,16 +141,18 @@ impl WindowInput {
                     .map(|h| h.join().unwrap_or(None))
                     .collect()
             };
-            let mut rt: Box<dyn JsRuntime> =
-                crate::js_engine::create_runtime(crate::js_engine::EngineKind::from_env(), &new_dom)
-                    .unwrap_or_else(|e| {
-                        log::warn!("[JS] {e}; falling back to SpiderMonkey");
-                        crate::js_engine::create_runtime(
-                            crate::js_engine::EngineKind::SpiderMonkey,
-                            &new_dom,
-                        )
-                        .expect("SpiderMonkey backend is always available")
-                    });
+            let mut rt: Box<dyn JsRuntime> = crate::js_engine::create_runtime(
+                crate::js_engine::EngineKind::from_env(),
+                &new_dom,
+            )
+            .unwrap_or_else(|e| {
+                log::warn!("[JS] {e}; falling back to SpiderMonkey");
+                crate::js_engine::create_runtime(
+                    crate::js_engine::EngineKind::SpiderMonkey,
+                    &new_dom,
+                )
+                .expect("SpiderMonkey backend is always available")
+            });
             for (script, content) in scripts.iter().zip(fetched.into_iter()) {
                 let Some(content) = content else { continue };
                 rt.set_current_script(Some(&script.node));

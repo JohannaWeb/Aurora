@@ -56,10 +56,13 @@ pub(crate) fn run_browser(cli: CliOptions, identity: Identity) {
     let blitz_doc =
         build_hydrated_blitz_doc(&dom, base_url.as_deref(), &identity, content_w, content_h);
     if env::var("AURORA_DEBUG_RENDER").is_ok() {
-        eprintln!(
-            "[render] hydrated first paint: {}",
-            blitz_doc.debug_summary()
-        );
+        match &blitz_doc {
+            Some(blitz_doc) => eprintln!(
+                "[render] hydrated first paint: {}",
+                blitz_doc.debug_summary()
+            ),
+            None => eprintln!("[render] Blitz renderer disabled for initial document"),
+        }
     }
 
     maybe_open_window(
@@ -255,7 +258,7 @@ fn maybe_open_window(
     svgs: crate::SvgCache,
     media: crate::MediaCache,
     runtime: Option<Box<dyn crate::js_engine::JsRuntime>>,
-    blitz_doc: BlitzDocument,
+    blitz_doc: Option<BlitzDocument>,
 ) {
     let has_screenshot = env::var("AURORA_SCREENSHOT").is_ok();
     let is_headless = env::var("AURORA_HEADLESS").is_ok();
@@ -273,7 +276,7 @@ fn maybe_open_window(
             svgs,
             media,
             runtime,
-            blitz_doc: Some(blitz_doc),
+            blitz_doc,
             needs_reflow: false,
         };
         if let Err(error) = crate::window::open(window_input) {
@@ -309,7 +312,8 @@ mod tests {
             )
             .unwrap();
 
-        let blitz_doc = build_hydrated_blitz_doc(&dom, None, &headless_identity(), 800, 600);
+        let blitz_doc =
+            build_hydrated_blitz_doc(&dom, None, &headless_identity(), 800, 600).unwrap();
         let summary = blitz_doc.debug_summary();
 
         assert!(summary.contains("text_len=5"), "{summary}");
@@ -336,7 +340,7 @@ pub(crate) fn build_hydrated_blitz_doc(
     identity: &Identity,
     content_w: u32,
     content_h: u32,
-) -> BlitzDocument {
+) -> Option<BlitzDocument> {
     let hydrated_html = crate::js_sm::serialize_outer_html(dom);
-    BlitzDocument::from_html(&hydrated_html, base_url, identity, content_w, content_h)
+    BlitzDocument::try_from_html(&hydrated_html, base_url, identity, content_w, content_h)
 }

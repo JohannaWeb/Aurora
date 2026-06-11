@@ -173,7 +173,10 @@ fn paint_content_layer(app: &mut AuroraApp, scene: &mut Scene, width: u32, heigh
     );
     let mut content_scene = Scene::new();
     if let Some(blitz_doc) = &mut app.input.blitz_doc {
-        blitz_doc.paint_to_scene(&mut content_scene, width, content_height);
+        if !blitz_doc.paint_to_scene(&mut content_scene, width, content_height) {
+            app.input.blitz_doc = None;
+            content_scene = Scene::new();
+        }
     }
     scene.append(
         &content_scene,

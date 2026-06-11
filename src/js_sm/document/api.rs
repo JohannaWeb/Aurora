@@ -3177,12 +3177,12 @@ unsafe extern "C" fn get_inner_html(cx: *mut RawJSContext, argc: u32, vp: *mut V
             .map(|n| match &*n.borrow() {
                 Node::Element(el) => {
                     let children = if el.tag_name.eq_ignore_ascii_case("template") {
-                        el.template_contents.as_ref().and_then(|content| {
-                            match &*content.borrow() {
+                        el.template_contents
+                            .as_ref()
+                            .and_then(|content| match &*content.borrow() {
                                 Node::Element(fragment_el) => Some(fragment_el.children.clone()),
                                 _ => None,
-                            }
-                        })
+                            })
                     } else {
                         None
                     };

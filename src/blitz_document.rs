@@ -9,9 +9,11 @@ use vello::Scene;
 use crate::identity::Identity;
 
 use std::collections::BTreeMap;
+use std::panic::{self, AssertUnwindSafe};
 use std::sync::{Mutex, OnceLock};
 
 static NET_CACHE: OnceLock<Mutex<BTreeMap<String, Vec<u8>>>> = OnceLock::new();
+static STYLO_PANIC_HOOK_LOCK: Mutex<()> = Mutex::new(());
 
 fn get_net_cache() -> &'static Mutex<BTreeMap<String, Vec<u8>>> {
     NET_CACHE.get_or_init(|| Mutex::new(BTreeMap::new()))
@@ -61,31 +63,31 @@ impl NetProvider for AuroraNetProvider {
 
 pub struct BlitzDocument {
     inner: BaseDocument,
+    healthy: bool,
 }
 
 impl BlitzDocument {
-    pub fn from_html(
+    pub fn try_from_html(
         html: &str,
         base_url: Option<&str>,
         identity: &Identity,
         width: u32,
         height: u32,
-    ) -> Self {
+    ) -> Option<Self> {
         let config = DocumentConfig {
             base_url: base_url.map(|s| s.to_string()),
             viewport: Some(Viewport::new(width, height, 1.0, ColorScheme::Light)),
             net_provider: Some(AuroraNetProvider::new(identity)),
             ..Default::default()
         };
-        let mut inner = HtmlDocument::from_html(html, config).into_inner();
-        inner.resolve(0.0);
-        BlitzDocument { inner }
-    }
-
-    pub fn resolve(&mut self, width: u32, height: u32) {
-        self.inner
-            .set_viewport(Viewport::new(width, height, 1.0, ColorScheme::Light));
-        self.inner.resolve(0.0);
+        catch_stylo_panic("constructing Blitz document", || {
+            let inner = HtmlDocument::from_html(html, config).into_inner();
+            BlitzDocument {
+                inner,
+                healthy: true,
+            }
+        })
+        .and_then(|mut doc| if doc.resolve_inner() { Some(doc) } else { None })
     }
 
     /// Walk up from the hit node looking for an `<a href="...">` ancestor.
@@ -104,11 +106,19 @@ impl BlitzDocument {
         }
     }
 
-    pub fn paint_to_scene(&mut self, scene: &mut Scene, width: u32, height: u32) {
+    pub fn paint_to_scene(&mut self, scene: &mut Scene, width: u32, height: u32) -> bool {
+        if !self.healthy {
+            return false;
+        }
         // Process any resources that arrived from background fetch threads.
-        self.inner.resolve(0.0);
+        if !self.resolve_inner() {
+            return false;
+        }
         let mut painter = VelloScenePainter::new(scene);
-        blitz_paint::paint_scene(&mut painter, &mut self.inner, 1.0, width, height, 0, 0);
+        catch_stylo_panic("painting Blitz document", || {
+            blitz_paint::paint_scene(&mut painter, &mut self.inner, 1.0, width, height, 0, 0);
+        })
+        .is_some()
     }
 
     pub fn debug_summary(&self) -> String {
@@ -139,6 +149,48 @@ impl BlitzDocument {
             top_tags.join(","),
             root.text_content().len()
         )
+    }
+
+    fn resolve_inner(&mut self) -> bool {
+        let resolved = catch_stylo_panic("resolving Blitz document", || {
+            self.inner.resolve(0.0);
+        })
+        .is_some();
+        if !resolved {
+            self.healthy = false;
+        }
+        resolved
+    }
+}
+
+fn catch_stylo_panic<T>(context: &str, f: impl FnOnce() -> T) -> Option<T> {
+    let _hook_guard = STYLO_PANIC_HOOK_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let previous_hook = panic::take_hook();
+    panic::set_hook(Box::new(|_| {}));
+    let result = panic::catch_unwind(AssertUnwindSafe(f));
+    panic::set_hook(previous_hook);
+
+    match result {
+        Ok(value) => Some(value),
+        Err(payload) => {
+            log::warn!(
+                "Blitz/Stylo panicked while {context}; disabling Blitz renderer for this document: {}",
+                panic_payload_message(payload.as_ref())
+            );
+            None
+        }
+    }
+}
+
+fn panic_payload_message(payload: &(dyn std::any::Any + Send)) -> &str {
+    if let Some(message) = payload.downcast_ref::<&'static str>() {
+        message
+    } else if let Some(message) = payload.downcast_ref::<String>() {
+        message.as_str()
+    } else {
+        "non-string panic payload"
     }
 }
 

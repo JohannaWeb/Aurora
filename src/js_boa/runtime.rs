@@ -249,7 +249,7 @@ impl BoaRuntime {
                 window._eventListeners[{event_type:?}].forEach(function(fn) {{ try {{ fn(); }} catch(e) {{}} }}); \
             }}"
         );
-        let _ = self.context.eval(Source::from_bytes(script));
+        let _ = self.context.eval(Source::from_bytes(&script));
         let _ = self.context.run_jobs();
         self.drain_microtasks();
     }
