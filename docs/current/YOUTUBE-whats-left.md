@@ -1,5 +1,11 @@
 # YouTube: What Is Left
 
+> **Partially superseded (2026-06-11):** the probe command and interpretation table
+> below are still current and still the #1 next step. The "Still Missing" list is
+> stale — see
+> [ANALYSIS-youtube-rendering-2026-06-11.md](ANALYSIS-youtube-rendering-2026-06-11.md)
+> for the verified current state.
+
 This is the current narrow list after the template, `currentScript`, and custom-element work already landed.
 
 ## Already Done

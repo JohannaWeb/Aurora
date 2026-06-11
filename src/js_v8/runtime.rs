@@ -1,11 +1,16 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Once;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use crate::css::Stylesheet;
 use crate::dom::NodePtr;
 use crate::layout::{LayoutTree, ViewportSize};
+
+use super::capture::WindowCapture;
+use super::registry::NodeRegistry;
+use super::node_create::create_js_node;
+use super::selectors::query;
 
 // V8 allows exactly one platform per process, initialized before the first
 // isolate and never torn down (same constraint family as SpiderMonkey's
@@ -23,23 +28,331 @@ fn ensure_platform() {
 pub(crate) struct V8Runtime {
     isolate: v8::OwnedIsolate,
     context: v8::Global<v8::Context>,
-    // Kept for the upcoming DOM bridge; unused until then.
-    #[allow(dead_code)]
+    window: Rc<RefCell<WindowCapture>>,
+    registry: Rc<NodeRegistry>,
     document: NodePtr,
+}
+
+struct DocumentData {
+    document: NodePtr,
+    registry: Rc<NodeRegistry>,
 }
 
 impl V8Runtime {
     pub(crate) fn new(document: NodePtr) -> Self {
         ensure_platform();
         let mut isolate = v8::Isolate::new(v8::CreateParams::default());
+        let window = Rc::new(RefCell::new(WindowCapture::new()));
+        let registry = Rc::new(NodeRegistry::new());
+
         let context = {
             v8::scope!(let scope, &mut isolate);
-            let context = v8::Context::new(scope, v8::ContextOptions::default());
-            v8::Global::new(scope, context)
+
+            // Create a global template and bind some basic globals.
+            let global_template = v8::ObjectTemplate::new(scope);
+
+            let context = v8::Context::new_from_template(scope, global_template);
+            v8::scope!(let scope, context);
+
+            let global = context.global(scope);
+
+            // window, self, globalThis aliases.
+            global.set(scope, v8_str(scope, "window").into(), global.into());
+            global.set(scope, v8_str(scope, "self").into(), global.into());
+
+            // Simple console.log implementation.
+            let console_template = v8::ObjectTemplate::new(scope);
+            let log_fn = v8::FunctionTemplate::new(scope, console_log);
+            console_template.set(v8_str(scope, "log").into(), log_fn.into());
+            console_template.set(v8_str(scope, "info").into(), log_fn.into());
+            console_template.set(v8_str(scope, "warn").into(), log_fn.into());
+            console_template.set(v8_str(scope, "error").into(), log_fn.into());
+
+            let console_obj = console_template.new_instance(scope).unwrap();
+            global.set(scope, v8_str(scope, "console").into(), console_obj.into());
+
+            // Document.
+            let doc_data = Box::into_raw(Box::new(DocumentData {
+                document: document.clone(),
+                registry: registry.clone(),
+            })) as *mut _;
+            let doc_external = v8::External::new(scope, doc_data);
+
+            let document_template = v8::ObjectTemplate::new(scope);
+            
+            let get_element_by_id_fn = v8::FunctionTemplate::builder(get_element_by_id)
+                .data(doc_external.into())
+                .build(scope);
+            document_template.set(v8_str(scope, "getElementById").into(), get_element_by_id_fn.into());
+
+            let get_elements_by_tag_name_fn = v8::FunctionTemplate::builder(get_elements_by_tag_name)
+                .data(doc_external.into())
+                .build(scope);
+            document_template.set(v8_str(scope, "getElementsByTagName").into(), get_elements_by_tag_name_fn.into());
+
+            let query_selector_fn = v8::FunctionTemplate::builder(query_selector)
+                .data(doc_external.into())
+                .build(scope);
+            document_template.set(v8_str(scope, "querySelector").into(), query_selector_fn.into());
+
+            let create_element_fn = v8::FunctionTemplate::builder(create_element)
+                .data(doc_external.into())
+                .build(scope);
+            document_template.set(v8_str(scope, "createElement").into(), create_element_fn.into());
+
+            let create_text_node_fn = v8::FunctionTemplate::builder(create_text_node)
+                .data(doc_external.into())
+                .build(scope);
+            document_template.set(v8_str(scope, "createTextNode").into(), create_text_node_fn.into());
+
+            let document_obj = document_template.new_instance(scope).unwrap();
+            global.set(scope, v8_str(scope, "document").into(), document_obj.into());
+
+            // Set document structure fields
+            let mut bodies = Vec::new();
+            query::collect_by_tag(&document, "body", &mut bodies);
+            if let Some(body_node) = bodies.first() {
+                let js_body = create_js_node(scope, body_node.clone(), &registry, &document);
+                document_obj.set(scope, v8_str(scope, "body").into(), js_body.into());
+            }
+
+            let mut heads = Vec::new();
+            query::collect_by_tag(&document, "head", &mut heads);
+            if let Some(head_node) = heads.first() {
+                let js_head = create_js_node(scope, head_node.clone(), &registry, &document);
+                document_obj.set(scope, v8_str(scope, "head").into(), js_head.into());
+            }
+
+            let mut htmls = Vec::new();
+            query::collect_by_tag(&document, "html", &mut htmls);
+            if let Some(html_node) = htmls.first() {
+                let js_html = create_js_node(scope, html_node.clone(), &registry, &document);
+                document_obj.set(scope, v8_str(scope, "documentElement").into(), js_html.into());
+            } else {
+                let js_doc = create_js_node(scope, document.clone(), &registry, &document);
+                document_obj.set(scope, v8_str(scope, "documentElement").into(), js_doc.into());
+            }
+
+            document_obj.set(scope, v8_str(scope, "defaultView").into(), global.into());
+
+            // document.title
+            let mut titles = Vec::new();
+            query::collect_by_tag(&document, "title", &mut titles);
+            if let Some(title_node) = titles.first() {
+                let text = mutation::collect_text(title_node);
+                document_obj.set(scope, v8_str(scope, "title").into(), v8_str(scope, &text).into());
+            }
+
+            // Navigator stub.
+            let navigator_template = v8::ObjectTemplate::new(scope);
+            let navigator_obj = navigator_template.new_instance(scope).unwrap();
+            navigator_obj.set(scope, v8_str(scope, "userAgent").into(), v8_str(scope, "Aurora/1.0 (V8)").into());
+            global.set(scope, v8_str(scope, "navigator").into(), navigator_obj.into());
+
+            // Location stub.
+            let location_template = v8::ObjectTemplate::new(scope);
+            let location_obj = location_template.new_instance(scope).unwrap();
+            location_obj.set(scope, v8_str(scope, "href").into(), v8_str(scope, "about:blank").into());
+            global.set(scope, v8_str(scope, "location").into(), location_obj.into());
+
+            // Timer and rAF support.
+            let window_data = v8::External::new(scope, Box::into_raw(Box::new(window.clone())) as *mut _);
+
+            let set_timeout_fn = v8::FunctionTemplate::builder(set_timeout)
+                .data(window_data.into())
+                .build(scope);
+            global.set(scope, v8_str(scope, "setTimeout").into(), set_timeout_fn.get_function(scope).unwrap().into());
+
+            let set_interval_fn = v8::FunctionTemplate::builder(set_interval)
+                .data(window_data.into())
+                .build(scope);
+            global.set(scope, v8_str(scope, "setInterval").into(), set_interval_fn.get_function(scope).unwrap().into());
+
+            let clear_timer_fn = v8::FunctionTemplate::builder(clear_timer)
+                .data(window_data.into())
+                .build(scope);
+            global.set(scope, v8_str(scope, "clearTimeout").into(), clear_timer_fn.get_function(scope).unwrap().into());
+            global.set(scope, v8_str(scope, "clearInterval").into(), clear_timer_fn.get_function(scope).unwrap().into());
+
+            let raf_fn = v8::FunctionTemplate::builder(request_animation_frame)
+                .data(window_data.into())
+                .build(scope);
+            global.set(scope, v8_str(scope, "requestAnimationFrame").into(), raf_fn.get_function(scope).unwrap().into());
+
+            let cancel_raf_fn = v8::FunctionTemplate::builder(cancel_animation_frame)
+                .data(window_data.into())
+                .build(scope);
+            global.set(scope, v8_str(scope, "cancelAnimationFrame").into(), cancel_raf_fn.get_function(scope).unwrap().into());
+
+            // Event listeners.
+            let registry_data = v8::External::new(scope, Box::into_raw(Box::new(registry.clone())) as *mut _);
+
+            let add_event_listener_fn = v8::FunctionTemplate::builder(add_event_listener)
+                .data(registry_data.into())
+                .build(scope);
+            let add_event_listener_js = add_event_listener_fn.get_function(scope).unwrap();
+
+            global.set(scope, v8_str(scope, "addEventListener").into(), add_event_listener_js.into());
+            document_obj.set(scope, v8_str(scope, "addEventListener").into(), add_event_listener_js.into());
+
+            // --- Browser APIs ---
+            global.set(scope, v8_str(scope, "__aurora_fetch_sync__").into(), v8::FunctionTemplate::new(scope, aurora_fetch_sync).get_function(scope).unwrap().into());
+
+            // Stubs and no-ops
+            let noop = v8::FunctionTemplate::new(scope, noop_callback).get_function(scope).unwrap();
+            global.set(scope, v8_str(scope, "alert").into(), noop.into());
+            global.set(scope, v8_str(scope, "scrollTo").into(), noop.into());
+            global.set(scope, v8_str(scope, "scrollBy").into(), noop.into());
+            
+            // atob / btoa
+            global.set(scope, v8_str(scope, "atob").into(), v8::FunctionTemplate::new(scope, atob).get_function(scope).unwrap().into());
+            global.set(scope, v8_str(scope, "btoa").into(), v8::FunctionTemplate::new(scope, btoa).get_function(scope).unwrap().into());
+
+            // structuredClone
+            global.set(scope, v8_str(scope, "structuredClone").into(), v8::FunctionTemplate::new(scope, structured_clone).get_function(scope).unwrap().into());
+
+            // Viewport stubs
+            global.set(scope, v8_str(scope, "innerWidth").into(), v8::Number::new(scope, 1200.0).into());
+            global.set(scope, v8_str(scope, "innerHeight").into(), v8::Number::new(scope, 800.0).into());
+            global.set(scope, v8_str(scope, "devicePixelRatio").into(), v8::Number::new(scope, 1.0).into());
+
+            let screen_template = v8::ObjectTemplate::new(scope);
+            screen_template.set(v8_str(scope, "width").into(), v8::Integer::new(scope, 1200).into());
+            screen_template.set(v8_str(scope, "height").into(), v8::Integer::new(scope, 800).into());
+            screen_template.set(v8_str(scope, "availWidth").into(), v8::Integer::new(scope, 1200).into());
+            screen_template.set(v8_str(scope, "availHeight").into(), v8::Integer::new(scope, 800).into());
+            let screen_obj = screen_template.new_instance(scope).unwrap();
+            global.set(scope, v8_str(scope, "screen").into(), screen_obj.into());
+
+            // Storage
+            let local_storage = build_storage_object(scope, window.borrow().storage.clone());
+            global.set(scope, v8_str(scope, "localStorage").into(), local_storage.into());
+            let session_storage = build_storage_object(scope, window.borrow().session.clone());
+            global.set(scope, v8_str(scope, "sessionStorage").into(), session_storage.into());
+
+            let context = v8::Global::new(scope, context);
+            
+            // Networking polyfills
+            {
+                v8::scope_with_context!(let scope, &mut isolate, &context);
+                v8::tc_scope!(let scope, scope);
+                let polyfill = r#"
+                    globalThis.XMLHttpRequest = function() {
+                        this.readyState = 0;
+                        this.status = 0;
+                        this.responseText = "";
+                        this.response = null;
+                        this.responseType = "";
+                        this.onreadystatechange = null;
+                        this.onload = null;
+                        this.onerror = null;
+                    };
+                    globalThis.XMLHttpRequest.prototype.open = function(method, url) {
+                        this._method = method;
+                        this._url = url;
+                        this.readyState = 1;
+                    };
+                    globalThis.XMLHttpRequest.prototype.send = function() {
+                        this.readyState = 4;
+                        this.status = 0;
+                        this.responseText = "";
+                        if (typeof this.onreadystatechange === 'function') this.onreadystatechange();
+                        if (typeof this.onerror === 'function') this.onerror();
+                    };
+                    globalThis.XMLHttpRequest.prototype.setRequestHeader = function() {};
+                    globalThis.XMLHttpRequest.prototype.getResponseHeader = function() { return null; };
+                    globalThis.XMLHttpRequest.prototype.getAllResponseHeaders = function() { return ""; };
+                    globalThis.XMLHttpRequest.prototype.abort = function() {};
+                    globalThis.XMLHttpRequest.prototype.addEventListener = function() {};
+                    globalThis.XMLHttpRequest.prototype.removeEventListener = function() {};
+                    globalThis.XMLHttpRequest.UNSENT = 0;
+                    globalThis.XMLHttpRequest.OPENED = 1;
+                    globalThis.XMLHttpRequest.HEADERS_RECEIVED = 2;
+                    globalThis.XMLHttpRequest.LOADING = 3;
+                    globalThis.XMLHttpRequest.DONE = 4;
+
+                    globalThis.fetch = function(url, options) {
+                        var method = (options && options.method) ? options.method.toUpperCase() : 'GET';
+                        try {
+                            var result = globalThis.__aurora_fetch_sync__(String(url), method);
+                            if (result.ok) {
+                                var responseText = result.body;
+                                var status = result.status;
+                                return Promise.resolve({
+                                    ok: status >= 200 && status < 300,
+                                    status: status,
+                                    statusText: String(status),
+                                    url: String(url),
+                                    headers: new Headers(),
+                                    text: function() { return Promise.resolve(responseText); },
+                                    json: function() {
+                                        try { return Promise.resolve(JSON.parse(responseText)); }
+                                        catch(e) { return Promise.reject(e); }
+                                    },
+                                    arrayBuffer: function() { return Promise.resolve(new ArrayBuffer(0)); },
+                                    blob: function() { return Promise.resolve({ text: function() { return Promise.resolve(responseText); } }); },
+                                    clone: function() { return this; }
+                                });
+                            } else {
+                                return Promise.reject(new Error("HTTP " + result.status));
+                            }
+                        } catch(e) {
+                            return Promise.reject(e);
+                        }
+                    };
+
+                    globalThis.Headers = function(init) {
+                        var m = {};
+                        if (init) for (var k in init) m[k.toLowerCase()] = init[k];
+                        this._m = m;
+                        this.get = function(k) { return m[(''+k).toLowerCase()] || null; };
+                        this.set = function(k, v) { m[(''+k).toLowerCase()] = ''+v; };
+                        this.has = function(k) { return (''+k).toLowerCase() in m; };
+                        this.append = this.set;
+                        this.delete = function(k) { delete m[(''+k).toLowerCase()]; };
+                        this.forEach = function(fn) { for (var k in m) fn(m[k], k, this); };
+                    };
+                    globalThis.Request = function(url, init) { this.url = url; this.method = (init && init.method) || 'GET'; };
+                    globalThis.Response = function(body, init) {
+                        this.body = body; this.status = (init && init.status) || 200; this.ok = this.status >= 200 && this.status < 300;
+                        this.text = function() { return Promise.resolve(String(body)); };
+                        this.json = function() { try { return Promise.resolve(JSON.parse(String(body))); } catch (e) { return Promise.reject(e); } };
+                        this.arrayBuffer = function() { return Promise.resolve(new ArrayBuffer(0)); };
+                        this.blob = function() { return Promise.resolve({}); };
+                    };
+                    globalThis.URL = function(u, base) {
+                        this.href = u; this.origin = ''; this.protocol = ''; this.host = ''; this.hostname = '';
+                        this.port = ''; this.pathname = ''; this.search = ''; this.hash = '';
+                        this.toString = function() { return this.href; };
+                    };
+                    globalThis.URLSearchParams = function(init) {
+                        var m = {}; if (typeof init === 'string') {
+                            init.replace(/^\?/, '').split('&').forEach(function(p){ if (!p) return; var i = p.indexOf('='); if (i<0) m[p]=''; else m[p.slice(0,i)] = decodeURIComponent(p.slice(i+1)); });
+                        }
+                        this._m = m;
+                        this.get = function(k){ return k in m ? m[k] : null; };
+                        this.set = function(k,v){ m[k] = ''+v; };
+                        this.has = function(k){ return k in m; };
+                        this.append = this.set;
+                        this.delete = function(k){ delete m[k]; };
+                        this.toString = function(){ var o=[]; for (var k in m) o.push(encodeURIComponent(k)+'='+encodeURIComponent(m[k])); return o.join('&'); };
+                        this.forEach = function(fn){ for (var k in m) fn(m[k], k, this); };
+                    };
+                    globalThis.AbortController = function() {
+                        this.signal = { aborted: false, addEventListener: function(){}, removeEventListener: function(){} };
+                        this.abort = function(){ this.signal.aborted = true; };
+                    };
+                "#;
+                let _ = compile_and_run(scope, polyfill);
+            }
+
+            context
         };
         Self {
             isolate,
             context,
+            window,
+            registry,
             document,
         }
     }
@@ -52,6 +365,533 @@ impl V8Runtime {
         v8::tc_scope!(let scope, scope);
         compile_and_run(scope, source)
     }
+
+    fn ready_timers(&mut self, now: Instant) -> Vec<super::capture::TimerEntry> {
+        let mut ready = Vec::new();
+        let mut pending = Vec::new();
+        let mut window = self.window.borrow_mut();
+
+        for entry in window.timers.drain(..) {
+            if entry.deadline <= now && ready.len() < 100 {
+                ready.push(entry);
+            } else {
+                pending.push(entry);
+            }
+        }
+        window.timers = pending;
+        ready
+    }
+
+    fn fire_lifecycle_event(&mut self, event_type: &str) {
+        let listeners = self.registry.get_listeners(0, event_type);
+        if listeners.is_empty() {
+            return;
+        }
+
+        v8::scope_with_context!(let scope, &mut self.isolate, &self.context);
+        let global = self.context.get(scope).global(scope);
+
+        // Build a minimal Event object.
+        let event_template = v8::ObjectTemplate::new(scope);
+        let event_obj = event_template.new_instance(scope).unwrap();
+        event_obj.set(scope, v8_str(scope, "type").into(), v8_str(scope, event_type).into());
+
+        for listener in listeners {
+            let callback = v8::Local::new(scope, listener);
+            let _ = callback.call(scope, global.into(), &[event_obj.into()]);
+        }
+    }
+}
+
+fn v8_str<'s>(scope: &mut v8::HandleScope<'s>, s: &str) -> v8::Local<'s, v8::String> {
+    v8::String::new(scope, s).expect("failed to create V8 string")
+}
+
+fn console_log(
+    scope: &mut v8::HandleScope,
+    args: v8::FunctionCallbackArguments,
+    mut _retval: v8::ReturnValue,
+) {
+    let mut output = String::new();
+    for i in 0..args.length() {
+        if i > 0 {
+            output.push(' ');
+        }
+        output.push_str(&args.get(i).to_rust_string_lossy(scope));
+    }
+    println!("{}", output);
+}
+
+fn set_timeout(
+    scope: &mut v8::HandleScope,
+    args: v8::FunctionCallbackArguments,
+    mut retval: v8::ReturnValue,
+) {
+    add_timer(scope, args, &mut retval, false);
+}
+
+fn set_interval(
+    scope: &mut v8::HandleScope,
+    args: v8::FunctionCallbackArguments,
+    mut retval: v8::ReturnValue,
+) {
+    add_timer(scope, args, &mut retval, true);
+}
+
+fn add_timer(
+    scope: &mut v8::HandleScope,
+    args: v8::FunctionCallbackArguments,
+    retval: &mut v8::ReturnValue,
+    is_interval: bool,
+) {
+    let callback = args.get(0);
+    if !callback.is_function() {
+        return;
+    }
+    let callback = v8::Local::<v8::Function>::try_from(callback).unwrap();
+    let callback_global = v8::Global::new(scope, callback);
+
+    let delay_ms = args.get(1).int32_value(scope).unwrap_or(0).max(0) as u64;
+    let duration = Duration::from_millis(delay_ms);
+
+    let data = args.data();
+    let external = v8::Local::<v8::External>::try_from(data).unwrap();
+    let window_ptr = external.value() as *const Rc<RefCell<WindowCapture>>;
+    let window_rc = unsafe { &*window_ptr };
+
+    let mut window = window_rc.borrow_mut();
+    let id = window.next_timer_id;
+    window.next_timer_id += 1;
+
+    window.timers.push(super::capture::TimerEntry {
+        id,
+        callback: callback_global,
+        deadline: Instant::now() + duration,
+        interval: if is_interval { Some(duration) } else { None },
+    });
+
+    retval.set(v8::Integer::new(scope, id as i32).into());
+}
+
+fn clear_timer(
+    _scope: &mut v8::HandleScope,
+    args: v8::FunctionCallbackArguments,
+    mut _retval: v8::ReturnValue,
+) {
+    let id = args.get(0).int32_value(_scope).unwrap_or(0) as u32;
+    if id == 0 {
+        return;
+    }
+
+    let data = args.data();
+    let external = v8::Local::<v8::External>::try_from(data).unwrap();
+    let window_ptr = external.value() as *const Rc<RefCell<WindowCapture>>;
+    let window_rc = unsafe { &*window_ptr };
+
+    let mut window = window_rc.borrow_mut();
+    window.timers.retain(|t| t.id != id);
+}
+
+fn request_animation_frame(
+    scope: &mut v8::HandleScope,
+    args: v8::FunctionCallbackArguments,
+    mut retval: v8::ReturnValue,
+) {
+    let callback = args.get(0);
+    if !callback.is_function() {
+        return;
+    }
+    let callback = v8::Local::<v8::Function>::try_from(callback).unwrap();
+    let callback_global = v8::Global::new(scope, callback);
+
+    let data = args.data();
+    let external = v8::Local::<v8::External>::try_from(data).unwrap();
+    let window_ptr = external.value() as *const Rc<RefCell<WindowCapture>>;
+    let window_rc = unsafe { &*window_ptr };
+
+    let mut window = window_rc.borrow_mut();
+    let id = window.next_raf_id;
+    window.next_raf_id += 1;
+
+    window.animation_frames.push(super::capture::AnimationFrameEntry {
+        id,
+        callback: callback_global,
+    });
+
+    retval.set(v8::Integer::new(scope, id as i32).into());
+}
+
+fn cancel_animation_frame(
+    _scope: &mut v8::HandleScope,
+    args: v8::FunctionCallbackArguments,
+    mut _retval: v8::ReturnValue,
+) {
+    let id = args.get(0).int32_value(_scope).unwrap_or(0) as u32;
+    if id == 0 {
+        return;
+    }
+
+    let data = args.data();
+    let external = v8::Local::<v8::External>::try_from(data).unwrap();
+    let window_ptr = external.value() as *const Rc<RefCell<WindowCapture>>;
+    let window_rc = unsafe { &*window_ptr };
+
+    let mut window = window_rc.borrow_mut();
+    window.animation_frames.retain(|f| f.id != id);
+}
+
+fn add_event_listener(
+    scope: &mut v8::HandleScope,
+    args: v8::FunctionCallbackArguments,
+    mut _retval: v8::ReturnValue,
+) {
+    let event_type = args.get(0).to_rust_string_lossy(scope);
+    let callback = args.get(1);
+    if !callback.is_function() {
+        return;
+    }
+    let callback = v8::Local::<v8::Function>::try_from(callback).unwrap();
+    let callback_global = v8::Global::new(scope, callback);
+
+    let data = args.data();
+    let external = v8::Local::<v8::External>::try_from(data).unwrap();
+    let registry_ptr = external.value() as *const Rc<NodeRegistry>;
+    let registry = unsafe { &*registry_ptr };
+
+    // For now, always register on document (id 0) if called on window/document stub.
+    // In a real implementation, we'd check 'this' to get the node id.
+    registry.add_event_listener(0, event_type, callback_global);
+}
+
+fn get_element_by_id(
+    scope: &mut v8::HandleScope,
+    args: v8::FunctionCallbackArguments,
+    mut retval: v8::ReturnValue,
+) {
+    let id = args.get(0).to_rust_string_lossy(scope);
+    let data = args.data();
+    let external = v8::Local::<v8::External>::try_from(data).unwrap();
+    let doc_data_ptr = external.value() as *const DocumentData;
+    let doc_data = unsafe { &*doc_data_ptr };
+
+    if let Some(node) = query::find_by_id(&doc_data.document, &id) {
+        let js_node = create_js_node(scope, node, &doc_data.registry, &doc_data.document);
+        retval.set(js_node.into());
+    } else {
+        retval.set(v8::null(scope).into());
+    }
+}
+
+fn get_elements_by_tag_name(
+    scope: &mut v8::HandleScope,
+    args: v8::FunctionCallbackArguments,
+    mut retval: v8::ReturnValue,
+) {
+    let tag = args.get(0).to_rust_string_lossy(scope);
+    let data = args.data();
+    let external = v8::Local::<v8::External>::try_from(data).unwrap();
+    let doc_data_ptr = external.value() as *const DocumentData;
+    let doc_data = unsafe { &*doc_data_ptr };
+
+    let mut out = Vec::new();
+    query::collect_by_tag(&doc_data.document, &tag, &mut out);
+
+    let array = v8::Array::new(scope, out.len() as i32);
+    for (i, node) in out.into_iter().enumerate() {
+        let js_node = create_js_node(scope, node, &doc_data.registry, &doc_data.document);
+        array.set_index(scope, i as u32, js_node.into());
+    }
+    retval.set(array.into());
+}
+
+fn query_selector(
+    scope: &mut v8::HandleScope,
+    args: v8::FunctionCallbackArguments,
+    mut retval: v8::ReturnValue,
+) {
+    let selector = args.get(0).to_rust_string_lossy(scope);
+    let data = args.data();
+    let external = v8::Local::<v8::External>::try_from(data).unwrap();
+    let doc_data_ptr = external.value() as *const DocumentData;
+    let doc_data = unsafe { &*doc_data_ptr };
+
+    if let Some(node) = query::query_first(&doc_data.document, &selector, &doc_data.document) {
+        let js_node = create_js_node(scope, node, &doc_data.registry, &doc_data.document);
+        retval.set(js_node.into());
+    } else {
+        retval.set(v8::null(scope).into());
+    }
+}
+
+fn create_element(
+    scope: &mut v8::HandleScope,
+    args: v8::FunctionCallbackArguments,
+    mut retval: v8::ReturnValue,
+) {
+    let tag = args.get(0).to_rust_string_lossy(scope).to_lowercase();
+    let data = args.data();
+    let external = v8::Local::<v8::External>::try_from(data).unwrap();
+    let doc_data_ptr = external.value() as *const DocumentData;
+    let doc_data = unsafe { &*doc_data_ptr };
+
+    let node = Node::element(tag, vec![]);
+    let js_node = create_js_node(scope, node, &doc_data.registry, &doc_data.document);
+    retval.set(js_node.into());
+}
+
+fn create_text_node(
+    scope: &mut v8::HandleScope,
+    args: v8::FunctionCallbackArguments,
+    mut retval: v8::ReturnValue,
+) {
+    let text = args.get(0).to_rust_string_lossy(scope);
+    let data = args.data();
+    let external = v8::Local::<v8::External>::try_from(data).unwrap();
+    let doc_data_ptr = external.value() as *const DocumentData;
+    let doc_data = unsafe { &*doc_data_ptr };
+
+    let node = Node::text(text);
+    let js_node = create_js_node(scope, node, &doc_data.registry, &doc_data.document);
+    retval.set(js_node.into());
+}
+
+fn atob(
+    scope: &mut v8::HandleScope,
+    args: v8::FunctionCallbackArguments,
+    mut retval: v8::ReturnValue,
+) {
+    let s = args.get(0).to_rust_string_lossy(scope);
+    if let Some(decoded) = base64_decode(&s) {
+        retval.set(v8_str(scope, &decoded).into());
+    }
+}
+
+fn btoa(
+    scope: &mut v8::HandleScope,
+    args: v8::FunctionCallbackArguments,
+    mut retval: v8::ReturnValue,
+) {
+    let s = args.get(0).to_rust_string_lossy(scope);
+    let encoded = base64_encode(s.as_bytes());
+    retval.set(v8_str(scope, &encoded).into());
+}
+
+fn structured_clone(
+    scope: &mut v8::HandleScope,
+    args: v8::FunctionCallbackArguments,
+    mut retval: v8::ReturnValue,
+) {
+    let val = args.get(0);
+    // Minimal JSON round-trip for parity.
+    if let Some(json_str) = v8::JSON::stringify(scope, val) {
+        let json_str = json_str.to_rust_string_lossy(scope);
+        let code = v8::String::new(scope, &json_str).unwrap();
+        if let Some(parsed) = v8::JSON::parse(scope, code) {
+            retval.set(parsed);
+        }
+    }
+}
+
+fn noop_callback(
+    _scope: &mut v8::HandleScope,
+    _args: v8::FunctionCallbackArguments,
+    _retval: v8::ReturnValue,
+) {}
+
+fn aurora_fetch_sync(
+    scope: &mut v8::HandleScope,
+    args: v8::FunctionCallbackArguments,
+    mut retval: v8::ReturnValue,
+) {
+    let url = args.get(0).to_rust_string_lossy(scope);
+    let obj = v8::Object::new(scope);
+
+    match crate::fetch::http::fetch_string(&url) {
+        Ok(body) => {
+            obj.set(scope, v8_str(scope, "ok").into(), v8::Boolean::new(scope, true).into());
+            obj.set(scope, v8_str(scope, "status").into(), v8::Integer::new(scope, 200).into());
+            obj.set(scope, v8_str(scope, "body").into(), v8_str(scope, &body).into());
+        }
+        Err(e) => {
+            obj.set(scope, v8_str(scope, "ok").into(), v8::Boolean::new(scope, false).into());
+            obj.set(scope, v8_str(scope, "status").into(), v8::Integer::new(scope, 0).into());
+            obj.set(scope, v8_str(scope, "body").into(), v8_str(scope, "").into());
+            obj.set(scope, v8_str(scope, "error").into(), v8_str(scope, &e.to_string()).into());
+        }
+    }
+    retval.set(obj.into());
+}
+
+fn build_storage_object<'s>(
+    scope: &mut v8::HandleScope<'s>,
+    backing: Rc<RefCell<std::collections::BTreeMap<String, String>>>,
+) -> v8::Local<'s, v8::Object> {
+    let template = v8::ObjectTemplate::new(scope);
+    let data = v8::External::new(scope, Box::into_raw(Box::new(backing)) as *mut _);
+
+    let get_item = v8::FunctionTemplate::builder(storage_get_item).data(data.into()).build(scope);
+    template.set(v8_str(scope, "getItem").into(), get_item.into());
+
+    let set_item = v8::FunctionTemplate::builder(storage_set_item).data(data.into()).build(scope);
+    template.set(v8_str(scope, "setItem").into(), set_item.into());
+
+    let remove_item = v8::FunctionTemplate::builder(storage_remove_item).data(data.into()).build(scope);
+    template.set(v8_str(scope, "removeItem").into(), remove_item.into());
+
+    let clear = v8::FunctionTemplate::builder(storage_clear).data(data.into()).build(scope);
+    template.set(v8_str(scope, "clear").into(), clear.into());
+
+    let key = v8::FunctionTemplate::builder(storage_key).data(data.into()).build(scope);
+    template.set(v8_str(scope, "key").into(), key.into());
+
+    template.new_instance(scope).unwrap()
+}
+
+fn storage_get_item(
+    scope: &mut v8::HandleScope,
+    args: v8::FunctionCallbackArguments,
+    mut retval: v8::ReturnValue,
+) {
+    let key = args.get(0).to_rust_string_lossy(scope);
+    let data = args.data();
+    let external = v8::Local::<v8::External>::try_from(data).unwrap();
+    let map_ptr = external.value() as *const Rc<RefCell<std::collections::BTreeMap<String, String>>>;
+    let map = unsafe { &*map_ptr };
+
+    if let Some(val) = map.borrow().get(&key) {
+        retval.set(v8_str(scope, val).into());
+    } else {
+        retval.set(v8::null(scope).into());
+    }
+}
+
+fn storage_set_item(
+    scope: &mut v8::HandleScope,
+    args: v8::FunctionCallbackArguments,
+    mut _retval: v8::ReturnValue,
+) {
+    let key = args.get(0).to_rust_string_lossy(scope);
+    let val = args.get(1).to_rust_string_lossy(scope);
+    let data = args.data();
+    let external = v8::Local::<v8::External>::try_from(data).unwrap();
+    let map_ptr = external.value() as *const Rc<RefCell<std::collections::BTreeMap<String, String>>>;
+    let map = unsafe { &*map_ptr };
+
+    map.borrow_mut().insert(key, val);
+}
+
+fn storage_remove_item(
+    scope: &mut v8::HandleScope,
+    args: v8::FunctionCallbackArguments,
+    mut _retval: v8::ReturnValue,
+) {
+    let key = args.get(0).to_rust_string_lossy(scope);
+    let data = args.data();
+    let external = v8::Local::<v8::External>::try_from(data).unwrap();
+    let map_ptr = external.value() as *const Rc<RefCell<std::collections::BTreeMap<String, String>>>;
+    let map = unsafe { &*map_ptr };
+
+    map.borrow_mut().remove(&key);
+}
+
+fn storage_clear(
+    _scope: &mut v8::HandleScope,
+    args: v8::FunctionCallbackArguments,
+    mut _retval: v8::ReturnValue,
+) {
+    let data = args.data();
+    let external = v8::Local::<v8::External>::try_from(data).unwrap();
+    let map_ptr = external.value() as *const Rc<RefCell<std::collections::BTreeMap<String, String>>>;
+    let map = unsafe { &*map_ptr };
+
+    map.borrow_mut().clear();
+}
+
+fn storage_key(
+    scope: &mut v8::HandleScope,
+    args: v8::FunctionCallbackArguments,
+    mut retval: v8::ReturnValue,
+) {
+    let idx = args.get(0).uint32_value(scope).unwrap_or(0) as usize;
+    let data = args.data();
+    let external = v8::Local::<v8::External>::try_from(data).unwrap();
+    let map_ptr = external.value() as *const Rc<RefCell<std::collections::BTreeMap<String, String>>>;
+    let map = unsafe { &*map_ptr };
+
+    if let Some(k) = map.borrow().keys().nth(idx) {
+        retval.set(v8_str(scope, k).into());
+    } else {
+        retval.set(v8::null(scope).into());
+    }
+}
+
+// Base64 utilities copied from js_boa/utils.rs
+fn base64_encode(input: &[u8]) -> String {
+    const CHARS: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity((input.len() + 2) / 3 * 4);
+    let mut i = 0;
+    while i + 3 <= input.len() {
+        let n = ((input[i] as u32) << 16) | ((input[i + 1] as u32) << 8) | (input[i + 2] as u32);
+        out.push(CHARS[((n >> 18) & 0x3f) as usize] as char);
+        out.push(CHARS[((n >> 12) & 0x3f) as usize] as char);
+        out.push(CHARS[((n >> 6) & 0x3f) as usize] as char);
+        out.push(CHARS[(n & 0x3f) as usize] as char);
+        i += 3;
+    }
+    let rem = input.len() - i;
+    if rem == 1 {
+        let n = (input[i] as u32) << 16;
+        out.push(CHARS[((n >> 18) & 0x3f) as usize] as char);
+        out.push(CHARS[((n >> 12) & 0x3f) as usize] as char);
+        out.push('=');
+        out.push('=');
+    } else if rem == 2 {
+        let n = ((input[i] as u32) << 16) | ((input[i + 1] as u32) << 8);
+        out.push(CHARS[((n >> 18) & 0x3f) as usize] as char);
+        out.push(CHARS[((n >> 12) & 0x3f) as usize] as char);
+        out.push(CHARS[((n >> 6) & 0x3f) as usize] as char);
+        out.push('=');
+    }
+    out
+}
+
+fn base64_decode(input: &str) -> Option<String> {
+    fn val(c: u8) -> Option<u8> {
+        match c {
+            b'A'..=b'Z' => Some(c - b'A'),
+            b'a'..=b'z' => Some(c - b'a' + 26),
+            b'0'..=b'9' => Some(c - b'0' + 52),
+            b'+' => Some(62),
+            b'/' => Some(63),
+            _ => None,
+        }
+    }
+    let bytes: Vec<u8> = input
+        .bytes()
+        .filter(|&c| c != b'\n' && c != b'\r' && c != b' ')
+        .collect();
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i + 4 <= bytes.len() {
+        let a = val(bytes[i])?;
+        let b = val(bytes[i + 1])?;
+        let c = bytes[i + 2];
+        let d = bytes[i + 3];
+        let n = ((a as u32) << 18) | ((b as u32) << 12);
+        out.push(((n >> 16) & 0xff) as u8);
+        if c != b'=' {
+            let cv = val(c)?;
+            let n = n | ((cv as u32) << 6);
+            out.push(((n >> 8) & 0xff) as u8);
+            if d != b'=' {
+                let dv = val(d)?;
+                let n = n | (dv as u32);
+                out.push((n & 0xff) as u8);
+            }
+        }
+        i += 4;
+    }
+    String::from_utf8(out).ok()
 }
 
 /// Compile and run a script, returning its completion value stringified.
@@ -87,47 +927,93 @@ impl crate::js_engine::JsRuntime for V8Runtime {
         compile_and_run(scope, script).map(|_| ())
     }
 
-    // The methods below are honest no-ops: the DOM bridge, timers, and event
-    // loop are not wired to V8 yet. They exist so the runtime is a drop-in
-    // `Box<dyn JsRuntime>` for the engine-swap path.
     fn set_current_script(&mut self, _script: Option<&NodePtr>) {}
 
     fn set_shared_state(
         &mut self,
-        _layout_tree: Rc<RefCell<LayoutTree>>,
-        _stylesheet: Rc<RefCell<Stylesheet>>,
-        _viewport: Rc<RefCell<ViewportSize>>,
+        layout_tree: Rc<RefCell<LayoutTree>>,
+        stylesheet: Rc<RefCell<Stylesheet>>,
+        viewport: Rc<RefCell<ViewportSize>>,
     ) {
+        self.registry.set_shared_state(layout_tree, stylesheet, viewport, self.document.clone());
     }
 
-    fn clear_dirty_bits(&mut self) {}
+    fn clear_dirty_bits(&mut self) {
+        self.registry.clear_dirty_bits();
+    }
     fn has_dirty_bits(&self) -> bool {
-        false
+        self.registry.has_dirty_bits()
     }
     fn take_needs_reflow(&mut self) -> bool {
-        false
+        self.registry.take_needs_reflow()
     }
 
-    fn tick(&mut self, _now: Instant) -> bool {
-        false
+    fn tick(&mut self, now: Instant) -> bool {
+        let ready = self.ready_timers(now);
+        if ready.is_empty() {
+            return false;
+        }
+
+        v8::scope_with_context!(let scope, &mut self.isolate, &self.context);
+        let global = self.context.get(scope).global(scope);
+
+        for entry in ready {
+            let callback = v8::Local::new(scope, entry.callback);
+            let _ = callback.call(scope, global.into(), &[]);
+
+            if let Some(interval) = entry.interval {
+                self.window.borrow_mut().timers.push(super::capture::TimerEntry {
+                    id: entry.id,
+                    callback: v8::Global::new(scope, callback),
+                    deadline: now + interval,
+                    interval: Some(interval),
+                });
+            }
+        }
+
+        true
     }
-    fn drain_animation_frame_callbacks(&mut self, _now: Instant) -> bool {
-        false
+
+    fn drain_animation_frame_callbacks(&mut self, now: Instant) -> bool {
+        let callbacks = self.window.borrow_mut().animation_frames.drain(..).collect::<Vec<_>>();
+        if callbacks.is_empty() {
+            return false;
+        }
+
+        v8::scope_with_context!(let scope, &mut self.isolate, &self.context);
+        let global = self.context.get(scope).global(scope);
+        let timestamp = now.duration_since(self.window.borrow().time_origin).as_secs_f64() * 1000.0;
+        let ts_val = v8::Number::new(scope, timestamp);
+
+        for entry in callbacks {
+            let callback = v8::Local::new(scope, entry.callback);
+            let _ = callback.call(scope, global.into(), &[ts_val.into()]);
+        }
+
+        true
     }
 
     fn dispatch_event(&mut self, _node: &NodePtr, _event_type: &str) -> bool {
+        // TODO: Full event dispatch
         false
     }
-    fn fire_dom_content_loaded(&mut self) {}
-    fn fire_load(&mut self) {}
+
+    fn fire_dom_content_loaded(&mut self) {
+        self.fire_lifecycle_event("DOMContentLoaded");
+    }
+
+    fn fire_load(&mut self) {
+        self.fire_lifecycle_event("load");
+    }
 
     fn next_deadline(&self) -> Option<Instant> {
-        None
+        self.window.borrow().timers.iter().map(|t| t.deadline).min()
     }
     fn has_animation_frame_callbacks(&self) -> bool {
-        false
+        !self.window.borrow().animation_frames.is_empty()
     }
-    fn has_ready_work(&self, _now: Instant) -> bool {
-        false
+    fn has_ready_work(&self, now: Instant) -> bool {
+        self.has_animation_frame_callbacks()
+            || self.next_deadline().map(|d| d <= now).unwrap_or(false)
     }
 }

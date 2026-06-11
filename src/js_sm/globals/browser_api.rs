@@ -1844,6 +1844,14 @@ unsafe fn install_youtube_polyfills(cx: &mut JSContext, global: mozjs::gc::Handl
                                 delete Object.prototype._initializeProperties;
                             }
                         }
+                    } else {
+                        // Class-style constructor: replay using Reflect.construct under upgradeStack.
+                        upgradeStack.push(el);
+                        try {
+                            Reflect.construct(ctor, []);
+                        } finally {
+                            upgradeStack.pop();
+                        }
                     }
                 } catch (e) {
                     traceError('constructor ' + name, e);

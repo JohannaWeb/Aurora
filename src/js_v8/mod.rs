@@ -6,6 +6,12 @@
 //! wired up yet — scripts run in a bare global scope.
 
 mod runtime;
+mod capture;
+mod registry;
+mod node_create;
+mod selectors;
+mod style_class;
+mod tree;
 #[cfg(test)]
 mod runtime_tests;
 

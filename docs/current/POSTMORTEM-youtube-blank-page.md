@@ -1,5 +1,12 @@
 # Postmortem: YouTube renders a blank page
 
+> **Superseded (2026-06-11):** several "contributing causes" below have since been
+> fixed and the render path has changed. Current verified state:
+> [ANALYSIS-youtube-rendering-2026-06-11.md](ANALYSIS-youtube-rendering-2026-06-11.md);
+> follow-up postmortem:
+> [POSTMORTEM-youtube-still-not-rendering-2026-06-11.md](POSTMORTEM-youtube-still-not-rendering-2026-06-11.md).
+> Kept as the historical record.
+
 **Date:** 2026-06-10
 **Status:** Root cause narrowed to Polymer template stamping silently bailing inside `ytd-app`; contributing causes identified and listed below. Not yet fixed.
 **Branch:** `javascript/move-to-spider-monkey-rust-bindings`
