@@ -1,5 +1,5 @@
-use crate::css::selectors_impl::{AuroraSelectorImpl, element_matches, parse_selector_list};
 use crate::css::ElementData;
+use crate::css::selectors_impl::{AuroraSelectorImpl, element_matches, parse_selector_list};
 use crate::dom::{Node, NodePtr};
 use ::selectors::parser::Selector;
 use std::rc::Rc;

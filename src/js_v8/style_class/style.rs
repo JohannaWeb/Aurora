@@ -1,10 +1,10 @@
-use v8;
+use crate::css::parse_style_text;
 use crate::dom::{Node, NodePtr};
 use crate::js_v8::node_create::{NodeData, create_js_node};
-use crate::css::parse_style_text;
-use std::collections::BTreeMap;
 use std::cell::RefCell;
+use std::collections::BTreeMap;
 use std::rc::Rc;
+use v8;
 
 pub(crate) struct StyleData {
     pub(crate) node: NodePtr,
@@ -13,7 +13,7 @@ pub(crate) struct StyleData {
 }
 
 pub(crate) fn build_style_object<'s>(
-    scope: &mut v8::HandleScope<'s>,
+    scope: &mut v8::PinScope<'s, '_>,
     node_data: &NodeData,
 ) -> v8::Local<'s, v8::Object> {
     let style = Rc::new(RefCell::new(BTreeMap::<String, String>::new()));
@@ -32,12 +32,31 @@ pub(crate) fn build_style_object<'s>(
 
     let template = v8::ObjectTemplate::new(scope);
 
-    install_method(scope, template, "getPropertyValue", get_property_value, style_external);
+    install_method(
+        scope,
+        template,
+        "getPropertyValue",
+        get_property_value,
+        style_external,
+    );
     install_method(scope, template, "setProperty", set_property, style_external);
-    install_method(scope, template, "removeProperty", remove_property, style_external);
+    install_method(
+        scope,
+        template,
+        "removeProperty",
+        remove_property,
+        style_external,
+    );
     install_method(scope, template, "item", item, style_external);
 
-    install_accessor(scope, template, "cssText", get_css_text, Some(set_css_text), style_external);
+    install_accessor(
+        scope,
+        template,
+        "cssText",
+        get_css_text,
+        set_css_text,
+        style_external,
+    );
 
     // Style properties
     for (js_name, css_name) in STYLE_PROPERTIES {
@@ -48,7 +67,7 @@ pub(crate) fn build_style_object<'s>(
 }
 
 fn install_method<'s>(
-    scope: &mut v8::HandleScope<'s>,
+    scope: &mut v8::PinScope<'s, '_>,
     template: v8::Local<v8::ObjectTemplate>,
     name: &str,
     callback: impl v8::MapFnTo<v8::FunctionCallback>,
@@ -62,32 +81,24 @@ fn install_method<'s>(
 }
 
 fn install_accessor<'s>(
-    scope: &mut v8::HandleScope<'s>,
+    scope: &mut v8::PinScope<'s, '_>,
     template: v8::Local<v8::ObjectTemplate>,
     name: &str,
     getter: impl v8::MapFnTo<v8::AccessorNameGetterCallback>,
-    setter: Option<impl v8::MapFnTo<v8::AccessorNameSetterCallback>>,
+    setter: impl v8::MapFnTo<v8::AccessorNameSetterCallback>,
     data: v8::Local<'s, v8::External>,
 ) {
     let name_str = v8::String::new(scope, name).unwrap();
-    if let Some(s) = setter {
-        template.set_accessor_with_data_setter(
-            name_str.into(),
-            getter,
-            s,
-            data.into(),
-        );
-    } else {
-        template.set_accessor_with_data(
-            name_str.into(),
-            getter,
-            data.into(),
-        );
-    }
+    template.set_accessor_with_configuration(
+        name_str.into(),
+        v8::AccessorConfiguration::new(getter)
+            .setter(setter)
+            .data(data.into()),
+    );
 }
 
 fn get_property_value(
-    scope: &mut v8::HandleScope,
+    scope: &mut v8::PinScope<'_, '_>,
     args: v8::FunctionCallbackArguments,
     mut retval: v8::ReturnValue,
 ) {
@@ -103,7 +114,7 @@ fn get_property_value(
 }
 
 fn set_property(
-    scope: &mut v8::HandleScope,
+    scope: &mut v8::PinScope<'_, '_>,
     args: v8::FunctionCallbackArguments,
     mut _retval: v8::ReturnValue,
 ) {
@@ -126,7 +137,7 @@ fn set_property(
 }
 
 fn remove_property(
-    scope: &mut v8::HandleScope,
+    scope: &mut v8::PinScope<'_, '_>,
     args: v8::FunctionCallbackArguments,
     mut _retval: v8::ReturnValue,
 ) {
@@ -144,7 +155,7 @@ fn remove_property(
 }
 
 fn item(
-    scope: &mut v8::HandleScope,
+    scope: &mut v8::PinScope<'_, '_>,
     args: v8::FunctionCallbackArguments,
     mut retval: v8::ReturnValue,
 ) {
@@ -164,7 +175,7 @@ fn item(
 }
 
 fn get_css_text(
-    scope: &mut v8::HandleScope,
+    scope: &mut v8::PinScope<'_, '_>,
     _name: v8::Local<v8::Name>,
     args: v8::PropertyCallbackArguments,
     mut retval: v8::ReturnValue,
@@ -179,10 +190,11 @@ fn get_css_text(
 }
 
 fn set_css_text(
-    scope: &mut v8::HandleScope,
+    scope: &mut v8::PinScope<'_, '_>,
     _name: v8::Local<v8::Name>,
     value: v8::Local<v8::Value>,
     args: v8::PropertyCallbackArguments,
+    _retval: v8::ReturnValue<()>,
 ) {
     let external = v8::Local::<v8::External>::try_from(args.data()).unwrap();
     let style_data = unsafe { &*(external.value() as *const StyleData) };
@@ -246,7 +258,7 @@ const STYLE_PROPERTIES: &[(&str, &str)] = &[
 ];
 
 fn install_style_property_accessor<'s>(
-    scope: &mut v8::HandleScope<'s>,
+    scope: &mut v8::PinScope<'s, '_>,
     template: v8::Local<v8::ObjectTemplate>,
     js_name: &str,
     css_name: &'static str,
@@ -255,23 +267,23 @@ fn install_style_property_accessor<'s>(
     // V8 accessors don't easily support capturing extra data like the property name
     // without another level of indirection or using a single callback that checks the name.
     // However, template.set_accessor_with_data passes the 'name' to the getter.
-    
+
     // BUT 'name' is the name of the property being accessed (e.g., "backgroundColor").
     // We can use that if we have a mapping.
-    
+
     // For simplicity, let's use a single getter/setter that looks up the property name.
     // We need to pass the mapping to the callback.
-    
-    template.set_accessor_with_data_setter(
+
+    template.set_accessor_with_configuration(
         v8::String::new(scope, js_name).unwrap().into(),
-        style_property_getter,
-        style_property_setter,
-        data.into(),
+        v8::AccessorConfiguration::new(style_property_getter)
+            .setter(style_property_setter)
+            .data(data.into()),
     );
 }
 
 fn style_property_getter(
-    scope: &mut v8::HandleScope,
+    scope: &mut v8::PinScope<'_, '_>,
     name: v8::Local<v8::Name>,
     args: v8::PropertyCallbackArguments,
     mut retval: v8::ReturnValue,
@@ -289,10 +301,11 @@ fn style_property_getter(
 }
 
 fn style_property_setter(
-    scope: &mut v8::HandleScope,
+    scope: &mut v8::PinScope<'_, '_>,
     name: v8::Local<v8::Name>,
     value: v8::Local<v8::Value>,
     args: v8::PropertyCallbackArguments,
+    _retval: v8::ReturnValue<()>,
 ) {
     let external = v8::Local::<v8::External>::try_from(args.data()).unwrap();
     let style_data = unsafe { &*(external.value() as *const StyleData) };

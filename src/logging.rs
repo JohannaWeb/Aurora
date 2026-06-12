@@ -45,7 +45,9 @@ pub fn track_js_exception(msg: &str) {
         *c == 1
     };
     if is_first {
-        log::warn!(target: "aurora::js", "[JS] exception: {}", short);
+        // Full message (incl. stack trace when the engine provides one) on
+        // first occurrence; the dedup key/summary stays first-line only.
+        log::warn!(target: "aurora::js", "[JS] exception: {}", msg);
     }
 }
 

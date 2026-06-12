@@ -74,11 +74,7 @@ pub(crate) fn remove_child_ptr(parent: &NodePtr, child: &NodePtr) {
     kids.retain(|c| !Rc::ptr_eq(c, child));
 }
 
-pub(crate) fn replace_child_ptr(
-    parent: &NodePtr,
-    new_child: &NodePtr,
-    old_child: &NodePtr,
-) {
+pub(crate) fn replace_child_ptr(parent: &NodePtr, new_child: &NodePtr, old_child: &NodePtr) {
     let mut p = parent.borrow_mut();
     let kids: &mut Vec<NodePtr> = match &mut *p {
         Node::Element(el) => &mut el.children,

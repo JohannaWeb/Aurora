@@ -144,6 +144,12 @@ fn run_scripts(
                 crate::js_engine::create_runtime(crate::js_engine::EngineKind::SpiderMonkey, dom)
                     .expect("SpiderMonkey backend is always available")
             });
+    if let Some(url) = base_url {
+        // `{url:?}` produces a quoted, escaped string literal valid in JS.
+        let _ = runtime.execute(&format!(
+            "if (typeof __aurora_set_location__ === 'function') __aurora_set_location__({url:?});"
+        ));
+    }
     let mut total_script_bytes = 0usize;
     for (script, content) in scripts.iter().zip(fetched.into_iter()) {
         let Some(content) = content else { continue };

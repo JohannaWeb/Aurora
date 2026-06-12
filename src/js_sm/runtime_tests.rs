@@ -233,7 +233,7 @@ fn class_custom_element_upgrade_preserves_constructor_template_lookup() {
 }
 
 #[test]
-fn class_custom_element_upgrade_does_not_replay_constructor() {
+fn class_custom_element_upgrade_replays_constructor() {
     let dom = Parser::new("<html><body><test-card></test-card></body></html>").parse_document();
     let mut runtime = SmRuntime::new(dom.clone());
 
@@ -256,7 +256,7 @@ fn class_custom_element_upgrade_does_not_replay_constructor() {
         )
         .unwrap();
 
-    assert_eq!(text_content(&dom), "0");
+    assert_eq!(text_content(&dom), "1");
 }
 
 #[test]
@@ -278,6 +278,47 @@ fn document_current_script_tracks_running_script_node() {
     runtime.set_current_script(None);
 
     assert_eq!(text_content(&dom), "SCRIPT:/app.js");
+}
+
+#[test]
+fn element_attributes_exposes_named_node_map() {
+    let dom = Parser::new("<html><body><div id=\"app\" class=\"one\"></div></body></html>")
+        .parse_document();
+    let mut runtime = SmRuntime::new(dom.clone());
+
+    runtime
+        .execute(
+            r##"
+            const el = document.querySelector("#app");
+            const attrs = el.attributes;
+            const before = [
+                attrs.length,
+                attrs.getNamedItem("id").value,
+                attrs.item(0).name ? "item" : "missing"
+            ].join(":");
+            attrs.getNamedItem("class").value = "two";
+            attrs.removeNamedItem("id");
+            attrs.setNamedItem({ name: "data-ready", value: before });
+            document.body.setAttribute(
+                "data-result",
+                [
+                    before,
+                    el.getAttribute("class"),
+                    el.hasAttribute("id"),
+                    el.getAttribute("data-ready"),
+                    el.attributes.length
+                ].join("|")
+            );
+            "##,
+        )
+        .unwrap();
+
+    let body = find_first_tag(&dom, "body").unwrap();
+    let result = match &*body.borrow() {
+        Node::Element(element) => element.attributes.get("data-result").cloned(),
+        _ => None,
+    };
+    assert_eq!(result.as_deref(), Some("2:app:item|two|false|2:app:item|2"));
 }
 
 #[test]

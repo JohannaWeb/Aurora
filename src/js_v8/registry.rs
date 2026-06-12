@@ -9,13 +9,15 @@ pub(super) struct NodeRegistry {
     pub(super) nodes: Rc<RefCell<BTreeMap<u32, NodePtr>>>,
     /// Reverse map: Rc pointer address → node ID.
     reverse_nodes: Rc<RefCell<BTreeMap<usize, u32>>>,
+    wrappers: Rc<RefCell<BTreeMap<u32, v8::Global<v8::Object>>>>,
     pub(super) next_id: Rc<RefCell<u32>>,
     dirty: Rc<RefCell<DirtyState>>,
     pub(super) layout_tree: Rc<RefCell<Option<Rc<RefCell<crate::layout::LayoutTree>>>>>,
     pub(super) stylesheet: Rc<RefCell<Option<Rc<RefCell<crate::css::Stylesheet>>>>>,
     pub(super) viewport: Rc<RefCell<Option<Rc<RefCell<crate::layout::ViewportSize>>>>>,
     pub(super) document: Rc<RefCell<Option<NodePtr>>>,
-    pub(super) listeners: Rc<RefCell<BTreeMap<u32, BTreeMap<String, Vec<v8::Global<v8::Function>>>>>>,
+    pub(super) listeners:
+        Rc<RefCell<BTreeMap<u32, BTreeMap<String, Vec<v8::Global<v8::Function>>>>>>,
 }
 
 impl NodeRegistry {
@@ -23,6 +25,7 @@ impl NodeRegistry {
         Self {
             nodes: Rc::new(RefCell::new(BTreeMap::new())),
             reverse_nodes: Rc::new(RefCell::new(BTreeMap::new())),
+            wrappers: Rc::new(RefCell::new(BTreeMap::new())),
             next_id: Rc::new(RefCell::new(1)),
             dirty: Rc::new(RefCell::new(DirtyState::default())),
             layout_tree: Rc::new(RefCell::new(None)),
@@ -33,7 +36,12 @@ impl NodeRegistry {
         }
     }
 
-    pub(super) fn add_event_listener(&self, node_id: u32, event_type: String, callback: v8::Global<v8::Function>) {
+    pub(super) fn add_event_listener(
+        &self,
+        node_id: u32,
+        event_type: String,
+        callback: v8::Global<v8::Function>,
+    ) {
         let mut listeners = self.listeners.borrow_mut();
         listeners
             .entry(node_id)
@@ -43,7 +51,29 @@ impl NodeRegistry {
             .push(callback);
     }
 
-    pub(super) fn get_listeners(&self, node_id: u32, event_type: &str) -> Vec<v8::Global<v8::Function>> {
+    pub(super) fn remove_event_listener(
+        &self,
+        scope: &mut v8::PinScope<'_, '_>,
+        node_id: u32,
+        event_type: &str,
+        callback: v8::Local<v8::Function>,
+    ) {
+        let mut listeners = self.listeners.borrow_mut();
+        if let Some(by_type) = listeners.get_mut(&node_id) {
+            if let Some(list) = by_type.get_mut(event_type) {
+                list.retain(|stored| {
+                    let stored_local = v8::Local::new(scope, stored);
+                    !stored_local.strict_equals(callback.into())
+                });
+            }
+        }
+    }
+
+    pub(super) fn get_listeners(
+        &self,
+        node_id: u32,
+        event_type: &str,
+    ) -> Vec<v8::Global<v8::Function>> {
         let listeners = self.listeners.borrow();
         listeners
             .get(&node_id)
@@ -83,6 +113,28 @@ impl NodeRegistry {
         self.nodes.borrow().get(&id).cloned()
     }
 
+    pub(super) fn lookup_js_wrapper<'s>(
+        &self,
+        scope: &mut v8::PinScope<'s, '_>,
+        id: u32,
+    ) -> Option<v8::Local<'s, v8::Object>> {
+        self.wrappers
+            .borrow()
+            .get(&id)
+            .map(|wrapper| v8::Local::new(scope, wrapper))
+    }
+
+    pub(super) fn store_js_wrapper(
+        &self,
+        scope: &mut v8::PinScope<'_, '_>,
+        id: u32,
+        object: v8::Local<v8::Object>,
+    ) {
+        self.wrappers
+            .borrow_mut()
+            .insert(id, v8::Global::new(scope, object));
+    }
+
     pub(super) fn node_id(&self, node: &NodePtr) -> Option<u32> {
         let key = Rc::as_ptr(node) as usize;
         self.reverse_nodes.borrow().get(&key).copied()
@@ -105,6 +157,14 @@ impl NodeRegistry {
     pub(super) fn has_dirty_bits(&self) -> bool {
         let dirty = self.dirty.borrow();
         dirty.style || dirty.layout
+    }
+
+    pub(super) fn mark_style_dirty(&self, _node: &NodePtr) {
+        self.dirty.borrow_mut().style = true;
+    }
+
+    pub(super) fn mark_layout_dirty(&self, _node: &NodePtr) {
+        self.dirty.borrow_mut().layout = true;
     }
 }
 

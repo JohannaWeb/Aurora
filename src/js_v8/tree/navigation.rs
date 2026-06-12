@@ -1,7 +1,12 @@
 use super::*;
 use std::rc::Rc;
 
-pub(crate) fn sibling(root: &NodePtr, node: &NodePtr, delta: i32, elements_only: bool) -> Option<NodePtr> {
+pub(crate) fn sibling(
+    root: &NodePtr,
+    node: &NodePtr,
+    delta: i32,
+    elements_only: bool,
+) -> Option<NodePtr> {
     let parent = find_parent(root, node)?;
     let kids: Vec<NodePtr> = match &*parent.borrow() {
         Node::Element(el) => el.children.clone(),
@@ -9,11 +14,11 @@ pub(crate) fn sibling(root: &NodePtr, node: &NodePtr, delta: i32, elements_only:
         _ => return None,
     };
     let pos = kids.iter().position(|c| Rc::ptr_eq(c, node))?;
-    
+
     let mut current = pos as i32;
     let step = if delta > 0 { 1 } else { -1 };
     let mut remaining = delta.abs();
-    
+
     while remaining > 0 {
         current += step;
         if current < 0 || current >= kids.len() as i32 {

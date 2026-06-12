@@ -1,10 +1,10 @@
-use v8;
 use crate::dom::{Node, NodePtr};
 use crate::js_v8::node_create::{NodeData, create_js_node};
 use std::collections::BTreeSet;
+use v8;
 
 pub(crate) fn build_classlist_object<'s>(
-    scope: &mut v8::HandleScope<'s>,
+    scope: &mut v8::PinScope<'s, '_>,
     node_external: v8::Local<'s, v8::External>,
 ) -> v8::Local<'s, v8::Object> {
     let template = v8::ObjectTemplate::new(scope);
@@ -17,11 +17,36 @@ pub(crate) fn build_classlist_object<'s>(
     install_method(scope, template, "item", item, node_external);
     install_method(scope, template, "toString", to_string, node_external);
 
-    template.new_instance(scope).unwrap()
+    let obj = template.new_instance(scope).unwrap();
+
+    // Array-like shape (length + indexed tokens) so iteration helpers work.
+    // The classList object is rebuilt on every `.classList` access, so a
+    // snapshot taken here stays consistent with the live class attribute.
+    let node_data = unsafe { &*(node_external.value() as *const NodeData) };
+    let tokens: Vec<String> = match &*node_data.node.borrow() {
+        Node::Element(el) => el
+            .attributes
+            .get("class")
+            .map(|v| v.split_whitespace().map(String::from).collect())
+            .unwrap_or_default(),
+        _ => Vec::new(),
+    };
+    let length_key = v8::String::new(scope, "length").unwrap();
+    let length_val = v8::Integer::new(scope, tokens.len() as i32);
+    obj.set(scope, length_key.into(), length_val.into());
+    let value_key = v8::String::new(scope, "value").unwrap();
+    let value_val = v8::String::new(scope, &tokens.join(" ")).unwrap();
+    obj.set(scope, value_key.into(), value_val.into());
+    for (i, token) in tokens.iter().enumerate() {
+        let token_val = v8::String::new(scope, token).unwrap();
+        obj.set_index(scope, i as u32, token_val.into());
+    }
+
+    obj
 }
 
 fn install_method<'s>(
-    scope: &mut v8::HandleScope<'s>,
+    scope: &mut v8::PinScope<'s, '_>,
     template: v8::Local<v8::ObjectTemplate>,
     name: &str,
     callback: impl v8::MapFnTo<v8::FunctionCallback>,
@@ -35,7 +60,7 @@ fn install_method<'s>(
 }
 
 fn add(
-    scope: &mut v8::HandleScope,
+    scope: &mut v8::PinScope<'_, '_>,
     args: v8::FunctionCallbackArguments,
     mut _retval: v8::ReturnValue,
 ) {
@@ -53,7 +78,7 @@ fn add(
 }
 
 fn remove(
-    scope: &mut v8::HandleScope,
+    scope: &mut v8::PinScope<'_, '_>,
     args: v8::FunctionCallbackArguments,
     mut _retval: v8::ReturnValue,
 ) {
@@ -71,7 +96,7 @@ fn remove(
 }
 
 fn contains(
-    scope: &mut v8::HandleScope,
+    scope: &mut v8::PinScope<'_, '_>,
     args: v8::FunctionCallbackArguments,
     mut retval: v8::ReturnValue,
 ) {
@@ -92,7 +117,7 @@ fn contains(
 }
 
 fn toggle(
-    scope: &mut v8::HandleScope,
+    scope: &mut v8::PinScope<'_, '_>,
     args: v8::FunctionCallbackArguments,
     mut retval: v8::ReturnValue,
 ) {
@@ -115,7 +140,7 @@ fn toggle(
 }
 
 fn replace(
-    scope: &mut v8::HandleScope,
+    scope: &mut v8::PinScope<'_, '_>,
     args: v8::FunctionCallbackArguments,
     mut retval: v8::ReturnValue,
 ) {
@@ -137,7 +162,7 @@ fn replace(
 }
 
 fn item(
-    scope: &mut v8::HandleScope,
+    scope: &mut v8::PinScope<'_, '_>,
     args: v8::FunctionCallbackArguments,
     mut retval: v8::ReturnValue,
 ) {
@@ -160,7 +185,7 @@ fn item(
 }
 
 fn to_string(
-    scope: &mut v8::HandleScope,
+    scope: &mut v8::PinScope<'_, '_>,
     args: v8::FunctionCallbackArguments,
     mut retval: v8::ReturnValue,
 ) {

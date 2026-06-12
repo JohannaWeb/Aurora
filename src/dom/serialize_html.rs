@@ -27,7 +27,10 @@ fn serialize_node(node: &NodePtr, out: &mut String, is_rawtext: bool) {
             out.push('>');
 
             // Rawtext tags like <style> and <script> should not have their child text nodes HTML-escaped.
-            let el_is_raw = matches!(el.tag_name.to_ascii_lowercase().as_str(), "script" | "style");
+            let el_is_raw = matches!(
+                el.tag_name.to_ascii_lowercase().as_str(),
+                "script" | "style"
+            );
 
             for child in &el.children {
                 serialize_node(child, out, el_is_raw);
@@ -84,17 +87,9 @@ mod tests {
     #[test]
     fn test_serialize_doctype_and_rawtext() {
         let text_in_style = Node::text("body > div { color: red; & }");
-        let style_el = Node::element_with_attributes(
-            "style",
-            BTreeMap::new(),
-            vec![text_in_style],
-        );
+        let style_el = Node::element_with_attributes("style", BTreeMap::new(), vec![text_in_style]);
         let normal_text = Node::text("Hello <world> &");
-        let div_el = Node::element_with_attributes(
-            "div",
-            BTreeMap::new(),
-            vec![normal_text],
-        );
+        let div_el = Node::element_with_attributes("div", BTreeMap::new(), vec![normal_text]);
         let doc = Node::document(vec![style_el, div_el]);
 
         let serialized = serialize_outer_html(&doc);
