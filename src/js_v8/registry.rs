@@ -18,6 +18,12 @@ pub(super) struct NodeRegistry {
     pub(super) document: Rc<RefCell<Option<NodePtr>>>,
     pub(super) listeners:
         Rc<RefCell<BTreeMap<u32, BTreeMap<String, Vec<v8::Global<v8::Function>>>>>>,
+    /// `MutationObserver` instances by observer id (callback + observer object).
+    pub(super) mo_observers: Rc<RefCell<BTreeMap<u32, super::mutation_observer::MoObserver>>>,
+    /// Active `observe()` registrations and their pending records.
+    pub(super) mo_entries: Rc<RefCell<Vec<super::mutation_observer::MoEntry>>>,
+    /// Monotonic id source for MutationObservers (kept separate from node ids).
+    mo_next: Rc<RefCell<u32>>,
 }
 
 impl NodeRegistry {
@@ -33,7 +39,18 @@ impl NodeRegistry {
             viewport: Rc::new(RefCell::new(None)),
             document: Rc::new(RefCell::new(None)),
             listeners: Rc::new(RefCell::new(BTreeMap::new())),
+            mo_observers: Rc::new(RefCell::new(BTreeMap::new())),
+            mo_entries: Rc::new(RefCell::new(Vec::new())),
+            mo_next: Rc::new(RefCell::new(1)),
         }
+    }
+
+    /// Allocate a fresh MutationObserver id.
+    pub(super) fn alloc_observer_id(&self) -> u32 {
+        let mut n = self.mo_next.borrow_mut();
+        let id = *n;
+        *n += 1;
+        id
     }
 
     pub(super) fn add_event_listener(
@@ -111,6 +128,10 @@ impl NodeRegistry {
 
     pub(super) fn lookup(&self, id: u32) -> Option<NodePtr> {
         self.nodes.borrow().get(&id).cloned()
+    }
+
+    pub(super) fn registered_nodes(&self) -> Vec<NodePtr> {
+        self.nodes.borrow().values().cloned().collect()
     }
 
     pub(super) fn lookup_js_wrapper<'s>(

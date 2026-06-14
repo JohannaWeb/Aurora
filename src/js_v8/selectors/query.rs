@@ -13,13 +13,26 @@ pub(crate) fn selector_matches(node: &NodePtr, selector: &str, root: &NodePtr) -
 
 pub(crate) fn query_first(root: &NodePtr, selector: &str, start_node: &NodePtr) -> Option<NodePtr> {
     let selectors = parse_selectors(selector);
-    query_first_rec(start_node, &selectors, root, true)
+    // Seed the ancestor path once (outermost→parent of `start_node`); the
+    // traversal threads it downward instead of re-deriving each node's
+    // ancestors via a full-tree `find_parent` walk.
+    let mut ancestors = build_ancestor_chain(root, start_node);
+    let mut found = None;
+    collect_matches(start_node, &selectors, &mut ancestors, &[], 0, true, &mut |n| {
+        found = Some(n.clone());
+        true
+    });
+    found
 }
 
 pub(crate) fn query_all(root: &NodePtr, selector: &str, start_node: &NodePtr) -> Vec<NodePtr> {
     let selectors = parse_selectors(selector);
+    let mut ancestors = build_ancestor_chain(root, start_node);
     let mut out = Vec::new();
-    query_all_rec(start_node, &selectors, root, &mut out, true);
+    collect_matches(start_node, &selectors, &mut ancestors, &[], 0, true, &mut |n| {
+        out.push(n.clone());
+        false
+    });
     out
 }
 
@@ -93,6 +106,38 @@ pub(crate) fn collect_by_class(node: &NodePtr, class: &str, out: &mut Vec<NodePt
 }
 
 pub(crate) fn find_parent(root: &NodePtr, target: &NodePtr) -> Option<NodePtr> {
+    // The parent back-pointer is authoritative: the runtime links the initial
+    // tree and the mutation primitives maintain it, so `None` means `target` has
+    // no parent (e.g. a freshly created, not-yet-attached node) and we must NOT
+    // fall back to an O(N) document scan — that scan, run per `isConnected`
+    // check on detached nodes during boot, was the quadratic hot spot.
+    let Some(parent) = crate::dom::parent_ptr(target) else {
+        return None;
+    };
+    if is_direct_child(&parent, target) {
+        return Some(parent);
+    }
+    // Safety net: the pointer is set but no longer lists `target` (a move that
+    // missed a maintenance site). Scan once and repair so we self-correct.
+    let found = find_parent_scan(root, target);
+    match &found {
+        Some(parent) => crate::dom::set_parent(target, parent),
+        None => crate::dom::clear_parent(target),
+    }
+    found
+}
+
+fn is_direct_child(parent: &NodePtr, target: &NodePtr) -> bool {
+    let borrow = parent.borrow();
+    let kids: &[NodePtr] = match &*borrow {
+        Node::Document { children, .. } => children,
+        Node::Element(el) => &el.children,
+        _ => return false,
+    };
+    kids.iter().any(|child| Rc::ptr_eq(child, target))
+}
+
+fn find_parent_scan(root: &NodePtr, target: &NodePtr) -> Option<NodePtr> {
     let kids: Vec<NodePtr> = match &*root.borrow() {
         Node::Document { children, .. } => children.clone(),
         Node::Element(el) => el.children.clone(),
@@ -102,7 +147,7 @@ pub(crate) fn find_parent(root: &NodePtr, target: &NodePtr) -> Option<NodePtr> {
         if Rc::ptr_eq(child, target) {
             return Some(root.clone());
         }
-        if let Some(found) = find_parent(child, target) {
+        if let Some(found) = find_parent_scan(child, target) {
             return Some(found);
         }
     }
@@ -197,44 +242,70 @@ fn sibling_index_of(root: &NodePtr, target: &NodePtr) -> usize {
     0
 }
 
-fn query_first_rec(
-    node: &NodePtr,
-    selectors: &[Selector<AuroraSelectorImpl>],
-    root: &NodePtr,
-    skip_self: bool,
-) -> Option<NodePtr> {
-    if !skip_self && node_matches_any(selectors, node, root) {
-        return Some(node.clone());
+fn element_data_of(node: &NodePtr) -> Option<ElementData> {
+    match &*node.borrow() {
+        Node::Element(el) => Some(ElementData {
+            tag_name: el.tag_name.clone(),
+            attributes: el.attributes.clone(),
+        }),
+        _ => None,
     }
-    let kids: Vec<NodePtr> = match &*node.borrow() {
-        Node::Element(el) => el.children.clone(),
-        Node::Document { children, .. } => children.clone(),
-        _ => Vec::new(),
-    };
-    for child in kids {
-        if let Some(found) = query_first_rec(&child, selectors, root, false) {
-            return Some(found);
-        }
-    }
-    None
 }
 
-fn query_all_rec(
+/// Depth-first traversal that matches every element against `selectors` while
+/// threading the matching context down the tree.
+///
+/// `ancestors` is the live outermost→parent path (pushed on descent, popped on
+/// return); `siblings`/`sibling_index` describe `node`'s position among its
+/// element-siblings. Computing these on the way down makes the whole query
+/// linear in the node count, instead of re-deriving each node's ancestors and
+/// siblings with repeated full-tree `find_parent` scans.
+///
+/// `on_match` is invoked for each matching element; returning `true` stops the
+/// traversal early (used by `query_first`). Returns `true` if it stopped.
+fn collect_matches(
     node: &NodePtr,
     selectors: &[Selector<AuroraSelectorImpl>],
-    root: &NodePtr,
-    out: &mut Vec<NodePtr>,
+    ancestors: &mut Vec<ElementData>,
+    siblings: &[ElementData],
+    sibling_index: usize,
     skip_self: bool,
-) {
-    if !skip_self && node_matches_any(selectors, node, root) {
-        out.push(node.clone());
+    on_match: &mut dyn FnMut(&NodePtr) -> bool,
+) -> bool {
+    if !skip_self {
+        if let Some(data) = element_data_of(node) {
+            let matched = selectors
+                .iter()
+                .any(|sel| element_matches(sel, &data, ancestors, siblings, sibling_index));
+            if matched && on_match(node) {
+                return true;
+            }
+        }
     }
-    let kids: Vec<NodePtr> = match &*node.borrow() {
+
+    let children: Vec<NodePtr> = match &*node.borrow() {
         Node::Element(el) => el.children.clone(),
         Node::Document { children, .. } => children.clone(),
-        _ => Vec::new(),
+        _ => return false,
     };
-    for child in kids {
-        query_all_rec(&child, selectors, root, out, false);
+    let child_siblings: Vec<ElementData> = children.iter().filter_map(element_data_of).collect();
+
+    let pushed = element_data_of(node).map(|data| ancestors.push(data)).is_some();
+    let mut stopped = false;
+    let mut element_index = 0usize;
+    for child in &children {
+        let is_element = matches!(&*child.borrow(), Node::Element(_));
+        let index = if is_element { element_index } else { 0 };
+        if collect_matches(child, selectors, ancestors, &child_siblings, index, false, on_match) {
+            stopped = true;
+            break;
+        }
+        if is_element {
+            element_index += 1;
+        }
     }
+    if pushed {
+        ancestors.pop();
+    }
+    stopped
 }

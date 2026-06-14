@@ -167,16 +167,9 @@ pub(in crate::js_sm) unsafe fn install_browser_apis(
         1,
     );
 
-    // URL constructor stub
-    define_ctor(cx, global, c"URL", Some(url_ctor), 2);
-    // URLSearchParams stub
-    define_ctor(
-        cx,
-        global,
-        c"URLSearchParams",
-        Some(url_search_params_ctor),
-        1,
-    );
+    // URL / URLSearchParams — small JS implementation with real parsing and
+    // relative URL resolution. YouTube reads these heavily during bootstrap.
+    install_url_polyfill(cx, global);
     install_abort_signal(cx, global);
     // AbortController stub
     define_ctor(
@@ -1737,69 +1730,217 @@ unsafe extern "C" fn return_empty_array(cx: *mut RawJSContext, argc: u32, vp: *m
     true
 }
 
-unsafe extern "C" fn url_ctor(cx: *mut RawJSContext, argc: u32, vp: *mut Value) -> bool {
-    let mut cx = JSContext::from_ptr(NonNull::new(cx).unwrap());
-    let args = CallArgs::from_vp(vp, argc);
-    let href = arg_to_string(&mut cx, &args, 0);
+unsafe fn install_url_polyfill(cx: &mut JSContext, global: mozjs::gc::Handle<*mut JSObject>) {
+    eval_bootstrap(
+        cx,
+        global,
+        c"url",
+        r#"
+        (function() {
+            function decodePart(value) {
+                try { return decodeURIComponent(String(value).replace(/\+/g, ' ')); }
+                catch (e) { return String(value); }
+            }
+            function encodePart(value) {
+                return encodeURIComponent(String(value)).replace(/%20/g, '+');
+            }
+            function normalizePath(path) {
+                var absolute = path.charAt(0) === '/';
+                var trailing = path.length > 1 && path.charAt(path.length - 1) === '/';
+                var parts = path.split('/');
+                var out = [];
+                for (var i = 0; i < parts.length; i++) {
+                    var part = parts[i];
+                    if (!part || part === '.') continue;
+                    if (part === '..') out.pop();
+                    else out.push(part);
+                }
+                return (absolute ? '/' : '') + out.join('/') + (trailing && out.length ? '/' : '');
+            }
+            function splitQueryAndHash(input) {
+                var rest = String(input);
+                var hash = '';
+                var hashIndex = rest.indexOf('#');
+                if (hashIndex >= 0) {
+                    hash = rest.slice(hashIndex);
+                    rest = rest.slice(0, hashIndex);
+                }
+                var search = '';
+                var queryIndex = rest.indexOf('?');
+                if (queryIndex >= 0) {
+                    search = rest.slice(queryIndex);
+                    rest = rest.slice(0, queryIndex);
+                }
+                return { path: rest, search: search, hash: hash };
+            }
+            function parseAbsolute(input) {
+                var match = /^([a-zA-Z][a-zA-Z0-9+.-]*:)(?:\/\/([^\/?#]*))?([^?#]*)(\?[^#]*)?(#.*)?$/.exec(input);
+                if (!match) return null;
+                var protocol = match[1].toLowerCase();
+                var authority = match[2] || '';
+                var pathname = match[3] || '';
+                var search = match[4] || '';
+                var hash = match[5] || '';
+                var username = '';
+                var password = '';
+                var host = authority;
+                var at = host.lastIndexOf('@');
+                if (at >= 0) {
+                    var userinfo = host.slice(0, at);
+                    host = host.slice(at + 1);
+                    var colon = userinfo.indexOf(':');
+                    username = colon >= 0 ? userinfo.slice(0, colon) : userinfo;
+                    password = colon >= 0 ? userinfo.slice(colon + 1) : '';
+                }
+                var hostname = host;
+                var port = '';
+                if (hostname.charAt(0) !== '[') {
+                    var portIndex = hostname.lastIndexOf(':');
+                    if (portIndex >= 0) {
+                        port = hostname.slice(portIndex + 1);
+                        hostname = hostname.slice(0, portIndex);
+                    }
+                }
+                if (authority && !pathname) pathname = '/';
+                return {
+                    protocol: protocol, username: username, password: password,
+                    host: host, hostname: hostname, port: port,
+                    pathname: pathname || '/', search: search, hash: hash
+                };
+            }
+            function defaultBase() {
+                var loc = globalThis.location || {};
+                return String(loc.href || 'https://youtube.com/');
+            }
+            function parseUrl(input, base) {
+                var raw = String(input);
+                var absolute = parseAbsolute(raw);
+                if (absolute) return absolute;
+                var baseParts = parseAbsolute(base ? String(base) : defaultBase()) || parseAbsolute(defaultBase());
+                var split = splitQueryAndHash(raw);
+                if (raw.indexOf('//') === 0) {
+                    return parseAbsolute(baseParts.protocol + raw);
+                }
+                if (!split.path) {
+                    return Object.assign({}, baseParts, {
+                        search: split.search || baseParts.search,
+                        hash: split.hash
+                    });
+                }
+                var pathname = split.path.charAt(0) === '/'
+                    ? normalizePath(split.path)
+                    : normalizePath(baseParts.pathname.replace(/\/[^\/]*$/, '/') + split.path);
+                return Object.assign({}, baseParts, {
+                    pathname: pathname || '/',
+                    search: split.search,
+                    hash: split.hash
+                });
+            }
+            function serialize(parts) {
+                var auth = parts.host ? '//' + parts.host : '';
+                return parts.protocol + auth + (parts.pathname || '/') + (parts.search || '') + (parts.hash || '');
+            }
+            function URLSearchParams(init) {
+                if (!(this instanceof URLSearchParams)) return new URLSearchParams(init);
+                this._pairs = [];
+                if (!init) return;
+                if (typeof init === 'string') {
+                    var query = init.charAt(0) === '?' ? init.slice(1) : init;
+                    if (!query) return;
+                    var fields = query.split('&');
+                    for (var i = 0; i < fields.length; i++) {
+                        if (!fields[i]) continue;
+                        var eq = fields[i].indexOf('=');
+                        this.append(
+                            decodePart(eq >= 0 ? fields[i].slice(0, eq) : fields[i]),
+                            decodePart(eq >= 0 ? fields[i].slice(eq + 1) : '')
+                        );
+                    }
+                } else if (Array.isArray(init)) {
+                    for (var j = 0; j < init.length; j++) this.append(init[j][0], init[j][1]);
+                } else if (typeof init === 'object') {
+                    for (var key in init) if (Object.prototype.hasOwnProperty.call(init, key)) this.append(key, init[key]);
+                }
+            }
+            URLSearchParams.prototype.append = function(name, value) {
+                this._pairs.push([String(name), String(value)]);
+            };
+            URLSearchParams.prototype.delete = function(name) {
+                name = String(name);
+                this._pairs = this._pairs.filter(function(pair) { return pair[0] !== name; });
+            };
+            URLSearchParams.prototype.get = function(name) {
+                name = String(name);
+                for (var i = 0; i < this._pairs.length; i++) if (this._pairs[i][0] === name) return this._pairs[i][1];
+                return null;
+            };
+            URLSearchParams.prototype.getAll = function(name) {
+                name = String(name);
+                return this._pairs.filter(function(pair) { return pair[0] === name; }).map(function(pair) { return pair[1]; });
+            };
+            URLSearchParams.prototype.has = function(name) {
+                name = String(name);
+                return this._pairs.some(function(pair) { return pair[0] === name; });
+            };
+            URLSearchParams.prototype.set = function(name, value) {
+                name = String(name);
+                value = String(value);
+                var found = false;
+                var next = [];
+                for (var i = 0; i < this._pairs.length; i++) {
+                    if (this._pairs[i][0] === name) {
+                        if (!found) next.push([name, value]);
+                        found = true;
+                    } else {
+                        next.push(this._pairs[i]);
+                    }
+                }
+                if (!found) next.push([name, value]);
+                this._pairs = next;
+            };
+            URLSearchParams.prototype.forEach = function(cb, thisArg) {
+                for (var i = 0; i < this._pairs.length; i++) cb.call(thisArg, this._pairs[i][1], this._pairs[i][0], this);
+            };
+            URLSearchParams.prototype.toString = function() {
+                return this._pairs.map(function(pair) { return encodePart(pair[0]) + '=' + encodePart(pair[1]); }).join('&');
+            };
+            URLSearchParams.prototype.entries = function() { return this._pairs.slice()[Symbol.iterator](); };
+            URLSearchParams.prototype.keys = function() { return this._pairs.map(function(pair) { return pair[0]; })[Symbol.iterator](); };
+            URLSearchParams.prototype.values = function() { return this._pairs.map(function(pair) { return pair[1]; })[Symbol.iterator](); };
+            URLSearchParams.prototype[Symbol.iterator] = URLSearchParams.prototype.entries;
 
-    let obj = new_plain_object(&mut cx);
-    rooted!(&in(cx) let obj_root = obj);
-    set_prop_str(&mut cx, obj_root.handle(), c"href", &href);
-    set_prop_str(&mut cx, obj_root.handle(), c"origin", "http://localhost");
-    set_prop_str(&mut cx, obj_root.handle(), c"protocol", "http:");
-    set_prop_str(&mut cx, obj_root.handle(), c"host", "localhost");
-    set_prop_str(&mut cx, obj_root.handle(), c"hostname", "localhost");
-    set_prop_str(&mut cx, obj_root.handle(), c"port", "");
-    set_prop_str(&mut cx, obj_root.handle(), c"pathname", "/");
-    set_prop_str(&mut cx, obj_root.handle(), c"search", "");
-    set_prop_str(&mut cx, obj_root.handle(), c"hash", "");
-    define_fn(
-        &mut cx,
-        obj_root.handle(),
-        c"toString",
-        Some(url_to_string),
-        0,
+            function URL(input, base) {
+                if (!(this instanceof URL)) return new URL(input, base);
+                var parts = parseUrl(input, base);
+                var self = this;
+                function updateSearchParams() { self.searchParams = new URLSearchParams(parts.search); }
+                function syncSearch() {
+                    var query = self.searchParams.toString();
+                    parts.search = query ? '?' + query : '';
+                }
+                Object.defineProperties(this, {
+                    href: { get: function() { syncSearch(); return serialize(parts); }, set: function(v) { parts = parseUrl(v); updateSearchParams(); }, enumerable: true },
+                    origin: { get: function() { return parts.protocol + '//' + parts.host; }, enumerable: true },
+                    protocol: { get: function() { return parts.protocol; }, set: function(v) { parts.protocol = String(v).replace(/:*$/, ':').toLowerCase(); }, enumerable: true },
+                    username: { get: function() { return parts.username; }, set: function(v) { parts.username = String(v); }, enumerable: true },
+                    password: { get: function() { return parts.password; }, set: function(v) { parts.password = String(v); }, enumerable: true },
+                    host: { get: function() { return parts.host; }, set: function(v) { var p = parseAbsolute(parts.protocol + '//' + String(v) + '/'); if (p) { parts.host = p.host; parts.hostname = p.hostname; parts.port = p.port; } }, enumerable: true },
+                    hostname: { get: function() { return parts.hostname; }, set: function(v) { parts.hostname = String(v); parts.host = parts.hostname + (parts.port ? ':' + parts.port : ''); }, enumerable: true },
+                    port: { get: function() { return parts.port; }, set: function(v) { parts.port = String(v); parts.host = parts.hostname + (parts.port ? ':' + parts.port : ''); }, enumerable: true },
+                    pathname: { get: function() { return parts.pathname; }, set: function(v) { parts.pathname = normalizePath(String(v)); }, enumerable: true },
+                    search: { get: function() { syncSearch(); return parts.search; }, set: function(v) { parts.search = v ? (String(v).charAt(0) === '?' ? String(v) : '?' + String(v)) : ''; updateSearchParams(); }, enumerable: true },
+                    hash: { get: function() { return parts.hash; }, set: function(v) { parts.hash = v ? (String(v).charAt(0) === '#' ? String(v) : '#' + String(v)) : ''; }, enumerable: true }
+                });
+                updateSearchParams();
+            }
+            URL.prototype.toString = function() { return this.href; };
+            URL.prototype.toJSON = function() { return this.href; };
+
+            globalThis.URL = URL;
+            globalThis.URLSearchParams = URLSearchParams;
+        })();
+    "#,
     );
-
-    args.rval().set(ObjectValue(obj));
-    true
-}
-
-unsafe extern "C" fn url_to_string(cx: *mut RawJSContext, _argc: u32, vp: *mut Value) -> bool {
-    let mut cx = JSContext::from_ptr(NonNull::new(cx).unwrap());
-    let args = CallArgs::from_vp(vp, _argc);
-    let js_str = new_js_string(&mut cx, "http://localhost/");
-    if js_str.is_null() {
-        args.rval().set(UndefinedValue());
-    } else {
-        args.rval().set(mozjs::jsval::StringValue(&*js_str));
-    }
-    true
-}
-
-unsafe extern "C" fn url_search_params_ctor(
-    cx: *mut RawJSContext,
-    argc: u32,
-    vp: *mut Value,
-) -> bool {
-    let mut cx = JSContext::from_ptr(NonNull::new(cx).unwrap());
-    let args = CallArgs::from_vp(vp, argc);
-    let obj = new_plain_object(&mut cx);
-    rooted!(&in(cx) let obj_root = obj);
-    define_fn(&mut cx, obj_root.handle(), c"get", Some(prompt_null), 1);
-    define_fn(&mut cx, obj_root.handle(), c"set", Some(noop), 2);
-    define_fn(&mut cx, obj_root.handle(), c"append", Some(noop), 2);
-    define_fn(&mut cx, obj_root.handle(), c"delete", Some(noop), 1);
-    define_fn(&mut cx, obj_root.handle(), c"has", Some(confirm_false), 1);
-    define_fn(
-        &mut cx,
-        obj_root.handle(),
-        c"toString",
-        Some(return_empty_string),
-        0,
-    );
-    args.rval().set(ObjectValue(obj));
-    true
 }
 
 unsafe extern "C" fn abort_controller_ctor(

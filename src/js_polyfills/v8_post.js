@@ -127,6 +127,105 @@
         return { root: root, nextNode: function() { return walker.nextNode(); }, previousNode: function() { return null; }, detach: function() {} };
     };
 
+    function installPrototypeForward(proto, name) {
+        if (!proto || !name) return;
+        var forward = function() {
+            var own = Object.prototype.hasOwnProperty.call(this, name) ? this[name] : null;
+            if (typeof own === 'function' && own !== forward) {
+                return own.apply(this, arguments);
+            }
+            return undefined;
+        };
+        try {
+            Object.defineProperty(proto, name, {
+                value: forward,
+                configurable: true,
+                writable: true
+            });
+        } catch (e) {
+            proto[name] = forward;
+        }
+    }
+
+    [
+        'appendChild', 'insertBefore', 'removeChild', 'replaceChild',
+        'cloneNode', 'contains', 'hasChildNodes', 'getRootNode',
+        'append', 'prepend', 'before', 'after', 'remove',
+        'replaceChildren', 'replaceWith'
+    ].forEach(function(name) {
+        installPrototypeForward(globalThis.Node && Node.prototype, name);
+    });
+    [
+        'querySelector', 'querySelectorAll', 'getElementsByTagName',
+        'getElementsByClassName', 'matches', 'closest',
+        'getAttribute', 'setAttribute', 'removeAttribute', 'hasAttribute',
+        'toggleAttribute',
+        'insertAdjacentHTML', 'insertAdjacentElement', 'insertAdjacentText',
+        'normalize'
+    ].forEach(function(name) {
+        installPrototypeForward(globalThis.Element && Element.prototype, name);
+        installPrototypeForward(globalThis.HTMLElement && HTMLElement.prototype, name);
+        installPrototypeForward(globalThis.DocumentFragment && DocumentFragment.prototype, name);
+        installPrototypeForward(globalThis.Document && Document.prototype, name);
+    });
+    [
+        ['__shady_setAttribute', 'setAttribute'],
+        ['__shady_removeAttribute', 'removeAttribute'],
+        ['__shady_getAttribute', 'getAttribute'],
+        ['__shady_hasAttribute', 'hasAttribute'],
+        ['__shady_getRootNode', 'getRootNode'],
+        ['__shady_appendChild', 'appendChild'],
+        ['__shady_insertBefore', 'insertBefore'],
+        ['__shady_removeChild', 'removeChild'],
+        ['__shady_replaceChild', 'replaceChild'],
+        ['__shady_addEventListener', 'addEventListener'],
+        ['__shady_removeEventListener', 'removeEventListener'],
+        ['__shady_dispatchEvent', 'dispatchEvent']
+    ].forEach(function(pair) {
+        var shadyName = pair[0];
+        var nativeName = pair[1];
+        try {
+            Object.defineProperty(Object.prototype, shadyName, {
+                value: function() {
+                    var fn = this && this[nativeName];
+                    if (typeof fn === 'function') return fn.apply(this, arguments);
+                    return nativeName === 'dispatchEvent' ? true : undefined;
+                },
+                configurable: true,
+                writable: true
+            });
+        } catch (e) {}
+    });
+    [
+        ['__shady_native_contains', 'contains'],
+        ['__shady_native_getRootNode', 'getRootNode'],
+        ['__shady_native_querySelector', 'querySelector'],
+        ['__shady_native_querySelectorAll', 'querySelectorAll'],
+        ['__shady_native_appendChild', 'appendChild'],
+        ['__shady_native_insertBefore', 'insertBefore'],
+        ['__shady_native_removeChild', 'removeChild'],
+        ['__shady_native_replaceChild', 'replaceChild'],
+        ['__shady_native_setAttribute', 'setAttribute'],
+        ['__shady_native_removeAttribute', 'removeAttribute'],
+        ['__shady_native_addEventListener', 'addEventListener'],
+        ['__shady_native_removeEventListener', 'removeEventListener']
+    ].forEach(function(pair) {
+        var shadyName = pair[0];
+        var nativeName = pair[1];
+        if (Object.prototype[shadyName]) return;
+        try {
+            Object.defineProperty(Object.prototype, shadyName, {
+                value: function() {
+                    var fn = this && this[nativeName];
+                    if (typeof fn === 'function') return fn.apply(this, arguments);
+                    return undefined;
+                },
+                configurable: true,
+                writable: true
+            });
+        } catch (e) {}
+    });
+
     // Element decoration — called from the native bridge for every element
     // wrapper. Installs per-element JS APIs that are simpler here than native.
     globalThis.__aurora_decorate_element__ = function(el) {
@@ -201,6 +300,122 @@
         el.transferControlToOffscreen = function() { return el; };
     };
 
+    // Media decoration — enough HTMLMediaElement shape for YouTube/player
+    // bootstrap code to probe capabilities, attach listeners and call play().
+    if (typeof globalThis.__aurora_TimeRanges__ !== 'function') {
+        globalThis.__aurora_TimeRanges__ = function TimeRanges(ranges) {
+            this._ranges = ranges || [];
+        };
+        Object.defineProperty(globalThis.__aurora_TimeRanges__.prototype, 'length', {
+            get: function() { return this._ranges.length; }
+        });
+        globalThis.__aurora_TimeRanges__.prototype.start = function(i) {
+            if (!this._ranges[i]) throw new DOMException('Index out of range', 'IndexSizeError');
+            return this._ranges[i][0];
+        };
+        globalThis.__aurora_TimeRanges__.prototype.end = function(i) {
+            if (!this._ranges[i]) throw new DOMException('Index out of range', 'IndexSizeError');
+            return this._ranges[i][1];
+        };
+    }
+    globalThis.__aurora_install_media_element__ = function(el) {
+        if (!el || el.__media_installed__) return;
+        el.__media_installed__ = true;
+        var fire = function(type) {
+            var ev = new Event(type);
+            try { el.dispatchEvent(ev); } catch (e) {}
+            var handler = el['on' + type];
+            if (typeof handler === 'function') {
+                try { handler.call(el, ev); } catch (e) {}
+            }
+        };
+        var state = {
+            currentTime: 0, duration: NaN, paused: true, ended: false,
+            seeking: false, readyState: 0, networkState: 0,
+            volume: 1, muted: false, defaultMuted: false,
+            playbackRate: 1, defaultPlaybackRate: 1,
+            autoplay: false, loop: false, controls: false, preload: 'metadata',
+            crossOrigin: null, currentSrc: el.getAttribute('src') || '',
+            error: null, srcObject: null,
+            videoWidth: el.localName === 'video' ? 640 : 0,
+            videoHeight: el.localName === 'video' ? 360 : 0,
+            textTracks: []
+        };
+        [
+            'currentTime','duration','paused','ended','seeking','readyState',
+            'networkState','volume','muted','defaultMuted','playbackRate',
+            'defaultPlaybackRate','autoplay','loop','controls','preload',
+            'crossOrigin','currentSrc','error','srcObject','videoWidth',
+            'videoHeight','textTracks'
+        ].forEach(function(key) {
+            Object.defineProperty(el, key, {
+                get: function() { return state[key]; },
+                set: function(v) { state[key] = v; },
+                configurable: true,
+                enumerable: true
+            });
+        });
+        el.HAVE_NOTHING = 0; el.HAVE_METADATA = 1; el.HAVE_CURRENT_DATA = 2;
+        el.HAVE_FUTURE_DATA = 3; el.HAVE_ENOUGH_DATA = 4;
+        el.NETWORK_EMPTY = 0; el.NETWORK_IDLE = 1; el.NETWORK_LOADING = 2; el.NETWORK_NO_SOURCE = 3;
+        Object.defineProperty(el, 'buffered', { get: function() { return new globalThis.__aurora_TimeRanges__([]); } });
+        Object.defineProperty(el, 'played', { get: function() { return new globalThis.__aurora_TimeRanges__(state.currentTime > 0 ? [[0, state.currentTime]] : []); } });
+        Object.defineProperty(el, 'seekable', { get: function() { return new globalThis.__aurora_TimeRanges__(isFinite(state.duration) ? [[0, state.duration]] : []); } });
+        Object.defineProperty(el, 'src', {
+            get: function() { return state.currentSrc; },
+            set: function(v) {
+                state.currentSrc = String(v || '');
+                state.networkState = state.currentSrc ? 2 : 0;
+                fire('loadstart');
+                queueMicrotask(function() {
+                    state.readyState = 4;
+                    state.networkState = 1;
+                    if (isNaN(state.duration)) state.duration = 0;
+                    fire('loadedmetadata'); fire('loadeddata'); fire('canplay'); fire('canplaythrough');
+                    if (state.autoplay) el.play();
+                });
+            },
+            configurable: true,
+            enumerable: true
+        });
+        el.load = function() {
+            state.readyState = 0;
+            state.networkState = state.currentSrc ? 2 : 0;
+            fire('loadstart');
+        };
+        el.canPlayType = function(type) {
+            return (typeof type === 'string' && /^(video|audio)\/(mp4|webm|ogg)/i.test(type)) ? 'probably' : '';
+        };
+        el.play = function() {
+            state.paused = false;
+            state.ended = false;
+            state.readyState = Math.max(state.readyState, 4);
+            fire('play'); fire('playing');
+            return Promise.resolve();
+        };
+        el.pause = function() {
+            if (state.paused) return;
+            state.paused = true;
+            fire('pause');
+        };
+        el.fastSeek = function(t) { state.currentTime = Number(t) || 0; fire('seeked'); };
+        el.addTextTrack = function(kind, label, lang) {
+            var track = {
+                kind: kind || 'subtitles', label: label || '', language: lang || '',
+                mode: 'disabled', cues: [], activeCues: [],
+                addEventListener: function(){}, removeEventListener: function(){},
+                addCue: function(){}, removeCue: function(){}
+            };
+            state.textTracks.push(track);
+            return track;
+        };
+        el.captureStream = function() {
+            return { getTracks: function(){ return []; }, getAudioTracks: function(){ return []; },
+                getVideoTracks: function(){ return []; }, addTrack: function(){}, removeTrack: function(){} };
+        };
+        if (state.currentSrc) el.src = state.currentSrc;
+    };
+
     document.getElementsByClassName = function(cls) {
         var sel = '.' + String(cls).trim().split(/\s+/).join('.');
         return document.querySelectorAll(sel);
@@ -208,8 +423,12 @@
     document.getElementsByName = function(name) {
         return document.querySelectorAll('[name="' + String(name) + '"]');
     };
-    document.removeEventListener = document.removeEventListener || function() {};
-    document.dispatchEvent = document.dispatchEvent || function() { return true; };
+    // Route window/document events through the real JS EventTarget so listeners
+    // added via addEventListener actually receive dispatched events (and
+    // delegated/bubbling events from elements reach document/window).
+    document.addEventListener = EventTarget.prototype.addEventListener;
+    document.removeEventListener = EventTarget.prototype.removeEventListener;
+    document.dispatchEvent = EventTarget.prototype.dispatchEvent;
     document.readyState = 'loading';
     document.hidden = false;
     document.visibilityState = 'visible';
@@ -243,8 +462,9 @@
         addEventListener: function() {}, removeEventListener: function() {}
     };
 
-    globalThis.removeEventListener = globalThis.removeEventListener || function() {};
-    globalThis.dispatchEvent = globalThis.dispatchEvent || function() { return true; };
+    globalThis.addEventListener = EventTarget.prototype.addEventListener;
+    globalThis.removeEventListener = EventTarget.prototype.removeEventListener;
+    globalThis.dispatchEvent = EventTarget.prototype.dispatchEvent;
 
     // ShadyDOM saves "native" copies as __shady_native_* before patching; our
     // flat global has no EventTarget/Window prototype chain for it to harvest

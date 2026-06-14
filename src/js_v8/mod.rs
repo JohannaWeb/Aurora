@@ -6,6 +6,7 @@
 //! wired up yet — scripts run in a bare global scope.
 
 mod capture;
+mod mutation_observer;
 mod node_create;
 mod registry;
 mod runtime;

@@ -11,13 +11,16 @@ use crate::style::StyleTree;
 use std::cell::RefCell;
 use std::env;
 use std::rc::Rc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 pub(crate) fn run_browser(cli: CliOptions, identity: Identity) {
     let html = load_html(cli.input_url.as_deref(), &identity);
     let base_url = cli.input_url.clone();
     let viewport = viewport_size();
     let dom = Parser::new(&html).parse_document();
+    // Establish parent back-pointers for the freshly parsed tree so DOM
+    // connectivity/ancestor queries are O(depth); mutations maintain them after.
+    crate::dom::reparent_subtree(&dom);
 
     let mut runtime = run_scripts(&dom, base_url.as_deref(), &identity);
 
@@ -173,16 +176,117 @@ fn run_scripts(
     pump_ready_work(runtime.as_mut());
     runtime.fire_load();
     pump_ready_work(runtime.as_mut());
+
+    if env::var("AURORA_DEBUG_YOUTUBE").is_ok() {
+        let _ = runtime.execute(
+            r#"(function(){
+                function L(m){ console.log('[yt-gid] ' + m); }
+                L('getInitialData=' + typeof window.getInitialData + ' getDataPromise=' + typeof window.getDataPromise);
+                if (typeof window.getInitialData === 'function') {
+                    try {
+                        var d = window.getInitialData();
+                        L('keys=' + Object.keys(d).join(','));
+                        L('page=' + d.page + ' endpoint.keys=' + (d.endpoint ? Object.keys(d.endpoint).join(',') : 'none'));
+                        L('response.keys=' + (d.response ? Object.keys(d.response).slice(0,6).join(',') : 'none'));
+                        // The kevlar home-load chain ends at ytd-app.loadData(data);
+                        // call it directly with the inline getInitialData() result.
+                        var app = document.querySelector('ytd-app');
+                        L('app.loadData=' + (app ? typeof app.loadData : 'no app'));
+                        L('pmAttachedPromise=' + (app ? typeof app.pageManagerAttachedPromise : 'n/a'));
+                        try { app.loadData(d); L('loadData OK'); }
+                        catch(e){ L('loadData THREW: ' + (e.stack ? String(e.stack).split('\n').slice(0,4).join(' | ') : e)); }
+                        // loadData waits on loadDepsPromise = all([deps, pageManagerAttachedPromise]).
+                        // Resolve the page-manager-attached gate directly.
+                        try {
+                            if (app.pageManagerAttachedPromise && app.pageManagerAttachedPromise.resolve) {
+                                app.pageManagerAttachedPromise.resolve();
+                                L('pmAttachedPromise.resolve() called');
+                            }
+                            // Also try the behavior-level loadDepsPromise resolve if it's a deferred.
+                            if (app.ytdAppBehavior && app.ytdAppBehavior.loadDepsPromise && app.ytdAppBehavior.loadDepsPromise.resolve) {
+                                app.ytdAppBehavior.loadDepsPromise.resolve();
+                                L('ytdAppBehavior.loadDepsPromise.resolve() called');
+                            }
+                        } catch(e){ L('resolve THREW: ' + e); }
+                        window.__gid_driven = true;
+                    } catch(e) { L('getInitialData() THREW: ' + e); }
+                }
+            })();"#,
+        );
+        pump_ready_work(runtime.as_mut());
+        let _ = runtime.execute(
+            r#"if (window.__gid_driven) { var pm=document.querySelector('ytd-page-manager');
+                console.log('[yt-gid] AFTER: pmKids=' + (pm?pm.children.length:'n/a') + ' ytd-browse=' + document.querySelectorAll('ytd-browse').length + ' rich-grid=' + document.querySelectorAll('ytd-rich-grid-renderer').length); }"#,
+        );
+        pump_ready_work(runtime.as_mut());
+    }
+
     Some(runtime)
 }
 
+/// Drive the JS event loop toward quiescence after a script or lifecycle step.
+///
+/// Real wall-clock time barely advances between iterations, so timers scheduled
+/// with any delay would never come due against `Instant::now()` and time-deferred
+/// boot work would stall (YouTube hydrates large parts of its tree through chained
+/// `setTimeout`s). Instead we run a small event loop against a *virtual* clock that
+/// only ever jumps forward to the next piece of scheduled work, firing due timers
+/// and animation-frame callbacks until the loop is quiescent.
+///
+/// Animation frames are throttled to one batch per ~16ms virtual frame so that an
+/// `requestAnimationFrame` render loop advances virtual time instead of spinning in
+/// place. Two budgets guard against pages that never settle: `VIRTUAL_BUDGET` caps
+/// how much page-time we simulate, and `REAL_BUDGET` caps wall-clock time so a slow
+/// or runaway synchronous callback can't hang the boot.
 fn pump_ready_work(runtime: &mut dyn crate::js_engine::JsRuntime) {
-    for _ in 0..8 {
-        let now = Instant::now();
-        let mut fired = runtime.tick(now);
-        fired |= runtime.drain_animation_frame_callbacks(now);
-        if !fired && !runtime.has_ready_work(now) {
+    const FRAME: Duration = Duration::from_millis(16);
+    const VIRTUAL_BUDGET: Duration = Duration::from_millis(2000);
+    const REAL_BUDGET: Duration = Duration::from_secs(5);
+
+    let real_start = Instant::now();
+    let virtual_start = real_start;
+    let mut virtual_now = real_start;
+    // Earliest virtual time at which the next animation-frame batch may run.
+    let mut next_frame = real_start;
+
+    loop {
+        if real_start.elapsed() >= REAL_BUDGET {
             break;
+        }
+        if virtual_now.duration_since(virtual_start) > VIRTUAL_BUDGET {
+            break;
+        }
+
+        let mut fired = runtime.tick(virtual_now);
+        if runtime.has_animation_frame_callbacks() && virtual_now >= next_frame {
+            fired |= runtime.drain_animation_frame_callbacks(virtual_now);
+            next_frame = virtual_now + FRAME;
+        }
+        // Deliver MutationObserver records produced by the work above (and let
+        // their callbacks' own mutations settle on the next iteration).
+        fired |= runtime.deliver_mutation_records();
+        if fired {
+            continue;
+        }
+
+        // Nothing was ready at the current virtual time. Jump the clock to the
+        // next scheduled timer or animation frame; if neither exists the loop
+        // is quiescent and we're done.
+        let next_timer = runtime.next_deadline();
+        let next_raf = runtime
+            .has_animation_frame_callbacks()
+            .then_some(next_frame);
+        let next = match (next_timer, next_raf) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (Some(a), None) | (None, Some(a)) => Some(a),
+            (None, None) => None,
+        };
+        match next {
+            Some(deadline) if deadline > virtual_now => virtual_now = deadline,
+            // Work is "due" but nothing fired (e.g. a frame gated by `next_frame`
+            // we've already passed); nudge forward to avoid a tight spin.
+            Some(_) => virtual_now += FRAME,
+            None => break,
         }
     }
 }

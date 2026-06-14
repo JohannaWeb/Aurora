@@ -11,10 +11,84 @@
     // so these exist for prototype-chain patching (Polymer's ES5 adapter wraps
     // HTMLElement; webcomponents probes Element.prototype) rather than as the
     // wrappers' actual prototypes.
+    // Real EventTarget: listeners are stored per-object in `__ael`, and
+    // `dispatchEvent` runs capture/target/bubble phases over the live DOM path
+    // (walked via `parentNode`, extended to `document` and `window`). This is the
+    // event model Polymer/ShadyDOM compose with; the previous stubs meant nothing
+    // dispatched on a node ever reached its listeners.
     globalThis.EventTarget = function EventTarget() {};
-    EventTarget.prototype.addEventListener = function(){};
-    EventTarget.prototype.removeEventListener = function(){};
-    EventTarget.prototype.dispatchEvent = function(){ return true; };
+    EventTarget.prototype.addEventListener = function(type, listener, options) {
+        if (!type || typeof listener !== 'function' && (!listener || typeof listener.handleEvent !== 'function')) return;
+        var capture = options === true || (options && options.capture) || false;
+        if (!this.__ael) {
+            try { Object.defineProperty(this, '__ael', { value: Object.create(null), writable: true, configurable: true }); }
+            catch (e) { this.__ael = Object.create(null); }
+        }
+        var list = this.__ael[type] || (this.__ael[type] = []);
+        for (var i = 0; i < list.length; i++) {
+            if (list[i].listener === listener && list[i].capture === capture) return;
+        }
+        list.push({ listener: listener, capture: capture, once: !!(options && options.once) });
+    };
+    EventTarget.prototype.removeEventListener = function(type, listener, options) {
+        if (!this.__ael) return;
+        var list = this.__ael[type];
+        if (!list) return;
+        var capture = options === true || (options && options.capture) || false;
+        for (var i = 0; i < list.length; i++) {
+            if (list[i].listener === listener && list[i].capture === capture) { list.splice(i, 1); return; }
+        }
+    };
+    function invokeListeners(node, event, capturePhase) {
+        var store = node.__ael;
+        if (!store) return;
+        var list = store[event.type];
+        if (!list || !list.length) return;
+        event.currentTarget = node;
+        var snapshot = list.slice();
+        for (var i = 0; i < snapshot.length; i++) {
+            var entry = snapshot[i];
+            if (entry.capture !== capturePhase) continue;
+            if (entry.once) node.removeEventListener(event.type, entry.listener, entry.capture);
+            var fn = typeof entry.listener === 'function' ? entry.listener : entry.listener.handleEvent;
+            try { fn.call(node, event); } catch (e) { setTimeout(function(){ throw e; }, 0); }
+            if (event.__immediateStop) return;
+        }
+    }
+    EventTarget.prototype.dispatchEvent = function(event) {
+        if (!event) return true;
+        // Build the propagation path: target up through ancestors, then document
+        // and window (the two globals where delegated listeners live).
+        var path = [];
+        var n = this;
+        var guard = 0;
+        while (n && guard++ < 8192) { path.push(n); n = n.parentNode || null; }
+        if (typeof document !== 'undefined' && path.indexOf(document) < 0) path.push(document);
+        if (typeof window !== 'undefined' && path.indexOf(window) < 0) path.push(window);
+
+        event.target = this;
+        event.__immediateStop = false;
+        if (event.cancelBubble === undefined) event.cancelBubble = false;
+        // Capture phase: root -> target.
+        for (var i = path.length - 1; i >= 1; i--) {
+            invokeListeners(path[i], event, true);
+            if (event.cancelBubble || event.__immediateStop) break;
+        }
+        // Target phase.
+        if (!event.cancelBubble && !event.__immediateStop) {
+            invokeListeners(path[0], event, true);
+            invokeListeners(path[0], event, false);
+        }
+        // Bubble phase: target+1 -> root (only if the event bubbles).
+        if (event.bubbles) {
+            for (var j = 1; j < path.length; j++) {
+                if (event.cancelBubble || event.__immediateStop) break;
+                invokeListeners(path[j], event, false);
+            }
+        }
+        event.currentTarget = null;
+        return !event.defaultPrevented;
+    };
 
     globalThis.Node = function Node() {};
     Node.prototype = Object.create(EventTarget.prototype);
@@ -27,6 +101,18 @@
     globalThis.Element = function Element() {};
     Element.prototype = Object.create(Node.prototype);
     Element.prototype.constructor = Element;
+    Object.defineProperty(Element.prototype, 'style', {
+        get: function() {
+            if (!this.__aurora_proto_style__) {
+                this.__aurora_proto_style__ = createFallbackStyleDeclaration();
+            }
+            return this.__aurora_proto_style__;
+        },
+        set: function(value) {
+            this.__aurora_proto_style__ = normalizeFallbackStyle(value);
+        },
+        configurable: true
+    });
 
     globalThis.HTMLElement = function HTMLElement() { return undefined; };
     HTMLElement.prototype = Object.create(Element.prototype);
@@ -81,6 +167,47 @@
     globalThis.Selection = function Selection() {};
     globalThis.CSSStyleDeclaration = function CSSStyleDeclaration() {};
     globalThis.CSSStyleSheet = function CSSStyleSheet() {};
+    function createFallbackStyleDeclaration() {
+        var style = function() { return style.cssText || undefined; };
+        style.cssText = '';
+        style.getPropertyValue = function(name) { return style[name] || ''; };
+        style.setProperty = function(name, value) {
+            style[name] = String(value == null ? '' : value);
+            style.cssText = style.cssText || '';
+        };
+        style.removeProperty = function(name) {
+            var old = style[name] || '';
+            delete style[name];
+            return old;
+        };
+        return style;
+    }
+    function normalizeFallbackStyle(value) {
+        if (value && typeof value === 'object') return value;
+        var style = createFallbackStyleDeclaration();
+        if (value != null) style.cssText = String(value);
+        return style;
+    }
+    if (!Object.prototype.hasOwnProperty('__aurora_fallback_style__')) {
+        Object.defineProperty(Object.prototype, 'style', {
+            get: function() {
+                if (!this.__aurora_fallback_style__) {
+                    Object.defineProperty(this, '__aurora_fallback_style__', {
+                        value: createFallbackStyleDeclaration(),
+                        configurable: true
+                    });
+                }
+                return this.__aurora_fallback_style__;
+            },
+            set: function(value) {
+                Object.defineProperty(this, '__aurora_fallback_style__', {
+                    value: normalizeFallbackStyle(value),
+                    configurable: true
+                });
+            },
+            configurable: true
+        });
+    }
     globalThis.Worker = function Worker() {
         this.postMessage = function(){};
         this.terminate = function(){};
@@ -155,14 +282,8 @@
         }
     };
 
-    // Observers — stubs that never fire. (js_sm has a real MutationObserver;
-    // V8 parity is future work. The webcomponents/intersection-observer
-    // bundles skip their own polyfills when these exist.)
-    globalThis.MutationObserver = function MutationObserver(cb) { this._cb = cb; };
-    MutationObserver.prototype.observe = function() {};
-    MutationObserver.prototype.disconnect = function() {};
-    MutationObserver.prototype.takeRecords = function() { return []; };
-
+    // MutationObserver is implemented natively (see js_v8/mutation_observer.rs);
+    // don't override it here. IntersectionObserver remains a no-op stub.
     globalThis.IntersectionObserver = function IntersectionObserver(cb) { this._cb = cb; };
     IntersectionObserver.prototype.observe = function() {};
     IntersectionObserver.prototype.unobserve = function() {};
@@ -193,6 +314,55 @@
     };
     globalThis.cancelIdleCallback = function(id) { clearTimeout(id); };
 
+    if (typeof WeakMap === 'function') {
+        (function(NativeWeakMap) {
+            var primitiveBoxes = {};
+            function boxWeakKey(key) {
+                if ((typeof key === 'object' && key !== null) || typeof key === 'function') {
+                    return key;
+                }
+                var type = typeof key;
+                var id = type + ':' + String(key);
+                return primitiveBoxes[id] || (primitiveBoxes[id] = { value: key });
+            }
+            globalThis.WeakMap = function WeakMap(iterable) {
+                var map = new NativeWeakMap();
+                Object.defineProperty(this, '__aurora_native_weakmap__', { value: map });
+                if (iterable) {
+                    for (var i = 0; i < iterable.length; i++) this.set(iterable[i][0], iterable[i][1]);
+                }
+            };
+            globalThis.WeakMap.prototype.set = function(key, value) {
+                this.__aurora_native_weakmap__.set(boxWeakKey(key), value);
+                return this;
+            };
+            globalThis.WeakMap.prototype.get = function(key) {
+                return this.__aurora_native_weakmap__.get(boxWeakKey(key));
+            };
+            globalThis.WeakMap.prototype.has = function(key) {
+                return this.__aurora_native_weakmap__.has(boxWeakKey(key));
+            };
+            globalThis.WeakMap.prototype.delete = function(key) {
+                return this.__aurora_native_weakmap__.delete(boxWeakKey(key));
+            };
+        })(WeakMap);
+    }
+
+    if (!Object.prototype.some) {
+        Object.defineProperty(Object.prototype, 'some', {
+            value: function(callback, thisArg) {
+                if (typeof callback !== 'function') return false;
+                var keys = Object.keys(this);
+                for (var i = 0; i < keys.length; i++) {
+                    if (callback.call(thisArg, this[keys[i]], i, this)) return true;
+                }
+                return false;
+            },
+            configurable: true,
+            writable: true
+        });
+    }
+
     globalThis.matchMedia = function(query) {
         return {
             matches: false,
@@ -211,6 +381,96 @@
         back: function() {}, forward: function() {}, go: function() {}
     };
 
+    var playerContextDefaults = {
+        WEB_PLAYER_CONTEXT_CONFIG_ID_KEVLAR_WATCH: {
+            contextId: 'WEB_PLAYER_CONTEXT_CONFIG_ID_KEVLAR_WATCH',
+            serializedExperimentIds: '0',
+            serializedExperimentFlags: '0',
+            rootElementId: 'movie_player'
+        },
+        WEB_PLAYER_CONTEXT_CONFIG_ID_KEVLAR_BACKGROUND_AUDIO_PLAYER: {
+            contextId: 'WEB_PLAYER_CONTEXT_CONFIG_ID_KEVLAR_BACKGROUND_AUDIO_PLAYER',
+            serializedExperimentIds: '0',
+            serializedExperimentFlags: '0'
+        },
+        WEB_PLAYER_CONTEXT_CONFIG_ID_KEVLAR_SFV_AUDIO_ITEM: {
+            contextId: 'WEB_PLAYER_CONTEXT_CONFIG_ID_KEVLAR_SFV_AUDIO_ITEM',
+            serializedExperimentIds: '0',
+            serializedExperimentFlags: '0'
+        },
+        WEB_PLAYER_CONTEXT_CONFIG_ID_MWEB_SFV_AUDIO_ITEM: {
+            contextId: 'WEB_PLAYER_CONTEXT_CONFIG_ID_MWEB_SFV_AUDIO_ITEM',
+            serializedExperimentIds: '0',
+            serializedExperimentFlags: '0'
+        }
+    };
+    globalThis.yt = globalThis.yt || {};
+    globalThis.yt.config_ = globalThis.yt.config_ || {};
+    globalThis.ytcfg = globalThis.ytcfg || {};
+    globalThis.ytcfg.data_ = globalThis.ytcfg.data_ || {};
+    function createPlayerContextConfig(id) {
+        id = id && id !== 'undefined' && id !== 'null'
+            ? String(id)
+            : 'WEB_PLAYER_CONTEXT_CONFIG_ID_KEVLAR_WATCH';
+        return {
+            contextId: id,
+            serializedExperimentIds: '0',
+            serializedExperimentFlags: '0',
+            rootElementId: id === 'WEB_PLAYER_CONTEXT_CONFIG_ID_KEVLAR_WATCH'
+                ? 'movie_player'
+                : undefined
+        };
+    }
+    function makePlayerContextConfigs(existing) {
+        var store = Object.assign({}, playerContextDefaults, existing || {});
+        if (typeof Proxy !== 'function') return store;
+        return new Proxy(store, {
+            get: function(target, prop) {
+                if (typeof prop === 'string' && !(prop in target) &&
+                    (prop.indexOf('WEB_PLAYER_CONTEXT_CONFIG_ID_') === 0 ||
+                     prop === 'undefined' || prop === 'null')) {
+                    target[prop] = createPlayerContextConfig(prop);
+                }
+                return target[prop];
+            }
+        });
+    }
+    function installPlayerContextConfigProperty(target) {
+        var current = makePlayerContextConfigs(target.WEB_PLAYER_CONTEXT_CONFIGS);
+        try {
+            Object.defineProperty(target, 'WEB_PLAYER_CONTEXT_CONFIGS', {
+                get: function() { return current; },
+                set: function(value) { current = makePlayerContextConfigs(value); },
+                configurable: true
+            });
+        } catch (e) {
+            target.WEB_PLAYER_CONTEXT_CONFIGS = current;
+        }
+    }
+    installPlayerContextConfigProperty(globalThis.yt.config_);
+    installPlayerContextConfigProperty(globalThis.ytcfg.data_);
+    globalThis.ytcfg.get = globalThis.ytcfg.get || function(name) { return this.data_[name]; };
+    function mergeYtConfig(target, values) {
+        values = values || {};
+        if (values.WEB_PLAYER_CONTEXT_CONFIGS) {
+            values = Object.assign({}, values, {
+                WEB_PLAYER_CONTEXT_CONFIGS: Object.assign(
+                    {},
+                    playerContextDefaults,
+                    target.WEB_PLAYER_CONTEXT_CONFIGS || {},
+                    values.WEB_PLAYER_CONTEXT_CONFIGS
+                )
+            });
+        }
+        Object.assign(target, values);
+        target.WEB_PLAYER_CONTEXT_CONFIGS =
+            Object.assign({}, playerContextDefaults, target.WEB_PLAYER_CONTEXT_CONFIGS || {});
+    }
+    globalThis.ytcfg.set = globalThis.ytcfg.set || function(values) {
+        mergeYtConfig(this.data_, values);
+        mergeYtConfig(globalThis.yt.config_, values);
+    };
+
     globalThis.getComputedStyle = function(el) {
         var style = el && el.style;
         if (style && typeof style.getPropertyValue === 'function') return style;
@@ -220,34 +480,207 @@
         };
     };
 
-    // Replace the networking-block URL stub with a real-enough parser.
-    globalThis.URL = function URL(url, base) {
-        url = String(url);
-        if (base && url.indexOf('://') < 0) {
-            base = String(base);
-            var root = base.match(/^[a-z][a-z0-9+.-]*:\/\/[^\/]*/i);
-            if (url.charAt(0) === '/' && url.charAt(1) === '/') {
-                url = (base.match(/^[a-z][a-z0-9+.-]*:/i) || ['https:'])[0] + url;
-            } else if (url.charAt(0) === '/') {
-                url = (root ? root[0] : base) + url;
-            } else {
-                url = base.replace(/[^\/]*$/, '') + url;
+    // Replace the networking-block URL stubs with a parser that handles the
+    // relative URL and query-param shapes YouTube uses during bootstrap.
+    function decodeUrlPart(value) {
+        try { return decodeURIComponent(String(value).replace(/\+/g, ' ')); }
+        catch (e) { return String(value); }
+    }
+    function encodeUrlPart(value) {
+        return encodeURIComponent(String(value)).replace(/%20/g, '+');
+    }
+    function normalizeUrlPath(path) {
+        var absolute = path.charAt(0) === '/';
+        var trailing = path.length > 1 && path.charAt(path.length - 1) === '/';
+        var parts = path.split('/');
+        var out = [];
+        for (var i = 0; i < parts.length; i++) {
+            var part = parts[i];
+            if (!part || part === '.') continue;
+            if (part === '..') out.pop();
+            else out.push(part);
+        }
+        return (absolute ? '/' : '') + out.join('/') + (trailing && out.length ? '/' : '');
+    }
+    function splitUrlQueryAndHash(input) {
+        var rest = String(input);
+        var hash = '';
+        var hashIndex = rest.indexOf('#');
+        if (hashIndex >= 0) {
+            hash = rest.slice(hashIndex);
+            rest = rest.slice(0, hashIndex);
+        }
+        var search = '';
+        var queryIndex = rest.indexOf('?');
+        if (queryIndex >= 0) {
+            search = rest.slice(queryIndex);
+            rest = rest.slice(0, queryIndex);
+        }
+        return { path: rest, search: search, hash: hash };
+    }
+    function parseAbsoluteUrl(input) {
+        var match = /^([a-zA-Z][a-zA-Z0-9+.-]*:)(?:\/\/([^\/?#]*))?([^?#]*)(\?[^#]*)?(#.*)?$/.exec(input);
+        if (!match) return null;
+        var protocol = match[1].toLowerCase();
+        var authority = match[2] || '';
+        var pathname = match[3] || '';
+        var search = match[4] || '';
+        var hash = match[5] || '';
+        var username = '';
+        var password = '';
+        var host = authority;
+        var at = host.lastIndexOf('@');
+        if (at >= 0) {
+            var userinfo = host.slice(0, at);
+            host = host.slice(at + 1);
+            var colon = userinfo.indexOf(':');
+            username = colon >= 0 ? userinfo.slice(0, colon) : userinfo;
+            password = colon >= 0 ? userinfo.slice(colon + 1) : '';
+        }
+        var hostname = host;
+        var port = '';
+        if (hostname.charAt(0) !== '[') {
+            var portIndex = hostname.lastIndexOf(':');
+            if (portIndex >= 0) {
+                port = hostname.slice(portIndex + 1);
+                hostname = hostname.slice(0, portIndex);
             }
         }
-        var m = url.match(/^([a-z][a-z0-9+.-]*:)\/\/([^\/?#:]*)(?::(\d+))?([^?#]*)(\?[^#]*)?(#.*)?$/i);
-        this.href = url;
-        this.protocol = m ? m[1] : '';
-        this.hostname = m ? m[2] : '';
-        this.port = m && m[3] ? m[3] : '';
-        this.host = this.hostname + (this.port ? ':' + this.port : '');
-        this.origin = m ? this.protocol + '//' + this.host : '';
-        this.pathname = m ? (m[4] || '/') : '';
-        this.search = m && m[5] ? m[5] : '';
-        this.hash = m && m[6] ? m[6] : '';
-        this.username = ''; this.password = '';
-        this.searchParams = new URLSearchParams(this.search);
+        if (authority && !pathname) pathname = '/';
+        return {
+            protocol: protocol, username: username, password: password,
+            host: host, hostname: hostname, port: port,
+            pathname: pathname || '/', search: search, hash: hash
+        };
+    }
+    function defaultUrlBase() {
+        var loc = globalThis.location || {};
+        return String(loc.href || 'https://youtube.com/');
+    }
+    function parseUrl(input, base) {
+        var raw = String(input);
+        var absolute = parseAbsoluteUrl(raw);
+        if (absolute) return absolute;
+        var baseParts = parseAbsoluteUrl(base ? String(base) : defaultUrlBase()) || parseAbsoluteUrl(defaultUrlBase());
+        var split = splitUrlQueryAndHash(raw);
+        if (raw.indexOf('//') === 0) {
+            return parseAbsoluteUrl(baseParts.protocol + raw);
+        }
+        if (!split.path) {
+            return Object.assign({}, baseParts, {
+                search: split.search || baseParts.search,
+                hash: split.hash
+            });
+        }
+        var pathname = split.path.charAt(0) === '/'
+            ? normalizeUrlPath(split.path)
+            : normalizeUrlPath(baseParts.pathname.replace(/\/[^\/]*$/, '/') + split.path);
+        return Object.assign({}, baseParts, {
+            pathname: pathname || '/',
+            search: split.search,
+            hash: split.hash
+        });
+    }
+    function serializeUrl(parts) {
+        var auth = parts.host ? '//' + parts.host : '';
+        return parts.protocol + auth + (parts.pathname || '/') + (parts.search || '') + (parts.hash || '');
+    }
+
+    globalThis.URLSearchParams = function URLSearchParams(init) {
+        if (!(this instanceof URLSearchParams)) return new URLSearchParams(init);
+        this._pairs = [];
+        if (!init) return;
+        if (typeof init === 'string') {
+            var query = init.charAt(0) === '?' ? init.slice(1) : init;
+            if (!query) return;
+            var fields = query.split('&');
+            for (var i = 0; i < fields.length; i++) {
+                if (!fields[i]) continue;
+                var eq = fields[i].indexOf('=');
+                this.append(
+                    decodeUrlPart(eq >= 0 ? fields[i].slice(0, eq) : fields[i]),
+                    decodeUrlPart(eq >= 0 ? fields[i].slice(eq + 1) : '')
+                );
+            }
+        } else if (Array.isArray(init)) {
+            for (var j = 0; j < init.length; j++) this.append(init[j][0], init[j][1]);
+        } else if (typeof init === 'object') {
+            for (var key in init) if (Object.prototype.hasOwnProperty.call(init, key)) this.append(key, init[key]);
+        }
+    };
+    URLSearchParams.prototype.append = function(name, value) {
+        this._pairs.push([String(name), String(value)]);
+    };
+    URLSearchParams.prototype.delete = function(name) {
+        name = String(name);
+        this._pairs = this._pairs.filter(function(pair) { return pair[0] !== name; });
+    };
+    URLSearchParams.prototype.get = function(name) {
+        name = String(name);
+        for (var i = 0; i < this._pairs.length; i++) if (this._pairs[i][0] === name) return this._pairs[i][1];
+        return null;
+    };
+    URLSearchParams.prototype.getAll = function(name) {
+        name = String(name);
+        return this._pairs.filter(function(pair) { return pair[0] === name; }).map(function(pair) { return pair[1]; });
+    };
+    URLSearchParams.prototype.has = function(name) {
+        name = String(name);
+        return this._pairs.some(function(pair) { return pair[0] === name; });
+    };
+    URLSearchParams.prototype.set = function(name, value) {
+        name = String(name);
+        value = String(value);
+        var found = false;
+        var next = [];
+        for (var i = 0; i < this._pairs.length; i++) {
+            if (this._pairs[i][0] === name) {
+                if (!found) next.push([name, value]);
+                found = true;
+            } else {
+                next.push(this._pairs[i]);
+            }
+        }
+        if (!found) next.push([name, value]);
+        this._pairs = next;
+    };
+    URLSearchParams.prototype.forEach = function(cb, thisArg) {
+        for (var i = 0; i < this._pairs.length; i++) cb.call(thisArg, this._pairs[i][1], this._pairs[i][0], this);
+    };
+    URLSearchParams.prototype.toString = function() {
+        return this._pairs.map(function(pair) { return encodeUrlPart(pair[0]) + '=' + encodeUrlPart(pair[1]); }).join('&');
+    };
+    URLSearchParams.prototype.entries = function() { return this._pairs.slice()[Symbol.iterator](); };
+    URLSearchParams.prototype.keys = function() { return this._pairs.map(function(pair) { return pair[0]; })[Symbol.iterator](); };
+    URLSearchParams.prototype.values = function() { return this._pairs.map(function(pair) { return pair[1]; })[Symbol.iterator](); };
+    URLSearchParams.prototype[Symbol.iterator] = URLSearchParams.prototype.entries;
+
+    globalThis.URL = function URL(input, base) {
+        if (!(this instanceof URL)) return new URL(input, base);
+        var parts = parseUrl(input, base);
+        var self = this;
+        function updateSearchParams() { self.searchParams = new URLSearchParams(parts.search); }
+        function syncSearch() {
+            var query = self.searchParams.toString();
+            parts.search = query ? '?' + query : '';
+        }
+        Object.defineProperties(this, {
+            href: { get: function() { syncSearch(); return serializeUrl(parts); }, set: function(v) { parts = parseUrl(v); updateSearchParams(); }, enumerable: true },
+            origin: { get: function() { return parts.protocol + '//' + parts.host; }, enumerable: true },
+            protocol: { get: function() { return parts.protocol; }, set: function(v) { parts.protocol = String(v).replace(/:*$/, ':').toLowerCase(); }, enumerable: true },
+            username: { get: function() { return parts.username; }, set: function(v) { parts.username = String(v); }, enumerable: true },
+            password: { get: function() { return parts.password; }, set: function(v) { parts.password = String(v); }, enumerable: true },
+            host: { get: function() { return parts.host; }, set: function(v) { var p = parseAbsoluteUrl(parts.protocol + '//' + String(v) + '/'); if (p) { parts.host = p.host; parts.hostname = p.hostname; parts.port = p.port; } }, enumerable: true },
+            hostname: { get: function() { return parts.hostname; }, set: function(v) { parts.hostname = String(v); parts.host = parts.hostname + (parts.port ? ':' + parts.port : ''); }, enumerable: true },
+            port: { get: function() { return parts.port; }, set: function(v) { parts.port = String(v); parts.host = parts.hostname + (parts.port ? ':' + parts.port : ''); }, enumerable: true },
+            pathname: { get: function() { return parts.pathname; }, set: function(v) { parts.pathname = normalizeUrlPath(String(v)); }, enumerable: true },
+            search: { get: function() { syncSearch(); return parts.search; }, set: function(v) { parts.search = v ? (String(v).charAt(0) === '?' ? String(v) : '?' + String(v)) : ''; updateSearchParams(); }, enumerable: true },
+            hash: { get: function() { return parts.hash; }, set: function(v) { parts.hash = v ? (String(v).charAt(0) === '#' ? String(v) : '#' + String(v)) : ''; }, enumerable: true }
+        });
+        updateSearchParams();
     };
     URL.prototype.toString = function() { return this.href; };
+    URL.prototype.toJSON = function() { return this.href; };
     URL.createObjectURL = function() { return 'blob:aurora'; };
     URL.revokeObjectURL = function() {};
 

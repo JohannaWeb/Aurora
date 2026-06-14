@@ -42,9 +42,16 @@ struct DocumentData {
 impl V8Runtime {
     pub(crate) fn new(document: NodePtr) -> Self {
         ensure_platform();
+        // Establish the parent back-pointer invariant for the initial tree so
+        // connectivity/ancestor queries are O(depth); the parent pointer is then
+        // treated as authoritative (see `selectors::query::find_parent`).
+        crate::dom::reparent_subtree(&document);
         let mut isolate = v8::Isolate::new(v8::CreateParams::default());
         let window = Rc::new(RefCell::new(WindowCapture::new()));
         let registry = Rc::new(NodeRegistry::new());
+        // Make the document reachable from the registry (used by e.g.
+        // MutationObserver record construction, which only has the registry).
+        *registry.document.borrow_mut() = Some(document.clone());
 
         let context = {
             v8::scope!(let scope, &mut isolate);
@@ -283,6 +290,24 @@ impl V8Runtime {
                 v8_str(scope, "addEventListener").into(),
                 add_event_listener_js.into(),
             );
+
+            let dispatch_event_fn = v8::FunctionTemplate::builder(dispatch_event_global)
+                .data(registry_data.into())
+                .build(scope);
+            let dispatch_event_js = dispatch_event_fn.get_function(scope).unwrap();
+            global.set(
+                scope,
+                v8_str(scope, "dispatchEvent").into(),
+                dispatch_event_js.into(),
+            );
+            document_obj.set(
+                scope,
+                v8_str(scope, "dispatchEvent").into(),
+                dispatch_event_js.into(),
+            );
+
+            // Real MutationObserver (replaces the never-firing JS stub).
+            super::mutation_observer::install(scope, global, registry_data);
 
             // --- Browser APIs ---
             global.set(
@@ -523,6 +548,22 @@ impl V8Runtime {
                     }
                 }
 
+                // Wrappers built during context setup (document, body, head,
+                // documentElement) predate the JS DOM prototype skeletons, so
+                // re-link them to the EventTarget chain now that it exists.
+                let _ = compile_and_run(
+                    scope,
+                    r#"(function(){
+                        var nodes = [document, document.body, document.head, document.documentElement];
+                        for (var i = 0; i < nodes.length; i++) {
+                            var n = nodes[i];
+                            if (n && typeof n.addEventListener !== 'function' && typeof HTMLElement !== 'undefined') {
+                                try { Object.setPrototypeOf(n, HTMLElement.prototype); } catch (e) {}
+                            }
+                        }
+                    })();"#,
+                );
+
                 if matches!(
                     std::env::var("AURORA_DEBUG_YOUTUBE").as_deref(),
                     Ok("1") | Ok("true") | Ok("TRUE") | Ok("yes") | Ok("YES")
@@ -576,28 +617,13 @@ impl V8Runtime {
     }
 
     fn fire_lifecycle_event(&mut self, event_type: &str) {
-        let listeners = self.registry.get_listeners(0, event_type);
-        if listeners.is_empty() {
-            return;
-        }
-
-        v8::scope_with_context!(let scope, &mut self.isolate, &self.context);
-        let context = v8::Local::new(scope, &self.context);
-        let global = context.global(scope);
-
-        // Build a minimal Event object.
-        let event_template = v8::ObjectTemplate::new(scope);
-        let event_obj = event_template.new_instance(scope).unwrap();
-        event_obj.set(
-            scope,
-            v8_str(scope, "type").into(),
-            v8_str(scope, event_type).into(),
+        // Lifecycle listeners live on the JS `document`/`window` EventTargets, so
+        // fire through the JS event model rather than the legacy id-0 registry.
+        let source = format!(
+            "(function(){{ try {{ var e = new Event({event_type:?}, {{ bubbles: true }}); \
+             document.dispatchEvent(e); window.dispatchEvent(e); }} catch (err) {{}} }})();"
         );
-
-        for listener in listeners {
-            let callback = v8::Local::new(scope, listener);
-            let _ = callback.call(scope, global.into(), &[event_obj.into()]);
-        }
+        self.run_js_quiet(&source);
     }
 }
 
@@ -761,6 +787,39 @@ fn add_event_listener(
     // For now, always register on document (id 0) if called on window/document stub.
     // In a real implementation, we'd check 'this' to get the node id.
     registry.add_event_listener(0, event_type, callback_global);
+}
+
+/// `window.dispatchEvent` / `document.dispatchEvent`: fire the document/window
+/// listeners (registered under id 0). Without this these were no-op polyfill
+/// stubs, so YouTube's document-level listeners (`yt-navigate-finish`, etc.)
+/// never ran and the app never navigated past its shell.
+fn dispatch_event_global(
+    scope: &mut v8::PinScope<'_, '_>,
+    args: v8::FunctionCallbackArguments,
+    mut retval: v8::ReturnValue,
+) {
+    let event = args.get(0);
+    let data = args.data();
+    let external = v8::Local::<v8::External>::try_from(data).unwrap();
+    let registry_ptr = external.value() as *const Rc<NodeRegistry>;
+    let registry = unsafe { &*registry_ptr };
+
+    let mut event_type = String::new();
+    if let Some(event_obj) = event.to_object(scope) {
+        if let Some(t) = event_obj.get(scope, v8_str(scope, "type").into()) {
+            event_type = t.to_rust_string_lossy(scope);
+        }
+        let this = args.this();
+        event_obj.set(scope, v8_str(scope, "target").into(), this.into());
+        event_obj.set(scope, v8_str(scope, "currentTarget").into(), this.into());
+    }
+
+    let this = args.this();
+    for listener in registry.get_listeners(0, &event_type) {
+        let callback = v8::Local::new(scope, listener);
+        let _ = callback.call(scope, this.into(), &[event]);
+    }
+    retval.set(v8::Boolean::new(scope, true).into());
 }
 
 fn get_element_by_id(
@@ -1245,6 +1304,14 @@ impl crate::js_engine::JsRuntime for V8Runtime {
         }
 
         true
+    }
+
+    fn deliver_mutation_records(&mut self) -> bool {
+        if !super::mutation_observer::has_pending(&self.registry) {
+            return false;
+        }
+        v8::scope_with_context!(let scope, &mut self.isolate, &self.context);
+        super::mutation_observer::deliver(scope, &self.registry)
     }
 
     fn drain_animation_frame_callbacks(&mut self, now: Instant) -> bool {

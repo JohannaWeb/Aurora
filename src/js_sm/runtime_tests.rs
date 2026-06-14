@@ -361,6 +361,40 @@ fn message_channel_delivers_messages() {
 }
 
 #[test]
+fn url_polyfill_resolves_relative_urls_and_query_params() {
+    let dom = Parser::new("<html><body></body></html>").parse_document();
+    let mut runtime = SmRuntime::new(dom.clone());
+
+    runtime
+        .execute(
+            r#"
+            const url = new URL('/watch?v=abc123&feature=share', 'https://www.youtube.com/feed/subscriptions?persist=1');
+            url.searchParams.set('feature', 'related');
+            url.searchParams.append('t', '42');
+            const relative = new URL('../shorts/xyz?si=token', 'https://www.youtube.com/watch/');
+            const params = new URLSearchParams('a=1&a=2&empty=');
+            document.body.textContent = [
+                url.href,
+                url.origin,
+                url.hostname,
+                url.searchParams.get('v'),
+                url.searchParams.get('feature'),
+                url.searchParams.getAll('a').length,
+                relative.href,
+                params.getAll('a').join(','),
+                String(params.has('empty'))
+            ].join('|');
+            "#,
+        )
+        .unwrap();
+
+    assert_eq!(
+        text_content(&dom),
+        "https://www.youtube.com/watch?v=abc123&feature=related&t=42|https://www.youtube.com|www.youtube.com|abc123|related|0|https://www.youtube.com/shorts/xyz?si=token|1,2|true"
+    );
+}
+
+#[test]
 fn es5_closure_custom_element_upgrade_resolves_prototype_methods() {
     // Mirrors YouTube's kevlar ES5 "PolySi" wrapper (`ui3` in the bundle):
     // a function constructor inheriting from HTMLElement via Closure's

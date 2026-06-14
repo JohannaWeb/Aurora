@@ -6,6 +6,13 @@
             var originalCreateElement = null;
             var hasOwn = Object.prototype.hasOwnProperty;
             var suppressTrackedConnect = 0;
+            // Genuine Object.prototype methods that prop bags may legitimately
+            // expose; everything else inherited-and-callable (our fallback
+            // `style`/`__shady_*` shims) is treated as a stray signal value.
+            var BUILTIN_OBJECT_METHODS = {
+                hasOwnProperty: true, isPrototypeOf: true, propertyIsEnumerable: true,
+                toLocaleString: true, toString: true, valueOf: true, constructor: true
+            };
 
             (function installShadyEventFallbacks() {
                 function defineFallback(name, fn) {
@@ -492,7 +499,15 @@
                     var id = getElementId(child);
                     if (!id) continue;
                     map[id] = child;
-                    if (!(id in el)) {
+                    var currentIdValue;
+                    var shouldInstallDirectId = !(id in el);
+                    if (!shouldInstallDirectId) {
+                        try {
+                            currentIdValue = el[id];
+                            shouldInstallDirectId = currentIdValue == null;
+                        } catch (e) {}
+                    }
+                    if (shouldInstallDirectId) {
                         try {
                             Object.defineProperty(el, id, {
                                 configurable: true,
@@ -555,6 +570,153 @@
                     }
                     try { el._attachDom = wrappedAttachDom; } catch (e) {}
                 }
+            }
+
+            function resolveSignalValue(value) {
+                for (var depth = 0; depth < 4 && typeof value === 'function'; depth++) {
+                    try {
+                        value = value();
+                    } catch (e) {
+                        return undefined;
+                    }
+                }
+                return typeof value === 'function' ? undefined : value;
+            }
+
+            function sanitizePropBag(bag) {
+                if (!bag || typeof bag !== 'object') return bag;
+                var keys = Object.keys(bag);
+                for (var i = 0; i < keys.length; i++) {
+                    var key = keys[i];
+                    var value = bag[key];
+                    if (typeof value === 'function') {
+                        value = resolveSignalValue(value);
+                        bag[key] = value;
+                    }
+                    if (value && typeof value === 'object' && !Array.isArray(value)) {
+                        sanitizePropBag(value);
+                    }
+                }
+                return bag;
+            }
+
+            function normalizeAttributedStringProps(el) {
+                if (!el || el.localName !== 'yt-attributed-string') return;
+                var props = [
+                    'ariaHidden', 'ariaLabel', 'ellipsisTruncate', 'isOverlay',
+                    'linkInheritColor', 'noEndpoints', 'noStyleRuns', 'noLinkColor',
+                    'noPreWrap', 'noWrap', 'skipOnClick', 'userInput', 'headerRuns',
+                    'isHeadline', 'data', 'id', 'className', 'hidden', 'style'
+                ];
+                var raw = el.rawProps && typeof el.rawProps === 'object' ? el.rawProps : null;
+                for (var i = 0; i < props.length; i++) {
+                    var prop = props[i];
+                    var value;
+                    var hasValue = false;
+                    if (raw && hasOwn.call(raw, prop)) {
+                        value = raw[prop];
+                        hasValue = true;
+                    } else {
+                        try {
+                            value = el[prop];
+                            hasValue = true;
+                        } catch (e) {}
+                    }
+                    if (!hasValue || typeof value !== 'function') continue;
+                    for (var depth = 0; depth < 4 && typeof value === 'function'; depth++) {
+                        try { value = value.call(el); } catch (e) { value = undefined; }
+                    }
+                    if (typeof value === 'function') value = undefined;
+                    if (!raw) {
+                        raw = {};
+                        try { el.rawProps = raw; } catch (e) {}
+                    }
+                    if (raw) raw[prop] = value;
+                }
+            }
+
+            function installSetUpPropsHook(ctor, name) {
+                if (!ctor || !ctor.prototype || ctor.prototype.__aurora_setUpProps_hooked__) return;
+                var original = ctor.prototype.setUpProps;
+                if (typeof original !== 'function') return;
+                try {
+                    Object.defineProperty(ctor.prototype, '__aurora_setUpProps_hooked__', {
+                        value: true,
+                        configurable: true
+                    });
+                } catch (e) {
+                    ctor.prototype.__aurora_setUpProps_hooked__ = true;
+                }
+                ctor.prototype.setUpProps = function() {
+                    sanitizePropBag(this.rawProps);
+                    sanitizePropBag(this.componentProps);
+                    sanitizePropBag(this.slotProps);
+                    return original.apply(this, arguments);
+                };
+            }
+
+            function installInstanceSetUpPropsHook(el) {
+                if (!el || el.localName !== 'yt-attributed-string' || el.__aurora_setUpProps_instance_hooked__) return;
+                var original = el.setUpProps;
+                if (typeof original !== 'function') return;
+                try {
+                    Object.defineProperty(el, '__aurora_setUpProps_instance_hooked__', {
+                        value: true,
+                        configurable: true
+                    });
+                } catch (e) {
+                    el.__aurora_setUpProps_instance_hooked__ = true;
+                }
+                el.setUpProps = function() {
+                    // YouTube's setUpProps copies declared prop values into
+                    // `rawProps` and then throws "Function props must be
+                    // configured as STATIC, not SIGNAL." if any SIGNAL prop's
+                    // value is a Function. The validation reads `rawProps[name]`
+                    // for every declared prop, which walks the prototype chain.
+                    // Our bootstrap installs a callable fallback `style` (and
+                    // `__shady_*` helpers) on Object.prototype, so for the
+                    // declared `style` prop `rawProps.style` resolves to that
+                    // callable and trips the check. Wrap rawProps in a Proxy that
+                    // neutralizes any such function to its resolved (unset) value,
+                    // while leaving genuine Object.prototype builtins intact.
+                    try {
+                        var realRaw = this.rawProps;
+                        if (realRaw && typeof realRaw === 'object' && !realRaw.__aurora_raw_proxy__) {
+                            this.rawProps = new Proxy(realRaw, {
+                                set: function(target, key, value) {
+                                    if (typeof value === 'function') value = resolveSignalValue(value);
+                                    target[key] = value;
+                                    return true;
+                                },
+                                get: function(target, key) {
+                                    var value = target[key];
+                                    // Neutralize own data-prop functions and any
+                                    // inherited callable that isn't a genuine
+                                    // Object.prototype builtin (e.g. our polluting
+                                    // `style`/`__shady_*` shims). Use own-property
+                                    // checks throughout: the builtin table itself
+                                    // inherits the polluted `style` getter.
+                                    if (typeof value === 'function'
+                                        && (hasOwn.call(target, key)
+                                            || !hasOwn.call(BUILTIN_OBJECT_METHODS, key))) {
+                                        return resolveSignalValue(value);
+                                    }
+                                    return value;
+                                }
+                            });
+                            try {
+                                Object.defineProperty(realRaw, '__aurora_raw_proxy__', {
+                                    value: true,
+                                    configurable: true
+                                });
+                            } catch (e) {}
+                        }
+                    } catch (e) {}
+                    sanitizePropBag(this.rawProps);
+                    sanitizePropBag(this.componentProps);
+                    sanitizePropBag(this.slotProps);
+                    return original.apply(this, arguments);
+                };
             }
 
             function shouldReplayConstructor(ctor) {
@@ -643,14 +805,28 @@
                 probeCustomElementState(name, el, ctor);
             }
 
+            function readyUpgraded(el, name) {
+                if (el.__ce_ready__ || typeof el.ready !== 'function') return;
+                el.__ce_ready__ = true;
+                if (shouldTraceName(name)) trace('ready ' + name);
+                installPolymerIdMapHooks(el);
+                rebuildPolymerIdMap(el);
+                el.ready();
+                rebuildPolymerIdMap(el);
+            }
+
             function connectUpgraded(el, name, connect) {
-                if (connect === false || typeof el.connectedCallback !== 'function') return;
+                if (connect === false) return;
                 try {
+                    readyUpgraded(el, name);
                     if (!el.__ce_connected__) {
+                        if (typeof el.connectedCallback !== 'function') return;
                         el.__ce_connected__ = true;
                         if (shouldTraceName(name)) trace('connectedCallback ' + name);
                         installPolymerIdMapHooks(el);
                         rebuildPolymerIdMap(el);
+                        installInstanceSetUpPropsHook(el);
+                        normalizeAttributedStringProps(el);
                         el.connectedCallback();
                         rebuildPolymerIdMap(el);
                     }
@@ -738,12 +914,13 @@
                     if (shouldTraceName(name)) trace('define ' + name);
                     var definition = ensureDefinitionMetadata(name, ctor);
                     attachDefinitionMetadata(ctor, definition);
-                    if (name.indexOf('-') >= 0) {
-                        installTemplateAccessor(name, ctor);
-                    }
-                    probeCustomElementState(name, null, ctor);
-                    flushPending(name);
-                },
+                if (name.indexOf('-') >= 0) {
+                    installTemplateAccessor(name, ctor);
+                }
+                installSetUpPropsHook(ctor, name);
+                probeCustomElementState(name, null, ctor);
+                flushPending(name);
+            },
                 get: function(name) {
                     var definition = getDefinition(name);
                     return definition ? definition.ctor : undefined;

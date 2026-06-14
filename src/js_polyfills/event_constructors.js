@@ -12,20 +12,27 @@
             );
 
             globalThis.Event = function Event(type, init) {
-                var obj = (this instanceof Event) ? this : {};
                 init = init || {};
+                // Initialize on `this` whenever it's an object — this covers both
+                // `new Event(...)` and `Event.call(subclassInstance, ...)` (e.g. our
+                // CustomEvent, or any event that chains through us). Relying on
+                // `this instanceof Event` here loses `type` if `Event` was later
+                // reassigned or the prototype chain doesn't trace back to it.
+                var obj = (this && typeof this === 'object') ? this : Object.create(Event.prototype);
                 obj.type = type || '';
                 obj.bubbles = !!(init.bubbles);
                 obj.cancelable = !!(init.cancelable);
+                obj.composed = !!(init.composed);
                 obj.defaultPrevented = false;
                 obj.isTrusted = false;
                 obj.timeStamp = 0;
-                obj.target = null; obj.currentTarget = null;
-                obj.stopPropagation = function(){};
-                obj.stopImmediatePropagation = function(){};
+                if (obj.target === undefined) obj.target = null;
+                if (obj.currentTarget === undefined) obj.currentTarget = null;
+                obj.stopPropagation = function(){ obj.cancelBubble = true; };
+                obj.stopImmediatePropagation = function(){ obj.cancelBubble = true; obj.__immediateStop = true; };
                 obj.preventDefault = function(){ obj.defaultPrevented = true; };
                 obj.composedPath = function(){ return []; };
-                if (!(this instanceof Event)) return obj;
+                return obj;
             };
 
             globalThis.CustomEvent = function CustomEvent(type, init) {

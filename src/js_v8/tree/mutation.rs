@@ -36,35 +36,16 @@ pub(crate) fn prepend_child_ptr(parent: &NodePtr, child: &NodePtr) {
     kids.insert(0, child.clone());
 }
 
-pub(crate) fn append_child_ptr(parent: &NodePtr, child: &NodePtr) {
-    if let Node::Element(el) = &mut *parent.borrow_mut() {
-        el.children.push(child.clone());
-    } else if let Node::Document { children, .. } = &mut *parent.borrow_mut() {
-        children.push(child.clone());
-    }
-}
-
-pub(crate) fn insert_before_ptr(
-    parent: &NodePtr,
-    new_child: &NodePtr,
-    ref_child: Option<&NodePtr>,
-) {
-    let mut p = parent.borrow_mut();
-    let kids: &mut Vec<NodePtr> = match &mut *p {
-        Node::Element(el) => &mut el.children,
-        Node::Document { children, .. } => children,
-        _ => return,
+/// Remove `child` from its current parent's child list, if it has one.
+///
+/// Insertion is a *move* in the DOM: appending/inserting a node that already
+/// lives somewhere first detaches it. Skipping this left the node parented in
+/// two places at once (e.g. `fragment.appendChild(div.firstChild)` never emptied
+/// the div), which spun YouTube's icon clear-and-rebuild loop forever.
+fn detach_from_parent(child: &NodePtr) {
+    let Some(parent) = crate::dom::parent_ptr(child) else {
+        return;
     };
-    if let Some(rc) = ref_child {
-        if let Some(pos) = kids.iter().position(|c| Rc::ptr_eq(c, rc)) {
-            kids.insert(pos, new_child.clone());
-            return;
-        }
-    }
-    kids.push(new_child.clone());
-}
-
-pub(crate) fn remove_child_ptr(parent: &NodePtr, child: &NodePtr) {
     let mut p = parent.borrow_mut();
     let kids: &mut Vec<NodePtr> = match &mut *p {
         Node::Element(el) => &mut el.children,
@@ -74,15 +55,81 @@ pub(crate) fn remove_child_ptr(parent: &NodePtr, child: &NodePtr) {
     kids.retain(|c| !Rc::ptr_eq(c, child));
 }
 
-pub(crate) fn replace_child_ptr(parent: &NodePtr, new_child: &NodePtr, old_child: &NodePtr) {
-    let mut p = parent.borrow_mut();
-    let kids: &mut Vec<NodePtr> = match &mut *p {
-        Node::Element(el) => &mut el.children,
-        Node::Document { children, .. } => children,
-        _ => return,
+pub(crate) fn append_child_ptr(parent: &NodePtr, child: &NodePtr) {
+    detach_from_parent(child);
+    let mut appended = false;
+    if let Node::Element(el) = &mut *parent.borrow_mut() {
+        el.children.push(child.clone());
+        appended = true;
+    } else if let Node::Document { children, .. } = &mut *parent.borrow_mut() {
+        children.push(child.clone());
+        appended = true;
+    }
+    if appended {
+        crate::dom::set_parent(child, parent);
+    }
+}
+
+pub(crate) fn insert_before_ptr(
+    parent: &NodePtr,
+    new_child: &NodePtr,
+    ref_child: Option<&NodePtr>,
+) {
+    // Detach first (move semantics), then resolve the ref position so indices are
+    // correct even when moving a node within its current parent.
+    detach_from_parent(new_child);
+    {
+        let mut p = parent.borrow_mut();
+        let kids: &mut Vec<NodePtr> = match &mut *p {
+            Node::Element(el) => &mut el.children,
+            Node::Document { children, .. } => children,
+            _ => return,
+        };
+        match ref_child.and_then(|rc| kids.iter().position(|c| Rc::ptr_eq(c, rc))) {
+            Some(pos) => kids.insert(pos, new_child.clone()),
+            None => kids.push(new_child.clone()),
+        }
+    }
+    crate::dom::set_parent(new_child, parent);
+}
+
+pub(crate) fn remove_child_ptr(parent: &NodePtr, child: &NodePtr) {
+    let removed = {
+        let mut p = parent.borrow_mut();
+        let kids: &mut Vec<NodePtr> = match &mut *p {
+            Node::Element(el) => &mut el.children,
+            Node::Document { children, .. } => children,
+            _ => return,
+        };
+        let before = kids.len();
+        kids.retain(|c| !Rc::ptr_eq(c, child));
+        kids.len() != before
     };
-    if let Some(pos) = kids.iter().position(|c| Rc::ptr_eq(c, old_child)) {
-        kids[pos] = new_child.clone();
+    if removed {
+        crate::dom::clear_parent(child);
+    }
+}
+
+pub(crate) fn replace_child_ptr(parent: &NodePtr, new_child: &NodePtr, old_child: &NodePtr) {
+    detach_from_parent(new_child);
+    let replaced = {
+        let mut p = parent.borrow_mut();
+        let kids: &mut Vec<NodePtr> = match &mut *p {
+            Node::Element(el) => &mut el.children,
+            Node::Document { children, .. } => children,
+            _ => return,
+        };
+        match kids.iter().position(|c| Rc::ptr_eq(c, old_child)) {
+            Some(pos) => {
+                kids[pos] = new_child.clone();
+                true
+            }
+            None => false,
+        }
+    };
+    if replaced {
+        crate::dom::set_parent(new_child, parent);
+        crate::dom::clear_parent(old_child);
     }
 }
 
@@ -109,19 +156,39 @@ pub(crate) fn clone_node(node: &NodePtr, deep: bool) -> NodePtr {
     }
 }
 
+/// Whether `node` is reachable from `document` by walking parent pointers.
+///
+/// Walks up via `find_parent` (which uses the O(depth) parent back-pointer with
+/// a self-healing scan fallback) instead of scanning the whole document subtree
+/// downward, which made `isConnected` an O(N)-per-call hot spot during boot.
+pub(crate) fn is_connected_to(document: &NodePtr, node: &NodePtr) -> bool {
+    let mut current = node.clone();
+    // Bounded to guard against a cycle introduced by a stale parent pointer.
+    for _ in 0..100_000 {
+        if Rc::ptr_eq(&current, document) {
+            return true;
+        }
+        match crate::js_v8::selectors::query::find_parent(document, &current) {
+            Some(parent) => current = parent,
+            None => return false,
+        }
+    }
+    false
+}
+
 pub(crate) fn contains_ptr(parent: &NodePtr, other: &NodePtr) -> bool {
     if Rc::ptr_eq(parent, other) {
         return true;
     }
-    let kids: Vec<NodePtr> = match &*parent.borrow() {
-        Node::Element(el) => el.children.clone(),
-        Node::Document { children, .. } => children.clone(),
+    // Borrow and recurse by reference; cloning the children `Vec` at every level
+    // turned descendant checks into an allocation-heavy hot path. Children are
+    // distinct `RefCell`s, so holding `parent`'s borrow across the recursion is
+    // safe for an (acyclic) DOM tree.
+    let borrow = parent.borrow();
+    let kids: &[NodePtr] = match &*borrow {
+        Node::Element(el) => &el.children,
+        Node::Document { children, .. } => children,
         _ => return false,
     };
-    for child in kids {
-        if contains_ptr(&child, other) {
-            return true;
-        }
-    }
-    false
+    kids.iter().any(|child| contains_ptr(child, other))
 }

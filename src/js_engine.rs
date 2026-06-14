@@ -103,6 +103,13 @@ pub(crate) trait JsRuntime {
     fn tick(&mut self, now: Instant) -> bool;
     fn drain_animation_frame_callbacks(&mut self, now: Instant) -> bool;
 
+    /// Deliver any pending `MutationObserver` records to their callbacks.
+    /// Returns true if any were delivered (so the event-loop pump keeps going).
+    /// Backends that drain observers internally (or lack them) keep the default.
+    fn deliver_mutation_records(&mut self) -> bool {
+        false
+    }
+
     fn dispatch_event(&mut self, node: &NodePtr, event_type: &str) -> bool;
     fn fire_dom_content_loaded(&mut self);
     fn fire_load(&mut self);

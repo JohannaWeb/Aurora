@@ -89,6 +89,10 @@ pub(super) fn create_js_node<'s>(
     install_method(scope, template, "remove", remove_node, node_external);
     install_method(scope, template, "cloneNode", clone_node, node_external);
     install_method(scope, template, "contains", contains, node_external);
+    install_method(scope, template, "hasChildNodes", has_child_nodes, node_external);
+    install_method(scope, template, "prepend", prepend_children, node_external);
+    install_method(scope, template, "before", insert_before_self, node_external);
+    install_method(scope, template, "after", insert_after_self, node_external);
 
     // Attribute methods
     install_method(
@@ -119,6 +123,7 @@ pub(super) fn create_js_node<'s>(
         has_attribute,
         node_external,
     );
+    install_method(scope, template, "hasAttributes", has_attributes, node_external);
 
     // --- Accessors ---
 
@@ -127,6 +132,13 @@ pub(super) fn create_js_node<'s>(
         template,
         "parentNode",
         get_parent_node,
+        node_external,
+    );
+    install_readonly_accessor(
+        scope,
+        template,
+        "parentElement",
+        get_parent_element,
         node_external,
     );
     install_readonly_accessor(
@@ -142,6 +154,20 @@ pub(super) fn create_js_node<'s>(
         template,
         "nextSibling",
         get_next_sibling,
+        node_external,
+    );
+    install_readonly_accessor(
+        scope,
+        template,
+        "nextElementSibling",
+        get_next_element_sibling,
+        node_external,
+    );
+    install_readonly_accessor(
+        scope,
+        template,
+        "previousElementSibling",
+        get_previous_element_sibling,
         node_external,
     );
     install_readonly_accessor(
@@ -205,33 +231,29 @@ pub(super) fn create_js_node<'s>(
     install_readonly_accessor(
         scope,
         template,
+        "lastElementChild",
+        get_last_element_child,
+        node_external,
+    );
+    install_readonly_accessor(
+        scope,
+        template,
+        "childElementCount",
+        get_child_element_count,
+        node_external,
+    );
+    install_readonly_accessor(scope, template, "isConnected", get_is_connected, node_external);
+    install_readonly_accessor(
+        scope,
+        template,
         "ownerDocument",
         get_owner_document,
         node_external,
     );
 
-    // Events
-    install_method(
-        scope,
-        template,
-        "addEventListener",
-        node_add_event_listener,
-        node_external,
-    );
-    install_method(
-        scope,
-        template,
-        "removeEventListener",
-        node_remove_event_listener,
-        node_external,
-    );
-    install_method(
-        scope,
-        template,
-        "dispatchEvent",
-        node_dispatch_event,
-        node_external,
-    );
+    // Events: addEventListener/removeEventListener/dispatchEvent come from the
+    // JS `EventTarget` prototype (installed below via the prototype chain), so
+    // node listeners share one model with `window`/`document` and bubbling works.
 
     // Geometry and misc
     install_method(
@@ -250,6 +272,30 @@ pub(super) fn create_js_node<'s>(
     );
     install_method(scope, template, "getRootNode", get_root_node, node_external);
     install_method(scope, template, "append", append_children, node_external);
+    install_method(scope, template, "replaceChildren", replace_children, node_external);
+    install_method(scope, template, "replaceWith", replace_with, node_external);
+    install_method(
+        scope,
+        template,
+        "insertAdjacentHTML",
+        insert_adjacent_html,
+        node_external,
+    );
+    install_method(
+        scope,
+        template,
+        "insertAdjacentElement",
+        insert_adjacent_element,
+        node_external,
+    );
+    install_method(
+        scope,
+        template,
+        "insertAdjacentText",
+        insert_adjacent_text,
+        node_external,
+    );
+    install_method(scope, template, "normalize", normalize_node, node_external);
     install_method(
         scope,
         template,
@@ -277,11 +323,25 @@ pub(super) fn create_js_node<'s>(
         v8::Integer::new(scope, node_id as i32).into(),
     );
 
+    // Give the wrapper the DOM prototype chain so it inherits real `EventTarget`
+    // methods (Node/Element/HTMLElement → EventTarget). Custom-element upgrade may
+    // later swap this for the element's class prototype, which itself chains back
+    // to HTMLElement.prototype, so EventTarget stays reachable either way.
+    let proto_name = match &*node.borrow() {
+        Node::Element(el) if el.tag_name != "#document-fragment" => "HTMLElement",
+        Node::Element(_) => "DocumentFragment",
+        _ => "Node",
+    };
+    set_dom_prototype(scope, obj, proto_name);
+
     let mut is_custom_element = false;
     let mut is_canvas = false;
+    let mut is_media = false;
     let mut template_content: Option<NodePtr> = None;
     if let Node::Element(el) = &*node.borrow() {
         is_canvas = el.tag_name.eq_ignore_ascii_case("canvas");
+        is_media =
+            el.tag_name.eq_ignore_ascii_case("video") || el.tag_name.eq_ignore_ascii_case("audio");
         if el.tag_name != "#document-fragment" {
             obj.set(
                 scope,
@@ -303,8 +363,37 @@ pub(super) fn create_js_node<'s>(
                 );
             }
             let dataset = v8::Object::new(scope);
+            for (name, value) in &el.attributes {
+                if let Some(key) = data_attr_to_dataset_key(name) {
+                    dataset.set(scope, v8_str(scope, &key).into(), v8_str(scope, value).into());
+                }
+            }
             obj.set(scope, v8_str(scope, "dataset").into(), dataset.into());
             obj.set(scope, v8_str(scope, "shadowRoot").into(), v8::null(scope).into());
+            for key in [
+                "offsetWidth",
+                "offsetHeight",
+                "offsetTop",
+                "offsetLeft",
+                "clientWidth",
+                "clientHeight",
+                "scrollWidth",
+                "scrollHeight",
+                "scrollTop",
+                "scrollLeft",
+            ] {
+                obj.set(scope, v8_str(scope, key).into(), v8::Number::new(scope, 0.0).into());
+            }
+            obj.set(
+                scope,
+                v8_str(scope, "tabIndex").into(),
+                v8::Integer::new(scope, 0).into(),
+            );
+            obj.set(
+                scope,
+                v8_str(scope, "hidden").into(),
+                v8::Boolean::new(scope, el.attributes.contains_key("hidden")).into(),
+            );
             is_custom_element = el.tag_name.contains('-');
         }
         if el.tag_name.eq_ignore_ascii_case("template") {
@@ -338,6 +427,9 @@ pub(super) fn create_js_node<'s>(
     if is_canvas {
         call_global_hook(scope, "__aurora_install_canvas__", obj);
     }
+    if is_media {
+        call_global_hook(scope, "__aurora_install_media_element__", obj);
+    }
     // Let the custom-elements registry track/upgrade dash-named elements.
     if is_custom_element {
         call_global_hook(scope, "__aurora_track_custom_element__", obj);
@@ -363,6 +455,46 @@ fn call_global_hook(
 
 fn v8_str<'s>(scope: &v8::PinScope<'s, '_, ()>, s: &str) -> v8::Local<'s, v8::String> {
     v8::String::new(scope, s).unwrap()
+}
+
+/// Set `obj`'s `[[Prototype]]` to `globalThis[<ctor>].prototype` if that DOM
+/// constructor exists yet. Early wrappers built during context setup (before the
+/// JS prototype skeletons are defined) simply keep `Object.prototype`; they're
+/// re-resolvable later and the common case (wrappers created during script
+/// execution) gets the chain.
+fn set_dom_prototype(scope: &mut v8::PinScope<'_, '_>, obj: v8::Local<v8::Object>, ctor: &str) {
+    let global = scope.get_current_context().global(scope);
+    let Some(ctor_val) = global.get(scope, v8_str(scope, ctor).into()) else {
+        return;
+    };
+    let Some(ctor_obj) = ctor_val.to_object(scope) else {
+        return;
+    };
+    if let Some(proto) = ctor_obj.get(scope, v8_str(scope, "prototype").into()) {
+        if proto.is_object() {
+            let _ = obj.set_prototype(scope, proto);
+        }
+    }
+}
+
+fn data_attr_to_dataset_key(name: &str) -> Option<String> {
+    let raw = name.strip_prefix("data-")?;
+    if raw.is_empty() {
+        return None;
+    }
+    let mut key = String::new();
+    let mut uppercase_next = false;
+    for ch in raw.chars() {
+        if ch == '-' {
+            uppercase_next = true;
+        } else if uppercase_next {
+            key.extend(ch.to_uppercase());
+            uppercase_next = false;
+        } else {
+            key.push(ch);
+        }
+    }
+    Some(key)
 }
 
 fn install_method<'s>(
@@ -536,7 +668,7 @@ fn closest(
             retval.set(js_node.into());
             return;
         }
-        current = query::find_parent(&node_data.document, &n);
+        current = find_parent_for(node_data, &n);
     }
     retval.set(v8::null(scope).into());
 }
@@ -551,7 +683,15 @@ fn append_child(
     let node_data = unsafe { &*(external.value() as *const NodeData) };
 
     if let Some(child) = node_from_js(scope, args.get(0), &node_data.registry) {
+        let target_id = node_data.registry.register(node_data.node.clone());
+        let child_id = node_data.registry.register(child.clone());
         mutation::append_child_ptr(&node_data.node, &child);
+        super::mutation_observer::queue_childlist(
+            &node_data.registry,
+            target_id,
+            vec![child_id],
+            vec![],
+        );
         node_data.registry.mark_layout_dirty(&node_data.node);
         retval.set(args.get(0));
     } else {
@@ -569,7 +709,15 @@ fn remove_child(
     let node_data = unsafe { &*(external.value() as *const NodeData) };
 
     if let Some(child) = node_from_js(scope, args.get(0), &node_data.registry) {
+        let target_id = node_data.registry.register(node_data.node.clone());
+        let child_id = node_data.registry.register(child.clone());
         mutation::remove_child_ptr(&node_data.node, &child);
+        super::mutation_observer::queue_childlist(
+            &node_data.registry,
+            target_id,
+            vec![],
+            vec![child_id],
+        );
         node_data.registry.mark_layout_dirty(&node_data.node);
         retval.set(args.get(0));
     } else {
@@ -590,7 +738,15 @@ fn insert_before(
     let ref_child = node_from_js(scope, args.get(1), &node_data.registry);
 
     if let Some(new_c) = new_child {
+        let target_id = node_data.registry.register(node_data.node.clone());
+        let new_id = node_data.registry.register(new_c.clone());
         mutation::insert_before_ptr(&node_data.node, &new_c, ref_child.as_ref());
+        super::mutation_observer::queue_childlist(
+            &node_data.registry,
+            target_id,
+            vec![new_id],
+            vec![],
+        );
         node_data.registry.mark_layout_dirty(&node_data.node);
         retval.set(args.get(0));
     } else {
@@ -611,7 +767,16 @@ fn replace_child(
     let old_child = node_from_js(scope, args.get(1), &node_data.registry);
 
     if let (Some(new_c), Some(old_c)) = (new_child, old_child) {
+        let target_id = node_data.registry.register(node_data.node.clone());
+        let new_id = node_data.registry.register(new_c.clone());
+        let old_id = node_data.registry.register(old_c.clone());
         mutation::replace_child_ptr(&node_data.node, &new_c, &old_c);
+        super::mutation_observer::queue_childlist(
+            &node_data.registry,
+            target_id,
+            vec![new_id],
+            vec![old_id],
+        );
         node_data.registry.mark_layout_dirty(&node_data.node);
         retval.set(args.get(1));
     } else {
@@ -620,7 +785,7 @@ fn replace_child(
 }
 
 fn remove_node(
-    scope: &mut v8::PinScope<'_, '_>,
+    _scope: &mut v8::PinScope<'_, '_>,
     args: v8::FunctionCallbackArguments,
     mut _retval: v8::ReturnValue,
 ) {
@@ -628,10 +793,64 @@ fn remove_node(
     let external = v8::Local::<v8::External>::try_from(data).unwrap();
     let node_data = unsafe { &*(external.value() as *const NodeData) };
 
-    if let Some(parent) = query::find_parent(&node_data.document, &node_data.node) {
+    if let Some(parent) = find_parent_for_node(node_data) {
+        let parent_id = node_data.registry.register(parent.clone());
+        let child_id = node_data.registry.register(node_data.node.clone());
         mutation::remove_child_ptr(&parent, &node_data.node);
+        super::mutation_observer::queue_childlist(
+            &node_data.registry,
+            parent_id,
+            vec![],
+            vec![child_id],
+        );
         node_data.registry.mark_layout_dirty(&parent);
     }
+}
+
+fn find_parent_for(node_data: &NodeData, node: &NodePtr) -> Option<NodePtr> {
+    if let Some(parent) = query::find_parent(&node_data.document, node) {
+        return Some(parent);
+    }
+
+    for root in node_data.registry.registered_nodes() {
+        if Rc::ptr_eq(&root, &node_data.document) || Rc::ptr_eq(&root, node) {
+            continue;
+        }
+        if let Some(parent) = query::find_parent(&root, node) {
+            return Some(parent);
+        }
+    }
+    None
+}
+
+fn find_parent_for_node(node_data: &NodeData) -> Option<NodePtr> {
+    find_parent_for(node_data, &node_data.node)
+}
+
+fn sibling_for_node(node_data: &NodeData, delta: i32, elements_only: bool) -> Option<NodePtr> {
+    let parent = find_parent_for_node(node_data)?;
+    let kids = child_nodes_of(&parent);
+    let pos = kids
+        .iter()
+        .position(|candidate| Rc::ptr_eq(candidate, &node_data.node))?;
+    let step = if delta > 0 { 1 } else { -1 };
+    let mut remaining = delta.abs();
+    let mut current = pos as i32;
+
+    while remaining > 0 {
+        current += step;
+        if current < 0 || current >= kids.len() as i32 {
+            return None;
+        }
+        let candidate = &kids[current as usize];
+        if !elements_only || node_type(candidate) == 1 {
+            remaining -= 1;
+            if remaining == 0 {
+                return Some(candidate.clone());
+            }
+        }
+    }
+    None
 }
 
 fn clone_node(
@@ -665,6 +884,17 @@ fn contains(
     }
 }
 
+fn has_child_nodes(
+    scope: &mut v8::PinScope<'_, '_>,
+    args: v8::FunctionCallbackArguments,
+    mut retval: v8::ReturnValue,
+) {
+    let data = args.data();
+    let external = v8::Local::<v8::External>::try_from(data).unwrap();
+    let node_data = unsafe { &*(external.value() as *const NodeData) };
+    retval.set(v8::Boolean::new(scope, !child_nodes_of(&node_data.node).is_empty()).into());
+}
+
 fn get_attribute(
     scope: &mut v8::PinScope<'_, '_>,
     args: v8::FunctionCallbackArguments,
@@ -695,9 +925,15 @@ fn set_attribute(
     let external = v8::Local::<v8::External>::try_from(data).unwrap();
     let node_data = unsafe { &*(external.value() as *const NodeData) };
 
+    let mut changed = false;
     if let Node::Element(el) = &mut *node_data.node.borrow_mut() {
-        el.attributes.insert(name, value);
+        el.attributes.insert(name.clone(), value);
         node_data.registry.mark_style_dirty(&node_data.node);
+        changed = true;
+    }
+    if changed {
+        let target_id = node_data.registry.register(node_data.node.clone());
+        super::mutation_observer::queue_attribute(&node_data.registry, target_id, &name);
     }
 }
 
@@ -711,9 +947,15 @@ fn remove_attribute(
     let external = v8::Local::<v8::External>::try_from(data).unwrap();
     let node_data = unsafe { &*(external.value() as *const NodeData) };
 
+    let mut changed = false;
     if let Node::Element(el) = &mut *node_data.node.borrow_mut() {
         el.attributes.remove(&name);
         node_data.registry.mark_style_dirty(&node_data.node);
+        changed = true;
+    }
+    if changed {
+        let target_id = node_data.registry.register(node_data.node.clone());
+        super::mutation_observer::queue_attribute(&node_data.registry, target_id, &name);
     }
 }
 
@@ -732,6 +974,22 @@ fn has_attribute(
     } else {
         retval.set(v8::Boolean::new(scope, false).into());
     }
+}
+
+fn has_attributes(
+    scope: &mut v8::PinScope<'_, '_>,
+    args: v8::FunctionCallbackArguments,
+    mut retval: v8::ReturnValue,
+) {
+    let data = args.data();
+    let external = v8::Local::<v8::External>::try_from(data).unwrap();
+    let node_data = unsafe { &*(external.value() as *const NodeData) };
+
+    let has_any = match &*node_data.node.borrow() {
+        Node::Element(el) => !el.attributes.is_empty(),
+        _ => false,
+    };
+    retval.set(v8::Boolean::new(scope, has_any).into());
 }
 
 fn build_attr_object<'s>(
@@ -1023,12 +1281,31 @@ fn get_parent_node(
     let external = v8::Local::<v8::External>::try_from(args.data()).unwrap();
     let node_data = unsafe { &*(external.value() as *const NodeData) };
 
-    if let Some(parent) = query::find_parent(&node_data.document, &node_data.node) {
+    if let Some(parent) = find_parent_for_node(node_data) {
         let js_node = create_js_node(scope, parent, &node_data.registry, &node_data.document);
         retval.set(js_node.into());
     } else {
         retval.set(v8::null(scope).into());
     }
+}
+
+fn get_parent_element(
+    scope: &mut v8::PinScope<'_, '_>,
+    _name: v8::Local<v8::Name>,
+    args: v8::PropertyCallbackArguments,
+    mut retval: v8::ReturnValue,
+) {
+    let external = v8::Local::<v8::External>::try_from(args.data()).unwrap();
+    let node_data = unsafe { &*(external.value() as *const NodeData) };
+
+    if let Some(parent) = find_parent_for_node(node_data) {
+        if node_type(&parent) == 1 {
+            let js_node = create_js_node(scope, parent, &node_data.registry, &node_data.document);
+            retval.set(js_node.into());
+            return;
+        }
+    }
+    retval.set(v8::null(scope).into());
 }
 
 fn get_first_child(
@@ -1074,7 +1351,24 @@ fn get_next_sibling(
     let external = v8::Local::<v8::External>::try_from(args.data()).unwrap();
     let node_data = unsafe { &*(external.value() as *const NodeData) };
 
-    if let Some(sibling) = navigation::sibling(&node_data.document, &node_data.node, 1, false) {
+    if let Some(sibling) = sibling_for_node(node_data, 1, false) {
+        let js_node = create_js_node(scope, sibling, &node_data.registry, &node_data.document);
+        retval.set(js_node.into());
+    } else {
+        retval.set(v8::null(scope).into());
+    }
+}
+
+fn get_next_element_sibling(
+    scope: &mut v8::PinScope<'_, '_>,
+    _name: v8::Local<v8::Name>,
+    args: v8::PropertyCallbackArguments,
+    mut retval: v8::ReturnValue,
+) {
+    let external = v8::Local::<v8::External>::try_from(args.data()).unwrap();
+    let node_data = unsafe { &*(external.value() as *const NodeData) };
+
+    if let Some(sibling) = sibling_for_node(node_data, 1, true) {
         let js_node = create_js_node(scope, sibling, &node_data.registry, &node_data.document);
         retval.set(js_node.into());
     } else {
@@ -1091,7 +1385,24 @@ fn get_previous_sibling(
     let external = v8::Local::<v8::External>::try_from(args.data()).unwrap();
     let node_data = unsafe { &*(external.value() as *const NodeData) };
 
-    if let Some(sibling) = navigation::sibling(&node_data.document, &node_data.node, -1, false) {
+    if let Some(sibling) = sibling_for_node(node_data, -1, false) {
+        let js_node = create_js_node(scope, sibling, &node_data.registry, &node_data.document);
+        retval.set(js_node.into());
+    } else {
+        retval.set(v8::null(scope).into());
+    }
+}
+
+fn get_previous_element_sibling(
+    scope: &mut v8::PinScope<'_, '_>,
+    _name: v8::Local<v8::Name>,
+    args: v8::PropertyCallbackArguments,
+    mut retval: v8::ReturnValue,
+) {
+    let external = v8::Local::<v8::External>::try_from(args.data()).unwrap();
+    let node_data = unsafe { &*(external.value() as *const NodeData) };
+
+    if let Some(sibling) = sibling_for_node(node_data, -1, true) {
         let js_node = create_js_node(scope, sibling, &node_data.registry, &node_data.document);
         retval.set(js_node.into());
     } else {
@@ -1169,14 +1480,17 @@ fn set_inner_html(
     let node_data = unsafe { &*(external.value() as *const NodeData) };
 
     let html = value.to_rust_string_lossy(scope);
-    let parsed = crate::html::Parser::new(&html).parse_document();
-    let new_children: Vec<NodePtr> = match &*parsed.borrow() {
-        Node::Document { children, .. } => children.clone(),
-        _ => Vec::new(),
-    };
+    let new_children = parsed_html_nodes(&html);
     let target = inner_html_target(&node_data.node);
-    if let Node::Element(el) = &mut *target.borrow_mut() {
+    let replaced = if let Node::Element(el) = &mut *target.borrow_mut() {
         el.children = new_children;
+        true
+    } else {
+        false
+    };
+    if replaced {
+        // Link the freshly parsed subtree (and its descendants) back to `target`.
+        crate::dom::reparent_subtree(&target);
     }
     node_data.registry.mark_layout_dirty(&node_data.node);
 }
@@ -1348,35 +1662,6 @@ fn node_remove_event_listener(
         .remove_event_listener(scope, node_id, &event_type, callback);
 }
 
-fn node_dispatch_event(
-    scope: &mut v8::PinScope<'_, '_>,
-    args: v8::FunctionCallbackArguments,
-    mut retval: v8::ReturnValue,
-) {
-    let event = args.get(0);
-    let external = v8::Local::<v8::External>::try_from(args.data()).unwrap();
-    let node_data = unsafe { &*(external.value() as *const NodeData) };
-    let node_id = node_data.registry.register(node_data.node.clone());
-
-    let mut event_type = String::new();
-    if let Some(event_obj) = event.to_object(scope) {
-        if let Some(t) = event_obj.get(scope, v8_str(scope, "type").into()) {
-            event_type = t.to_rust_string_lossy(scope);
-        }
-        let this = args.this();
-        event_obj.set(scope, v8_str(scope, "target").into(), this.into());
-        event_obj.set(scope, v8_str(scope, "currentTarget").into(), this.into());
-    }
-
-    let listeners = node_data.registry.get_listeners(node_id, &event_type);
-    let this = args.this();
-    for listener in listeners {
-        let callback = v8::Local::new(scope, listener);
-        let _ = callback.call(scope, this.into(), &[event]);
-    }
-    retval.set(v8::Boolean::new(scope, true).into());
-}
-
 fn get_bounding_client_rect(
     scope: &mut v8::PinScope<'_, '_>,
     _args: v8::FunctionCallbackArguments,
@@ -1425,6 +1710,222 @@ fn append_children(
     node_data.registry.mark_layout_dirty(&node_data.node);
 }
 
+fn replace_children(
+    scope: &mut v8::PinScope<'_, '_>,
+    args: v8::FunctionCallbackArguments,
+    mut _retval: v8::ReturnValue,
+) {
+    let external = v8::Local::<v8::External>::try_from(args.data()).unwrap();
+    let node_data = unsafe { &*(external.value() as *const NodeData) };
+
+    match &mut *node_data.node.borrow_mut() {
+        Node::Element(el) => el.children.clear(),
+        Node::Document { children, .. } => children.clear(),
+        _ => return,
+    }
+
+    for i in 0..args.length() {
+        let arg = args.get(i);
+        let child = if let Some(node) = node_from_js(scope, arg, &node_data.registry) {
+            node
+        } else {
+            Node::text(arg.to_rust_string_lossy(scope))
+        };
+        mutation::append_child_ptr(&node_data.node, &child);
+    }
+    node_data.registry.mark_layout_dirty(&node_data.node);
+}
+
+fn prepend_children(
+    scope: &mut v8::PinScope<'_, '_>,
+    args: v8::FunctionCallbackArguments,
+    mut _retval: v8::ReturnValue,
+) {
+    let external = v8::Local::<v8::External>::try_from(args.data()).unwrap();
+    let node_data = unsafe { &*(external.value() as *const NodeData) };
+    for i in (0..args.length()).rev() {
+        let arg = args.get(i);
+        let child = if let Some(node) = node_from_js(scope, arg, &node_data.registry) {
+            node
+        } else {
+            Node::text(arg.to_rust_string_lossy(scope))
+        };
+        mutation::prepend_child_ptr(&node_data.node, &child);
+    }
+    node_data.registry.mark_layout_dirty(&node_data.node);
+}
+
+fn replace_with(
+    scope: &mut v8::PinScope<'_, '_>,
+    args: v8::FunctionCallbackArguments,
+    mut _retval: v8::ReturnValue,
+) {
+    let external = v8::Local::<v8::External>::try_from(args.data()).unwrap();
+    let node_data = unsafe { &*(external.value() as *const NodeData) };
+    let parent = find_parent_for_node(node_data);
+    insert_relative_to_self(scope, args, false);
+    if let Some(parent) = parent {
+        mutation::remove_child_ptr(&parent, &node_data.node);
+        node_data.registry.mark_layout_dirty(&parent);
+    }
+}
+
+fn insert_relative_to_self(
+    scope: &mut v8::PinScope<'_, '_>,
+    args: v8::FunctionCallbackArguments,
+    after: bool,
+) {
+    let external = v8::Local::<v8::External>::try_from(args.data()).unwrap();
+    let node_data = unsafe { &*(external.value() as *const NodeData) };
+    let Some(parent) = find_parent_for_node(node_data) else {
+        return;
+    };
+    let reference = if after {
+        sibling_for_node(node_data, 1, false)
+    } else {
+        Some(node_data.node.clone())
+    };
+    for i in 0..args.length() {
+        let arg = args.get(i);
+        let child = if let Some(node) = node_from_js(scope, arg, &node_data.registry) {
+            node
+        } else {
+            Node::text(arg.to_rust_string_lossy(scope))
+        };
+        mutation::insert_before_ptr(&parent, &child, reference.as_ref());
+    }
+    node_data.registry.mark_layout_dirty(&parent);
+}
+
+fn insert_before_self(
+    scope: &mut v8::PinScope<'_, '_>,
+    args: v8::FunctionCallbackArguments,
+    mut _retval: v8::ReturnValue,
+) {
+    insert_relative_to_self(scope, args, false);
+}
+
+fn insert_after_self(
+    scope: &mut v8::PinScope<'_, '_>,
+    args: v8::FunctionCallbackArguments,
+    mut _retval: v8::ReturnValue,
+) {
+    insert_relative_to_self(scope, args, true);
+}
+
+fn parsed_html_nodes(html: &str) -> Vec<NodePtr> {
+    let parsed = crate::html::Parser::new(html).parse_document();
+    let mut bodies = Vec::new();
+    query::collect_by_tag(&parsed, "body", &mut bodies);
+    if let Some(body) = bodies.first() {
+        return child_nodes_of(body);
+    }
+    match &*parsed.borrow() {
+        Node::Document { children, .. } => children.clone(),
+        _ => Vec::new(),
+    }
+}
+
+fn insert_nodes_at_position(
+    scope: &mut v8::PinScope<'_, '_>,
+    node_data: &NodeData,
+    position: &str,
+    nodes: Vec<NodePtr>,
+) -> bool {
+    match position.to_ascii_lowercase().as_str() {
+        "beforebegin" => {
+            let Some(parent) = find_parent_for_node(node_data) else {
+                return false;
+            };
+            for node in nodes {
+                mutation::insert_before_ptr(&parent, &node, Some(&node_data.node));
+            }
+            node_data.registry.mark_layout_dirty(&parent);
+            true
+        }
+        "afterbegin" => {
+            for node in nodes.into_iter().rev() {
+                mutation::prepend_child_ptr(&node_data.node, &node);
+            }
+            node_data.registry.mark_layout_dirty(&node_data.node);
+            true
+        }
+        "beforeend" => {
+            for node in nodes {
+                mutation::append_child_ptr(&node_data.node, &node);
+            }
+            node_data.registry.mark_layout_dirty(&node_data.node);
+            true
+        }
+        "afterend" => {
+            let Some(parent) = find_parent_for_node(node_data) else {
+                return false;
+            };
+            let reference = sibling_for_node(node_data, 1, false);
+            for node in nodes {
+                mutation::insert_before_ptr(&parent, &node, reference.as_ref());
+            }
+            node_data.registry.mark_layout_dirty(&parent);
+            true
+        }
+        _ => {
+            let _ = scope;
+            false
+        }
+    }
+}
+
+fn insert_adjacent_html(
+    scope: &mut v8::PinScope<'_, '_>,
+    args: v8::FunctionCallbackArguments,
+    mut _retval: v8::ReturnValue,
+) {
+    let position = args.get(0).to_rust_string_lossy(scope);
+    let html = args.get(1).to_rust_string_lossy(scope);
+    let external = v8::Local::<v8::External>::try_from(args.data()).unwrap();
+    let node_data = unsafe { &*(external.value() as *const NodeData) };
+    insert_nodes_at_position(scope, node_data, &position, parsed_html_nodes(&html));
+}
+
+fn insert_adjacent_text(
+    scope: &mut v8::PinScope<'_, '_>,
+    args: v8::FunctionCallbackArguments,
+    mut _retval: v8::ReturnValue,
+) {
+    let position = args.get(0).to_rust_string_lossy(scope);
+    let text = args.get(1).to_rust_string_lossy(scope);
+    let external = v8::Local::<v8::External>::try_from(args.data()).unwrap();
+    let node_data = unsafe { &*(external.value() as *const NodeData) };
+    insert_nodes_at_position(scope, node_data, &position, vec![Node::text(text)]);
+}
+
+fn insert_adjacent_element(
+    scope: &mut v8::PinScope<'_, '_>,
+    args: v8::FunctionCallbackArguments,
+    mut retval: v8::ReturnValue,
+) {
+    let position = args.get(0).to_rust_string_lossy(scope);
+    let element_value = args.get(1);
+    let external = v8::Local::<v8::External>::try_from(args.data()).unwrap();
+    let node_data = unsafe { &*(external.value() as *const NodeData) };
+    let Some(element) = node_from_js(scope, element_value, &node_data.registry) else {
+        retval.set(v8::null(scope).into());
+        return;
+    };
+    if insert_nodes_at_position(scope, node_data, &position, vec![element]) {
+        retval.set(element_value);
+    } else {
+        retval.set(v8::null(scope).into());
+    }
+}
+
+fn normalize_node(
+    _scope: &mut v8::PinScope<'_, '_>,
+    _args: v8::FunctionCallbackArguments,
+    mut _retval: v8::ReturnValue,
+) {
+}
+
 fn get_elements_by_class_name(
     scope: &mut v8::PinScope<'_, '_>,
     args: v8::FunctionCallbackArguments,
@@ -1440,6 +1941,54 @@ fn get_elements_by_class_name(
     let found = query::query_all(&node_data.document, &selector, &node_data.node);
     let array = nodes_to_array(scope, found, node_data);
     retval.set(array.into());
+}
+
+fn get_last_element_child(
+    scope: &mut v8::PinScope<'_, '_>,
+    _name: v8::Local<v8::Name>,
+    args: v8::PropertyCallbackArguments,
+    mut retval: v8::ReturnValue,
+) {
+    let external = v8::Local::<v8::External>::try_from(args.data()).unwrap();
+    let node_data = unsafe { &*(external.value() as *const NodeData) };
+    let last = child_nodes_of(&node_data.node)
+        .into_iter()
+        .rev()
+        .find(|c| node_type(c) == 1);
+    match last {
+        Some(node) => {
+            let js_node = create_js_node(scope, node, &node_data.registry, &node_data.document);
+            retval.set(js_node.into());
+        }
+        None => retval.set(v8::null(scope).into()),
+    }
+}
+
+fn get_child_element_count(
+    scope: &mut v8::PinScope<'_, '_>,
+    _name: v8::Local<v8::Name>,
+    args: v8::PropertyCallbackArguments,
+    mut retval: v8::ReturnValue,
+) {
+    let external = v8::Local::<v8::External>::try_from(args.data()).unwrap();
+    let node_data = unsafe { &*(external.value() as *const NodeData) };
+    let count = child_nodes_of(&node_data.node)
+        .into_iter()
+        .filter(|c| node_type(c) == 1)
+        .count();
+    retval.set(v8::Integer::new(scope, count as i32).into());
+}
+
+fn get_is_connected(
+    scope: &mut v8::PinScope<'_, '_>,
+    _name: v8::Local<v8::Name>,
+    args: v8::PropertyCallbackArguments,
+    mut retval: v8::ReturnValue,
+) {
+    let external = v8::Local::<v8::External>::try_from(args.data()).unwrap();
+    let node_data = unsafe { &*(external.value() as *const NodeData) };
+    let connected = mutation::is_connected_to(&node_data.document, &node_data.node);
+    retval.set(v8::Boolean::new(scope, connected).into());
 }
 
 fn attach_shadow(
