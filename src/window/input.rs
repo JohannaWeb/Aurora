@@ -75,7 +75,7 @@ impl WindowInput {
 
             // Re-serialize the mutated legacy DOM to HTML, then reload it into blitz_doc.
             // This ensures JS mutations are rendered in the blitz-dom / blitz-paint path.
-            let html = crate::js_sm::serialize_outer_html(&self.dom);
+            let html = crate::dom::serialize_outer_html(&self.dom);
             self.blitz_doc = BlitzDocument::try_from_html(
                 &html,
                 self.base_url.as_deref(),

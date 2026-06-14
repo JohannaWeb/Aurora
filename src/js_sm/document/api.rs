@@ -1,11 +1,10 @@
 #![allow(unsafe_op_in_unsafe_fn)]
-use std::cell::RefCell;
 use std::ptr::NonNull;
 use std::rc::Rc;
 
 use mozjs::context::{JSContext, RawJSContext};
 use mozjs::jsapi::{CallArgs, HandleValueArray, JSObject, Value};
-use mozjs::jsval::{BooleanValue, NullValue, ObjectValue, UndefinedValue};
+use mozjs::jsval::{BooleanValue, DoubleValue, NullValue, ObjectValue, UndefinedValue};
 use mozjs::rooted;
 use mozjs::rust::wrappers2;
 
@@ -107,6 +106,7 @@ pub(in crate::js_sm) unsafe fn create_js_node(cx: &mut JSContext, node: NodePtr)
                 Some(get_text_content),
                 Some(set_text_content),
             );
+            define_getter(cx, obj_root.handle(), c"attributes", Some(get_attributes));
 
             // classList — stores __node_id__ so add/remove/toggle can mutate the Rust DOM
             let cl = make_class_list(cx, node_id, &class_val);
@@ -193,6 +193,19 @@ pub(in crate::js_sm) unsafe fn create_js_node(cx: &mut JSContext, node: NodePtr)
                 Some(element_attach_shadow),
                 1,
             );
+            // ShadyDOM (webcomponents-all-noPatch.js) wraps `attachShadow` and
+            // calls through to `this.node.__shady_attachShadow(...)` to get the
+            // "native" root it then shims. Without this alias the call throws
+            // a TypeError inside Polymer's `_attachDom`, which gets swallowed
+            // and silently aborts `ready()` before the element's template is
+            // attached.
+            define_fn(
+                cx,
+                obj_root.handle(),
+                c"__shady_attachShadow",
+                Some(element_attach_shadow),
+                1,
+            );
             set_prop_null(cx, obj_root.handle(), c"shadowRoot");
             define_fn(
                 cx,
@@ -215,7 +228,10 @@ pub(in crate::js_sm) unsafe fn create_js_node(cx: &mut JSContext, node: NodePtr)
             let global_raw = state.global;
             if !global_raw.is_null() {
                 rooted!(&in(cx) let global = global_raw);
-                rooted!(&in(cx) let node_val = ObjectValue(obj));
+                // Re-read through the root: a minor GC during the property
+                // installs above may have moved the object, leaving the raw
+                // `obj` copy stale (the rooted slot is what GC updates).
+                rooted!(&in(cx) let node_val = ObjectValue(obj_root.get()));
                 call_named_global_fn(
                     cx,
                     global.handle(),
@@ -242,7 +258,8 @@ pub(in crate::js_sm) unsafe fn create_js_node(cx: &mut JSContext, node: NodePtr)
                 cx,
                 global.handle(),
                 c"__aurora_install_media_element__",
-                ObjectValue(obj),
+                // obj_root.get(), not obj: the raw copy may be stale post-GC.
+                ObjectValue(obj_root.get()),
             );
         }
     } else if node_type == 3 {
@@ -301,6 +318,27 @@ pub(in crate::js_sm) unsafe fn create_js_node(cx: &mut JSContext, node: NodePtr)
         cx,
         obj_root.handle(),
         c"dispatchEvent",
+        Some(return_true_cb),
+        1,
+    );
+    define_fn(
+        cx,
+        obj_root.handle(),
+        c"__shady_addEventListener",
+        Some(node_add_event_listener),
+        3,
+    );
+    define_fn(
+        cx,
+        obj_root.handle(),
+        c"__shady_removeEventListener",
+        Some(node_remove_event_listener),
+        3,
+    );
+    define_fn(
+        cx,
+        obj_root.handle(),
+        c"__shady_dispatchEvent",
         Some(return_true_cb),
         1,
     );
@@ -520,10 +558,15 @@ pub(in crate::js_sm) unsafe fn create_js_node(cx: &mut JSContext, node: NodePtr)
         Some(get_last_element_child),
     );
     set_prop_null(cx, obj_root.handle(), c"offsetParent");
+    // The hundreds of property installs above allocate; a minor GC moving the
+    // nursery-allocated wrapper updates the rooted slot but not the raw `obj`
+    // copy. Everything from here on must go through obj_root, or SetPrototype
+    // reads a dead object's shape and segfaults (seen live on youtube.com).
+    let obj = obj_root.get();
     assign_dom_wrapper_prototype(cx, obj, node_type, &tag_name);
     state.registry.cache_js_wrapper(node_id, obj);
 
-    obj
+    obj_root.get()
 }
 
 unsafe fn assign_dom_wrapper_prototype(
@@ -620,7 +663,8 @@ pub(super) unsafe fn make_class_list(
     define_fn(cx, obj_root.handle(), c"remove", Some(class_list_remove), 1);
     define_fn(cx, obj_root.handle(), c"toggle", Some(class_list_toggle), 2);
     define_fn(cx, obj_root.handle(), c"replace", Some(noop_cb), 2);
-    obj
+    // Through the root, not the raw copy — the installs above can GC-move it.
+    obj_root.get()
 }
 
 fn collect_text_content(node: &NodePtr) -> String {
@@ -1252,7 +1296,7 @@ unsafe extern "C" fn node_return_first_arg_or_this(
 /// and shadow DOM merge) — but for a custom-element-heavy site like YouTube,
 /// "the content shows up, just not perfectly isolated" beats "nothing renders
 /// because attachShadow doesn't exist."
-unsafe extern "C" fn element_attach_shadow(
+pub(in crate::js_sm) unsafe extern "C" fn element_attach_shadow(
     cx: *mut RawJSContext,
     argc: u32,
     vp: *mut Value,
@@ -1302,6 +1346,13 @@ unsafe extern "C" fn element_attach_shadow(
     set_prop_str(&mut cx, sr_root.handle(), c"nodeName", "#document-fragment");
     set_prop_str(&mut cx, sr_root.handle(), c"mode", &mode);
     set_prop_bool(&mut cx, sr_root.handle(), c"delegatesFocus", false);
+    // ShadyDOM's attachShadow wrapper returns its own root object `k` and
+    // hybrid-mode callers (Polymer's `_attachDom`) do `k.shadowRoot.appendChild`,
+    // expecting `k` to expose the "native" root it wraps. Self-reference so
+    // that path lands on the same host-proxying object either way.
+    // sr_root.get(), not sr: the define_fn calls above allocate, and a minor
+    // GC moving the nursery-allocated object leaves the raw copy stale.
+    set_prop_obj(&mut cx, sr_root.handle(), c"shadowRoot", sr_root.get());
     define_accessor(
         &mut cx,
         sr_root.handle(),
@@ -1397,10 +1448,17 @@ unsafe extern "C" fn element_attach_shadow(
     if host_val.get().is_object() {
         let host_obj = host_val.get().to_object_or_null();
         rooted!(&in(cx) let host_root = host_obj);
-        set_prop_obj(&mut cx, host_root.handle(), c"shadowRoot", sr);
+        set_prop_obj(&mut cx, host_root.handle(), c"shadowRoot", sr_root.get());
+        // ShadyDOM (noPatch mode, `inUse=true`) wraps every node and exposes
+        // its OWN `attachShadow`/`shadowRoot` that proxy to
+        // `node.__shady_attachShadow`/`node.__shady_shadowRoot` rather than
+        // the plain `shadowRoot` property — without this, `wrap(host).shadowRoot`
+        // stays undefined even after `__shady_attachShadow` runs, and Polymer's
+        // `_attachDom` throws on `k.shadowRoot.appendChild`.
+        set_prop_obj(&mut cx, host_root.handle(), c"__shady_shadowRoot", sr_root.get());
     }
 
-    args.rval().set(ObjectValue(sr));
+    args.rval().set(ObjectValue(sr_root.get()));
     true
 }
 
@@ -1601,6 +1659,381 @@ unsafe extern "C" fn node_has_attributes(cx: *mut RawJSContext, argc: u32, vp: *
         |node| matches!(&*node.borrow(), Node::Element(el) if !el.attributes.is_empty()),
     );
     args.rval().set(BooleanValue(has));
+    true
+}
+
+unsafe fn make_attr_object(
+    cx: &mut JSContext,
+    owner_node_id: u32,
+    name: &str,
+    value: &str,
+) -> *mut JSObject {
+    let obj = new_plain_object(cx);
+    rooted!(&in(cx) let obj_root = obj);
+    set_prop_i32(
+        cx,
+        obj_root.handle(),
+        c"__owner_node_id__",
+        owner_node_id as i32,
+    );
+    set_prop_str(cx, obj_root.handle(), c"__attr_name__", name);
+    set_prop_str(cx, obj_root.handle(), c"name", name);
+    set_prop_str(cx, obj_root.handle(), c"nodeName", name);
+    set_prop_str(cx, obj_root.handle(), c"localName", name);
+    define_accessor(
+        cx,
+        obj_root.handle(),
+        c"value",
+        Some(attr_get_value),
+        Some(attr_set_value),
+    );
+    define_accessor(
+        cx,
+        obj_root.handle(),
+        c"nodeValue",
+        Some(attr_get_value),
+        Some(attr_set_value),
+    );
+    set_prop_str(cx, obj_root.handle(), c"textContent", value);
+    obj
+}
+
+unsafe fn attr_owner_and_name(cx: &mut JSContext, obj: *mut JSObject) -> Option<(u32, String)> {
+    if obj.is_null() {
+        return None;
+    }
+    rooted!(&in(cx) let obj_root = obj);
+    let owner_node_id = get_prop_i32(cx, obj_root.handle(), c"__owner_node_id__");
+    let attr_name = get_prop_string(cx, obj_root.handle(), c"__attr_name__")?;
+    if owner_node_id <= 0 {
+        None
+    } else {
+        Some((owner_node_id as u32, attr_name))
+    }
+}
+
+unsafe fn map_owner_id_from_this(cx: &mut JSContext, args: &CallArgs) -> Option<u32> {
+    let this = args.thisv().get();
+    if !this.is_object() {
+        return None;
+    }
+    let obj = this.to_object_or_null();
+    if obj.is_null() {
+        return None;
+    }
+    rooted!(&in(cx) let obj_root = obj);
+    let owner_node_id = get_prop_i32(cx, obj_root.handle(), c"__owner_node_id__");
+    if owner_node_id <= 0 {
+        None
+    } else {
+        Some(owner_node_id as u32)
+    }
+}
+
+unsafe fn attr_entries_for_node(
+    state: &crate::js_sm::state::SmState,
+    node_id: u32,
+) -> Vec<(String, String)> {
+    state
+        .registry
+        .lookup(node_id)
+        .and_then(|node| match &*node.borrow() {
+            Node::Element(el) => Some(
+                el.attributes
+                    .iter()
+                    .map(|(name, value)| (name.clone(), value.clone()))
+                    .collect(),
+            ),
+            _ => None,
+        })
+        .unwrap_or_default()
+}
+
+unsafe fn make_named_node_map(cx: &mut JSContext, owner_node_id: u32) -> *mut JSObject {
+    let obj = new_plain_object(cx);
+    rooted!(&in(cx) let obj_root = obj);
+    set_prop_i32(
+        cx,
+        obj_root.handle(),
+        c"__owner_node_id__",
+        owner_node_id as i32,
+    );
+    define_getter(
+        cx,
+        obj_root.handle(),
+        c"length",
+        Some(named_node_map_length),
+    );
+    define_fn(cx, obj_root.handle(), c"item", Some(named_node_map_item), 1);
+    define_fn(
+        cx,
+        obj_root.handle(),
+        c"getNamedItem",
+        Some(named_node_map_get_named_item),
+        1,
+    );
+    define_fn(
+        cx,
+        obj_root.handle(),
+        c"setNamedItem",
+        Some(named_node_map_set_named_item),
+        1,
+    );
+    define_fn(
+        cx,
+        obj_root.handle(),
+        c"removeNamedItem",
+        Some(named_node_map_remove_named_item),
+        1,
+    );
+
+    let entries = {
+        let state = &*get_state_ptr(cx);
+        attr_entries_for_node(state, owner_node_id)
+    };
+    for (idx, (name, value)) in entries.into_iter().enumerate() {
+        let attr_obj = make_attr_object(cx, owner_node_id, &name, &value);
+        rooted!(&in(cx) let attr_val = ObjectValue(attr_obj));
+        let prop_name = std::ffi::CString::new(idx.to_string()).unwrap();
+        wrappers2::JS_SetProperty(cx, obj_root.handle(), prop_name.as_ptr(), attr_val.handle());
+    }
+
+    obj
+}
+
+unsafe extern "C" fn get_attributes(cx: *mut RawJSContext, argc: u32, vp: *mut Value) -> bool {
+    let mut cx = JSContext::from_ptr(NonNull::new(cx).unwrap());
+    let args = CallArgs::from_vp(vp, argc);
+    let node_id = match node_id_from_this(&mut cx, &args) {
+        Some(id) => id,
+        None => {
+            args.rval().set(NullValue());
+            return true;
+        }
+    };
+    let obj = make_named_node_map(&mut cx, node_id);
+    args.rval().set(ObjectValue(obj));
+    true
+}
+
+unsafe extern "C" fn attr_get_value(cx: *mut RawJSContext, argc: u32, vp: *mut Value) -> bool {
+    let mut cx = JSContext::from_ptr(NonNull::new(cx).unwrap());
+    let args = CallArgs::from_vp(vp, argc);
+    let this = args.thisv().get();
+    let Some((owner_node_id, attr_name)) = attr_owner_and_name(&mut cx, this.to_object_or_null())
+    else {
+        args.rval().set(UndefinedValue());
+        return true;
+    };
+
+    let value = {
+        let state = &*get_state_ptr(&cx);
+        state
+            .registry
+            .lookup(owner_node_id)
+            .and_then(|node| match &*node.borrow() {
+                Node::Element(el) => el.attributes.get(&attr_name).cloned(),
+                _ => None,
+            })
+    };
+    match value {
+        Some(value) => {
+            let js_str = new_js_string(&mut cx, &value);
+            args.rval().set(if js_str.is_null() {
+                UndefinedValue()
+            } else {
+                mozjs::jsval::StringValue(&*js_str)
+            });
+        }
+        None => args.rval().set(NullValue()),
+    }
+    true
+}
+
+unsafe extern "C" fn attr_set_value(cx: *mut RawJSContext, argc: u32, vp: *mut Value) -> bool {
+    let mut cx = JSContext::from_ptr(NonNull::new(cx).unwrap());
+    let args = CallArgs::from_vp(vp, argc);
+    let this = args.thisv().get();
+    let Some((owner_node_id, attr_name)) = attr_owner_and_name(&mut cx, this.to_object_or_null())
+    else {
+        args.rval().set(UndefinedValue());
+        return true;
+    };
+    let value = arg_to_string(&mut cx, &args, 0);
+    let state = &mut *get_state_ptr(&cx);
+    if let Some(node) = state.registry.lookup(owner_node_id) {
+        if let Node::Element(el) = &mut *node.borrow_mut() {
+            el.attributes.insert(attr_name.clone(), value);
+            state.registry.mark_needs_reflow();
+            queue_attribute_mutation(state, owner_node_id, &attr_name);
+        }
+    }
+    args.rval().set(UndefinedValue());
+    true
+}
+
+unsafe extern "C" fn named_node_map_length(
+    cx: *mut RawJSContext,
+    argc: u32,
+    vp: *mut Value,
+) -> bool {
+    let mut cx = JSContext::from_ptr(NonNull::new(cx).unwrap());
+    let args = CallArgs::from_vp(vp, argc);
+    let len = map_owner_id_from_this(&mut cx, &args).map_or(0, |node_id| {
+        let state = &*get_state_ptr(&cx);
+        attr_entries_for_node(state, node_id).len()
+    });
+    args.rval().set(DoubleValue(len as f64));
+    true
+}
+
+unsafe extern "C" fn named_node_map_item(cx: *mut RawJSContext, argc: u32, vp: *mut Value) -> bool {
+    let mut cx = JSContext::from_ptr(NonNull::new(cx).unwrap());
+    let args = CallArgs::from_vp(vp, argc);
+    let idx = if argc > 0 && args.get(0).get().is_number() {
+        args.get(0).get().to_number() as usize
+    } else {
+        0
+    };
+    let Some(owner_node_id) = map_owner_id_from_this(&mut cx, &args) else {
+        args.rval().set(NullValue());
+        return true;
+    };
+    let attr = {
+        let state = &*get_state_ptr(&cx);
+        attr_entries_for_node(state, owner_node_id)
+            .into_iter()
+            .nth(idx)
+    };
+    match attr {
+        Some((name, value)) => {
+            let obj = make_attr_object(&mut cx, owner_node_id, &name, &value);
+            args.rval().set(ObjectValue(obj));
+        }
+        None => args.rval().set(NullValue()),
+    }
+    true
+}
+
+unsafe extern "C" fn named_node_map_get_named_item(
+    cx: *mut RawJSContext,
+    argc: u32,
+    vp: *mut Value,
+) -> bool {
+    let mut cx = JSContext::from_ptr(NonNull::new(cx).unwrap());
+    let args = CallArgs::from_vp(vp, argc);
+    let name = arg_to_string(&mut cx, &args, 0);
+    let Some(owner_node_id) = map_owner_id_from_this(&mut cx, &args) else {
+        args.rval().set(NullValue());
+        return true;
+    };
+    let value = {
+        let state = &*get_state_ptr(&cx);
+        state
+            .registry
+            .lookup(owner_node_id)
+            .and_then(|node| match &*node.borrow() {
+                Node::Element(el) => el.attributes.get(&name).cloned(),
+                _ => None,
+            })
+    };
+    match value {
+        Some(value) => {
+            let obj = make_attr_object(&mut cx, owner_node_id, &name, &value);
+            args.rval().set(ObjectValue(obj));
+        }
+        None => args.rval().set(NullValue()),
+    }
+    true
+}
+
+unsafe extern "C" fn named_node_map_set_named_item(
+    cx: *mut RawJSContext,
+    argc: u32,
+    vp: *mut Value,
+) -> bool {
+    let mut cx = JSContext::from_ptr(NonNull::new(cx).unwrap());
+    let args = CallArgs::from_vp(vp, argc);
+    let Some(owner_node_id) = map_owner_id_from_this(&mut cx, &args) else {
+        args.rval().set(NullValue());
+        return true;
+    };
+    if argc == 0 || !args.get(0).get().is_object() {
+        args.rval().set(NullValue());
+        return true;
+    }
+    let attr_obj = args.get(0).get().to_object_or_null();
+    if attr_obj.is_null() {
+        args.rval().set(NullValue());
+        return true;
+    }
+    rooted!(&in(cx) let attr_root = attr_obj);
+    let name = get_prop_string(&mut cx, attr_root.handle(), c"name")
+        .or_else(|| get_prop_string(&mut cx, attr_root.handle(), c"nodeName"))
+        .unwrap_or_default();
+    if name.is_empty() {
+        args.rval().set(NullValue());
+        return true;
+    }
+    let value = get_prop_string(&mut cx, attr_root.handle(), c"value")
+        .or_else(|| get_prop_string(&mut cx, attr_root.handle(), c"nodeValue"))
+        .unwrap_or_default();
+
+    let old_value = {
+        let state = &mut *get_state_ptr(&cx);
+        let mut old_value = None;
+        if let Some(node) = state.registry.lookup(owner_node_id) {
+            if let Node::Element(el) = &mut *node.borrow_mut() {
+                old_value = el.attributes.insert(name.clone(), value);
+                state.registry.mark_needs_reflow();
+                queue_attribute_mutation(state, owner_node_id, &name);
+            }
+        }
+        old_value
+    };
+    match old_value {
+        Some(old_value) => {
+            let obj = make_attr_object(&mut cx, owner_node_id, &name, &old_value);
+            args.rval().set(ObjectValue(obj));
+        }
+        None => args.rval().set(NullValue()),
+    }
+    true
+}
+
+unsafe extern "C" fn named_node_map_remove_named_item(
+    cx: *mut RawJSContext,
+    argc: u32,
+    vp: *mut Value,
+) -> bool {
+    let mut cx = JSContext::from_ptr(NonNull::new(cx).unwrap());
+    let args = CallArgs::from_vp(vp, argc);
+    let name = arg_to_string(&mut cx, &args, 0);
+    let Some(owner_node_id) = map_owner_id_from_this(&mut cx, &args) else {
+        args.rval().set(NullValue());
+        return true;
+    };
+    let old_value = {
+        let state = &mut *get_state_ptr(&cx);
+        let mut old_value = None;
+        if let Some(node) = state.registry.lookup(owner_node_id) {
+            if let Node::Element(el) = &mut *node.borrow_mut() {
+                old_value = el.attributes.remove(&name);
+                if old_value.is_some() {
+                    state.registry.mark_needs_reflow();
+                    queue_attribute_mutation(state, owner_node_id, &name);
+                }
+            }
+        }
+        old_value
+    };
+    match old_value {
+        Some(old_value) => {
+            let obj = make_attr_object(&mut cx, owner_node_id, &name, &old_value);
+            args.rval().set(ObjectValue(obj));
+        }
+        None => args.rval().set(NullValue()),
+    }
     true
 }
 
@@ -3189,12 +3622,12 @@ unsafe extern "C" fn get_inner_html(cx: *mut RawJSContext, argc: u32, vp: *mut V
                     children
                         .unwrap_or_else(|| el.children.clone())
                         .iter()
-                        .map(|c| crate::js_sm::serialization::serialize_outer_html(c))
+                        .map(|c| crate::dom::serialize_outer_html(c))
                         .collect::<String>()
                 }
                 Node::Document { children, .. } => children
                     .iter()
-                    .map(|c| crate::js_sm::serialization::serialize_outer_html(c))
+                    .map(|c| crate::dom::serialize_outer_html(c))
                     .collect::<String>(),
                 Node::Text(t) => t.clone(),
             })
@@ -3275,7 +3708,7 @@ unsafe extern "C" fn get_outer_html(cx: *mut RawJSContext, argc: u32, vp: *mut V
         state
             .registry
             .lookup(node_id)
-            .map(|n| crate::js_sm::serialization::serialize_outer_html(&n))
+            .map(|n| crate::dom::serialize_outer_html(&n))
             .unwrap_or_default()
     };
     let js_str = new_js_string(&mut cx, &html);

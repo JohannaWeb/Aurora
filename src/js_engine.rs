@@ -17,13 +17,26 @@ pub(crate) enum EngineKind {
 
 impl EngineKind {
     /// Engine selection via `AURORA_JS_ENGINE` (`spidermonkey`/`sm`, `boa`,
-    /// `v8`). Unset or unrecognized values fall back to SpiderMonkey.
+    /// `v8`). Unset or unrecognized values fall back to whichever of
+    /// SpiderMonkey/V8 is compiled in (they're mutually exclusive features).
     pub(crate) fn from_env() -> Self {
         match std::env::var("AURORA_JS_ENGINE").as_deref() {
             Ok("boa") => Self::Boa,
             Ok("v8") => Self::V8,
-            _ => Self::SpiderMonkey,
+            #[cfg(feature = "engine-spidermonkey")]
+            Ok("spidermonkey" | "sm") => Self::SpiderMonkey,
+            _ => Self::default_engine(),
         }
+    }
+
+    #[cfg(feature = "engine-spidermonkey")]
+    fn default_engine() -> Self {
+        Self::SpiderMonkey
+    }
+
+    #[cfg(not(feature = "engine-spidermonkey"))]
+    fn default_engine() -> Self {
+        Self::V8
     }
 }
 
@@ -35,7 +48,16 @@ pub(crate) fn create_runtime(
     dom: &NodePtr,
 ) -> Result<Box<dyn JsRuntime>, String> {
     match kind {
-        EngineKind::SpiderMonkey => Ok(Box::new(crate::js_sm::SmRuntime::new(dom.clone()))),
+        EngineKind::SpiderMonkey => {
+            #[cfg(feature = "engine-spidermonkey")]
+            {
+                Ok(Box::new(crate::js_sm::SmRuntime::new(dom.clone())))
+            }
+            #[cfg(not(feature = "engine-spidermonkey"))]
+            {
+                Err("SpiderMonkey backend not compiled in (build with --features engine-spidermonkey)".to_string())
+            }
+        }
         EngineKind::Boa => {
             #[cfg(feature = "engine-boa")]
             {
@@ -80,6 +102,13 @@ pub(crate) trait JsRuntime {
 
     fn tick(&mut self, now: Instant) -> bool;
     fn drain_animation_frame_callbacks(&mut self, now: Instant) -> bool;
+
+    /// Deliver any pending `MutationObserver` records to their callbacks.
+    /// Returns true if any were delivered (so the event-loop pump keeps going).
+    /// Backends that drain observers internally (or lack them) keep the default.
+    fn deliver_mutation_records(&mut self) -> bool {
+        false
+    }
 
     fn dispatch_event(&mut self, node: &NodePtr, event_type: &str) -> bool;
     fn fire_dom_content_loaded(&mut self);

@@ -9,6 +9,7 @@ use mozjs::jsval::{
 use mozjs::rooted;
 use mozjs::rust::wrappers2;
 
+use crate::js_sm::document::element_attach_shadow;
 use crate::js_sm::mutation_observer;
 use crate::js_sm::state::SmState;
 use crate::js_sm::utils::*;
@@ -166,16 +167,9 @@ pub(in crate::js_sm) unsafe fn install_browser_apis(
         1,
     );
 
-    // URL constructor stub
-    define_ctor(cx, global, c"URL", Some(url_ctor), 2);
-    // URLSearchParams stub
-    define_ctor(
-        cx,
-        global,
-        c"URLSearchParams",
-        Some(url_search_params_ctor),
-        1,
-    );
+    // URL / URLSearchParams — small JS implementation with real parsing and
+    // relative URL resolution. YouTube reads these heavily during bootstrap.
+    install_url_polyfill(cx, global);
     install_abort_signal(cx, global);
     // AbortController stub
     define_ctor(
@@ -564,6 +558,13 @@ unsafe fn install_element_methods(cx: &mut JSContext, proto: mozjs::gc::Handle<*
     define_fn(cx, proto, c"prepend", Some(noop), 1);
     define_fn(cx, proto, c"before", Some(noop), 1);
     define_fn(cx, proto, c"after", Some(noop), 1);
+    define_fn(
+        cx,
+        proto,
+        c"__shady_attachShadow",
+        Some(element_attach_shadow),
+        1,
+    );
 }
 
 unsafe extern "C" fn noop(_cx: *mut RawJSContext, _argc: u32, vp: *mut Value) -> bool {
@@ -1204,773 +1205,28 @@ unsafe fn install_youtube_polyfills(cx: &mut JSContext, global: mozjs::gc::Handl
         cx,
         global,
         c"event-constructors",
-        r#"
-        (function() {
-            globalThis.Image = function Image(width, height) {
-                this.src = ''; this.width = width || 0; this.height = height || 0;
-                this.naturalWidth = 0; this.naturalHeight = 0; this.complete = false;
-                this.onload = null; this.onerror = null; this.crossOrigin = null;
-                this.decoding = 'auto'; this.loading = 'eager';
-                this.addEventListener = function(){}; this.removeEventListener = function(){};
-                this.decode = function(){ return Promise.resolve(); };
-            };
-            globalThis.Image.prototype = Object.create(
-                (typeof HTMLImageElement !== 'undefined') ? HTMLImageElement.prototype : Object.prototype
-            );
-
-            globalThis.Event = function Event(type, init) {
-                var obj = (this instanceof Event) ? this : {};
-                init = init || {};
-                obj.type = type || '';
-                obj.bubbles = !!(init.bubbles);
-                obj.cancelable = !!(init.cancelable);
-                obj.defaultPrevented = false;
-                obj.isTrusted = false;
-                obj.timeStamp = 0;
-                obj.target = null; obj.currentTarget = null;
-                obj.stopPropagation = function(){};
-                obj.stopImmediatePropagation = function(){};
-                obj.preventDefault = function(){ obj.defaultPrevented = true; };
-                obj.composedPath = function(){ return []; };
-                if (!(this instanceof Event)) return obj;
-            };
-
-            globalThis.CustomEvent = function CustomEvent(type, init) {
-                globalThis.Event.call(this, type, init);
-                this.detail = (init && init.detail !== undefined) ? init.detail : null;
-            };
-            globalThis.CustomEvent.prototype = Object.create(globalThis.Event.prototype);
-            globalThis.CustomEvent.prototype.constructor = globalThis.CustomEvent;
-
-            globalThis.ErrorEvent = function ErrorEvent(type, init) {
-                globalThis.Event.call(this, type, init);
-                init = init || {};
-                this.message = init.message || ''; this.error = init.error || null;
-            };
-            globalThis.ErrorEvent.prototype = Object.create(globalThis.Event.prototype);
-
-            globalThis.MessageEvent = function MessageEvent(type, init) {
-                globalThis.Event.call(this, type, init);
-                init = init || {};
-                this.data = init.data !== undefined ? init.data : null;
-                this.origin = init.origin || ''; this.source = init.source || null;
-            };
-            globalThis.MessageEvent.prototype = Object.create(globalThis.Event.prototype);
-
-            globalThis.MessagePort = function MessagePort() {};
-            globalThis.MessagePort.prototype.postMessage = function(data) {
-                var target = this.__peer__;
-                if (!target || target.__closed__) return;
-                queueMicrotask(function() {
-                    if (target.__closed__) return;
-                    var event = new MessageEvent('message', { data: data, origin: '', source: null });
-                    event.target = target;
-                    event.currentTarget = target;
-                    var handler = target.onmessage;
-                    if (typeof handler === 'function') {
-                        try { handler.call(target, event); } catch (e) { setTimeout(function(){ throw e; }, 0); }
-                    }
-                    var listeners = target.__listeners || [];
-                    for (var i = 0; i < listeners.length; i++) {
-                        try { listeners[i].call(target, event); } catch (e) { setTimeout(function(){ throw e; }, 0); }
-                    }
-                });
-            };
-            globalThis.MessagePort.prototype.start = function() {};
-            globalThis.MessagePort.prototype.close = function() {
-                this.__closed__ = true;
-                this.onmessage = null;
-                this.__listeners = [];
-                this.__peer__ = null;
-            };
-            globalThis.MessagePort.prototype.addEventListener = function(type, listener) {
-                if (type !== 'message' || typeof listener !== 'function') return;
-                if (!this.__listeners) this.__listeners = [];
-                this.__listeners.push(listener);
-            };
-            globalThis.MessagePort.prototype.removeEventListener = function(type, listener) {
-                if (type !== 'message' || !this.__listeners) return;
-                this.__listeners = this.__listeners.filter(function(fn) { return fn !== listener; });
-            };
-            globalThis.MessagePort.prototype.constructor = globalThis.MessagePort;
-
-            globalThis.MessageChannel = function MessageChannel() {
-                var port1 = Object.create(globalThis.MessagePort.prototype);
-                var port2 = Object.create(globalThis.MessagePort.prototype);
-                port1.__peer__ = port2;
-                port2.__peer__ = port1;
-                port1.onmessage = null;
-                port2.onmessage = null;
-                port1.__listeners = [];
-                port2.__listeners = [];
-                port1.__closed__ = false;
-                port2.__closed__ = false;
-                this.port1 = port1;
-                this.port2 = port2;
-            };
-            globalThis.MessageChannel.prototype.constructor = globalThis.MessageChannel;
-
-            globalThis.PromiseRejectionEvent = function PromiseRejectionEvent(type, init) {
-                globalThis.Event.call(this, type, init);
-                init = init || {};
-                this.promise = init.promise || null; this.reason = init.reason;
-            };
-            globalThis.PromiseRejectionEvent.prototype = Object.create(globalThis.Event.prototype);
-        })();
-    "#,
+        include_str!("../../js_polyfills/event_constructors.js"),
     );
 
     eval_bootstrap(
         cx,
         global,
         c"trusted-types",
-        r#"
-        (function() {
-            function makeTrusted(val) { return { toString: function(){ return val; } }; }
-            globalThis.trustedTypes = {
-                createPolicy: function(name, rules) {
-                    return {
-                        name: name,
-                        createHTML: function(s) { return makeTrusted(rules && rules.createHTML ? rules.createHTML(s) : s); },
-                        createScript: function(s) { return makeTrusted(rules && rules.createScript ? rules.createScript(s) : s); },
-                        createScriptURL: function(s) { return makeTrusted(rules && rules.createScriptURL ? rules.createScriptURL(s) : s); }
-                    };
-                },
-                getAttributeType: function() { return null; },
-                getPropertyType: function() { return null; },
-                isHTML: function(v) { return v && typeof v === 'object' && 'toString' in v; },
-                isScript: function(v) { return v && typeof v === 'object' && 'toString' in v; },
-                isScriptURL: function(v) { return v && typeof v === 'object' && 'toString' in v; },
-                emptyHTML: makeTrusted(''),
-                emptyScript: makeTrusted(''),
-                defaultPolicy: null
-            };
-        })();
-    "#,
+        include_str!("../../js_polyfills/trusted_types.js"),
     );
 
     eval_bootstrap(
         cx,
         global,
         c"custom-elements",
-        r#"
-        (function() {
-            var registry = {};
-            var pending = Object.create(null);
-            var domModules = Object.create(null);
-            var patchedCreateElement = false;
-            var originalCreateElement = null;
-            var hasOwn = Object.prototype.hasOwnProperty;
-
-            // Native construction-stack semantics for HTMLElement. ES5
-            // bundles (YouTube kevlar) wrap HTMLElement with Polymer's
-            // custom-elements-es5-adapter, whose constructors run
-            // `Reflect.construct(HTMLElement, [], this.constructor)`. That
-            // call must return the element currently being upgraded, and a
-            // direct `new MyElement()` must produce a real DOM element with
-            // the subclass prototype — not a plain object.
-            var upgradeStack = [];
-            (function patchHTMLElementForUpgrades() {
-                var Native = globalThis.HTMLElement;
-                if (typeof Native !== 'function') return;
-                function PatchedHTMLElement() {
-                    if (upgradeStack.length) {
-                        return upgradeStack[upgradeStack.length - 1];
-                    }
-                    var ctor = (typeof new.target === 'function' ? new.target : null) ||
-                        (this && this.constructor);
-                    var definition = ctor && ctor.__aurora_ce_definition__;
-                    if (definition && definition.name) {
-                        ensureCreateElementPatch();
-                        if (originalCreateElement) {
-                            var el = originalCreateElement(definition.name);
-                            try { Object.setPrototypeOf(el, ctor.prototype); } catch (e) {}
-                            el.__ce_upgraded__ = true;
-                            attachDefinitionMetadata(el, definition);
-                            return el;
-                        }
-                    }
-                    if (new.target) {
-                        return this && typeof this === 'object'
-                            ? this
-                            : Object.create((ctor && ctor.prototype) || PatchedHTMLElement.prototype);
-                    }
-                    // Plain `HTMLElement.call(this)` outside an upgrade:
-                    // behave like the previous native (return undefined so
-                    // `... || this` keeps the caller's element).
-                    return undefined;
-                }
-                PatchedHTMLElement.prototype = Native.prototype;
-                try {
-                    Object.defineProperty(PatchedHTMLElement.prototype, 'constructor', {
-                        value: PatchedHTMLElement,
-                        configurable: true,
-                        writable: true
-                    });
-                } catch (e) {}
-                try { Object.setPrototypeOf(PatchedHTMLElement, Native); } catch (e) {}
-                globalThis.HTMLElement = PatchedHTMLElement;
-            })();
-            function trace(msg) {
-                console.log('[yt-life] ' + msg);
-            }
-            function shouldTraceName(name) {
-                return true;
-            }
-            function traceError(where, error) {
-                var message = error && (error.name || 'Error') + ': ' + (error.message || '');
-                var stack = error && error.stack ? ('\n' + error.stack) : '';
-                console.log('[yt-life] ERROR ' + where + ': ' + (message || String(error)) + stack);
-            }
-
-            function debugProbeName(name) {
-                return name === 'ytd-app' || name === 'ytd-masthead';
-            }
-
-            function shouldTrack(name) {
-                return !!name && name.indexOf('-') >= 0;
-            }
-
-            function getElementId(el) {
-                if (!el) return '';
-                try {
-                    if (typeof el.id === 'string' && el.id) return el.id;
-                } catch (e) {}
-                try {
-                    if (typeof el.getAttribute === 'function') {
-                        return el.getAttribute('id') || '';
-                    }
-                } catch (e) {}
-                return '';
-            }
-
-            function findTemplateForDomModule(el) {
-                if (!el) return null;
-                try {
-                    if (el.__aurora_template__) return el.__aurora_template__;
-                } catch (e) {}
-
-                var tpl = null;
-                try {
-                    if (typeof el.querySelector === 'function') {
-                        tpl = el.querySelector('template');
-                    }
-                } catch (e) {}
-
-                if (!tpl) {
-                    try {
-                        if (el.content && el.content.nodeType === 11) {
-                            tpl = el.content;
-                        }
-                    } catch (e) {}
-                }
-
-                if (tpl) {
-                    try { el.__aurora_template__ = tpl; } catch (e) {}
-                }
-                return tpl;
-            }
-
-            function registerDomModule(el) {
-                var id = getElementId(el);
-                if (!id) return null;
-                var tpl = findTemplateForDomModule(el);
-                if (!tpl) return null;
-                domModules[id] = tpl;
-                if (globalThis.__aurora_debug_youtube__ && debugProbeName(id)) {
-                    trace('dom-module registered ' + id +
-                        ' template=' + (!!tpl) +
-                        ' content=' + (!!(tpl && tpl.content)) +
-                        ' contentKids=' + (tpl && tpl.content && tpl.content.childNodes ? tpl.content.childNodes.length : '?'));
-                }
-                return tpl;
-            }
-
-            var probedTemplateBuild = false;
-            function probeCustomElementState(name, el, ctor) {
-                if (!globalThis.__aurora_debug_youtube__ || !debugProbeName(name)) return;
-                if (!probedTemplateBuild) {
-                    probedTemplateBuild = true;
-                    try {
-                        var ptpl = document.createElement('template');
-                        ptpl.innerHTML = '<div><span>probe</span></div>';
-                        var pshared = document.createElement('template');
-                        var pclone = pshared.content.cloneNode(true);
-                        ptpl.content.insertBefore(pclone, ptpl.content.firstChild);
-                        trace('template-build-smoke kids=' +
-                            (ptpl.content && ptpl.content.childNodes ? ptpl.content.childNodes.length : '?'));
-                    } catch (e) { traceError('template-build-smoke', e); }
-                }
-                try {
-                    var app = el || (typeof document !== 'undefined' && document.querySelector
-                        ? document.querySelector(name)
-                        : null);
-                    var regCtor = ctor || (globalThis.customElements && typeof customElements.get === 'function'
-                        ? customElements.get(name)
-                        : null);
-                    var mod = typeof document !== 'undefined' && document.querySelector
-                        ? document.querySelector('dom-module#' + name)
-                        : null;
-                    var modTemplate = null;
-                    try {
-                        modTemplate = mod && typeof mod.querySelector === 'function'
-                            ? mod.querySelector('template')
-                            : null;
-                    } catch (e) {}
-                    // Reading `template` can make Polymer cache an own
-                    // `_template` on the ctor before templates are wired up;
-                    // observe without mutating by undoing a cache we created.
-                    var hadOwnTplCache = regCtor && hasOwn.call(regCtor, '_template');
-                    var ctorTemplate;
-                    try { ctorTemplate = regCtor && regCtor.template; } catch (e) { ctorTemplate = 'THREW:' + e.message; }
-                    if (regCtor && !hadOwnTplCache && hasOwn.call(regCtor, '_template')) {
-                        try { delete regCtor._template; } catch (e) {}
-                    }
-                    var ctorOwnTemplate;
-                    try { ctorOwnTemplate = regCtor && regCtor._template; } catch (e) { ctorOwnTemplate = 'THREW:' + e.message; }
-                    var appTemplate;
-                    try { appTemplate = app && app._template; } catch (e) { appTemplate = 'THREW:' + e.message; }
-                    var appRoot;
-                    try { appRoot = app && app.root; } catch (e) { appRoot = 'THREW:' + e.message; }
-                    var appShadowRoot;
-                    try { appShadowRoot = app && app.shadowRoot; } catch (e) { appShadowRoot = 'THREW:' + e.message; }
-                    var protoTplDesc = 'none';
-                    var protoTplValue = 'unread';
-                    try {
-                        var ptd = regCtor && regCtor.prototype
-                            ? Object.getOwnPropertyDescriptor(regCtor.prototype, '_template')
-                            : null;
-                        if (ptd) {
-                            protoTplDesc = ptd.get ? 'getter' : 'value';
-                            try {
-                                var ptv = ptd.get ? ptd.get.call(app || regCtor.prototype) : ptd.value;
-                                protoTplValue = ptv === undefined ? 'undefined' : ptv === null ? 'null' : typeof ptv;
-                            } catch (e) { protoTplValue = 'THREW:' + e.message; }
-                        }
-                    } catch (e) { protoTplDesc = 'THREW:' + e.message; }
-                    var staticChain = '';
-                    try {
-                        var sc = regCtor;
-                        var depth = 0;
-                        while (sc && sc !== Function.prototype && depth < 8) {
-                            var sd = Object.getOwnPropertyDescriptor(sc, 'template');
-                            if (sd) {
-                                staticChain += (staticChain ? ',' : '') + depth + ':' +
-                                    (sd.get ? (sc.__aurora_template_accessor__ ? 'aurora-getter' : 'getter') : 'value');
-                                if (sd.get && !sc.__aurora_template_accessor__) {
-                                    var hadOwnBefore = hasOwn.call(regCtor, '_template');
-                                    var rawResult;
-                                    try {
-                                        var raw = sd.get.call(regCtor);
-                                        rawResult = raw === null ? 'null' : raw === undefined ? 'undefined' : typeof raw;
-                                    } catch (e) { rawResult = 'THREW:' + e.message; }
-                                    trace('static-template depth=' + depth +
-                                        ' raw=' + rawResult +
-                                        ' ownTplAfter=' + (hasOwn.call(regCtor, '_template') ? String(regCtor._template) : 'no-own') +
-                                        ' src=' + String(sd.get).replace(/\s+/g, ' ').slice(0, 300));
-                                    if (!hadOwnBefore && hasOwn.call(regCtor, '_template')) {
-                                        try { delete regCtor._template; } catch (e) {}
-                                    }
-                                }
-                            }
-                            sc = Object.getPrototypeOf(sc);
-                            depth++;
-                        }
-                        if (!staticChain) staticChain = 'none';
-                    } catch (e) { staticChain = 'THREW:' + e.message; }
-                    try {
-                        var ptd2 = regCtor && regCtor.prototype
-                            ? Object.getOwnPropertyDescriptor(regCtor.prototype, '_template')
-                            : null;
-                        if (ptd2 && ptd2.get) {
-                            trace('proto-template-getter src=' + String(ptd2.get).replace(/\s+/g, ' ').slice(0, 300));
-                        }
-                    } catch (e) {}
-                    trace(
-                        'probe ' + name +
-                        ' app=' + (!!app) +
-                        ' ctor=' + (!!regCtor) +
-                        ' ctor.template=' + (ctorTemplate === undefined ? 'undefined' : ctorTemplate === null ? 'null' : typeof ctorTemplate) +
-                        ' ctor._template=' + (ctorOwnTemplate === undefined ? 'undefined' : ctorOwnTemplate === null ? 'null' : typeof ctorOwnTemplate) +
-                        ' app._template=' + (appTemplate === undefined ? 'undefined' : appTemplate === null ? 'null' : typeof appTemplate) +
-                        ' app.root=' + (appRoot === undefined ? 'undefined' : appRoot === null ? 'null' : typeof appRoot) +
-                        ' app.shadowRoot=' + (appShadowRoot === undefined ? 'undefined' : appShadowRoot === null ? 'null' : typeof appShadowRoot) +
-                        ' proto._template=' + protoTplDesc + '/' + protoTplValue +
-                        ' staticTemplates=' + staticChain +
-                        ' dom-module=' + (!!mod) +
-                        ' dom-module-template=' + (!!modTemplate) +
-                        ' dom-module-content=' + (!!(modTemplate && modTemplate.content)) +
-                        ' dom-module-content-kids=' + (modTemplate && modTemplate.content && modTemplate.content.childNodes ? modTemplate.content.childNodes.length : '?') +
-                        ' kids=' + (app && app.children ? app.children.length : '?') +
-                        ' dataEnabled=' + (app && app.__dataEnabled) +
-                        ' dataReady=' + (app && app.__dataReady) +
-                        ' ready=' + (app ? typeof app.ready : 'undefined') +
-                        ' stamp=' + (app ? typeof app._stampTemplate : 'undefined') +
-                        ' attachDom=' + (app ? typeof app._attachDom : 'undefined')
-                    );
-                } catch (e) {
-                    traceError('probe ' + name, e);
-                }
-            }
-
-            function getDefinition(nameOrCtor) {
-                if (!nameOrCtor) return null;
-                if (typeof nameOrCtor === 'string') {
-                    return registry[nameOrCtor] || null;
-                }
-                if (typeof nameOrCtor === 'function') {
-                    var tagName = nameOrCtor.__aurora_ce_name__;
-                    return tagName ? registry[tagName] || null : null;
-                }
-                return null;
-            }
-
-            function ensureDefinitionMetadata(name, ctor) {
-                var existing = registry[name];
-                if (existing) {
-                    existing.ctor = ctor;
-                    return existing;
-                }
-                var definition = { name: name, ctor: ctor };
-                registry[name] = definition;
-                return definition;
-            }
-
-            function attachDefinitionMetadata(target, definition) {
-                if (!target || !definition) return;
-                try {
-                    Object.defineProperty(target, '__aurora_ce_definition__', {
-                        value: definition,
-                        configurable: true,
-                        writable: true
-                    });
-                } catch (e) {
-                    target.__aurora_ce_definition__ = definition;
-                }
-                if (definition.name) {
-                    try {
-                        Object.defineProperty(target, '__aurora_ce_name__', {
-                            value: definition.name,
-                            configurable: true,
-                            writable: true
-                        });
-                    } catch (e) {
-                        target.__aurora_ce_name__ = definition.name;
-                    }
-                }
-                if (definition.ctor) {
-                    try {
-                        Object.defineProperty(target, '__aurora_ce_ctor__', {
-                            value: definition.ctor,
-                            configurable: true,
-                            writable: true
-                        });
-                    } catch (e) {
-                        target.__aurora_ce_ctor__ = definition.ctor;
-                    }
-                }
-            }
-
-            function installTemplateAccessor(name, ctor) {
-                if (!ctor || ctor.__aurora_template_accessor__) return;
-                var definition = ensureDefinitionMetadata(name, ctor);
-                var descriptor = Object.getOwnPropertyDescriptor(ctor, 'template');
-                if (!descriptor) {
-                    // If the framework already provides a static `template`
-                    // somewhere on the constructor chain (Polymer 3's
-                    // ElementMixin getter, kevlar base classes), leave it
-                    // alone. Shadowing it breaks resolution order, and even
-                    // reading it early poisons Polymer's own-property
-                    // `_template` cache before templates are wired up.
-                    var parent = Object.getPrototypeOf(ctor);
-                    while (parent && parent !== Function.prototype) {
-                        if (Object.getOwnPropertyDescriptor(parent, 'template')) return;
-                        parent = Object.getPrototypeOf(parent);
-                    }
-                }
-                var originalGetter = descriptor && descriptor.get;
-                var originalValue = descriptor && hasOwn.call(descriptor, 'value')
-                    ? descriptor.value
-                    : undefined;
-                var ownTemplate = originalValue;
-
-                try {
-                    Object.defineProperty(ctor, 'template', {
-                        configurable: true,
-                        enumerable: descriptor ? descriptor.enumerable : false,
-                        get: function() {
-                            var template = ownTemplate;
-                            if (!template && originalGetter) {
-                                try {
-                                    template = originalGetter.call(this);
-                                } catch (e) {
-                                    if (globalThis.__aurora_debug_youtube__ && debugProbeName(definition.name)) {
-                                        traceError('template own-getter ' + definition.name, e);
-                                    }
-                                    template = null;
-                                }
-                            }
-                            if (!template) {
-                                // Defer to an inherited static `template`
-                                // (Polymer 3's ElementMixin getter, or kevlar
-                                // bundles assigning one on a base class)
-                                // before the dom-module fallback. Resolved at
-                                // get time because frameworks assign it
-                                // lazily, after customElements.define.
-                                var parent = Object.getPrototypeOf(this || ctor);
-                                while (parent && parent !== Function.prototype) {
-                                    var inherited = Object.getOwnPropertyDescriptor(parent, 'template');
-                                    if (inherited) {
-                                        try {
-                                            template = inherited.get
-                                                ? inherited.get.call(this)
-                                                : inherited.value;
-                                        } catch (e) {
-                                            if (globalThis.__aurora_debug_youtube__ && debugProbeName(definition.name)) {
-                                                traceError('template inherited-getter ' + definition.name, e);
-                                            }
-                                            template = null;
-                                        }
-                                        break;
-                                    }
-                                    parent = Object.getPrototypeOf(parent);
-                                }
-                            }
-                            if (template) return template;
-                            var moduleId = definition.name || (this && this.is) || '';
-                            if (moduleId && domModules[moduleId]) {
-                                return domModules[moduleId];
-                            }
-                            return null;
-                        },
-                        set: function(value) {
-                            ownTemplate = value;
-                        }
-                    });
-                    ctor.__aurora_template_accessor__ = true;
-                } catch (e) {
-                    // If the property is not configurable, leave the original in place.
-                }
-
-                if (!hasOwn.call(ctor, 'is')) {
-                    try {
-                        Object.defineProperty(ctor, 'is', {
-                            configurable: true,
-                            enumerable: false,
-                            get: function() {
-                                return definition.name;
-                            }
-                        });
-                    } catch (e) {}
-                }
-
-                attachDefinitionMetadata(ctor, definition);
-                if (ctor.prototype && typeof ctor.prototype === 'object') {
-                    try {
-                        Object.defineProperty(ctor.prototype, 'constructor', {
-                            value: ctor,
-                            configurable: true,
-                            writable: true
-                        });
-                    } catch (e) {}
-                    attachDefinitionMetadata(ctor.prototype, definition);
-                }
-            }
-
-            function shouldReplayConstructor(ctor) {
-                if (typeof ctor !== 'function') return false;
-                var source = '';
-                try {
-                    source = Function.prototype.toString.call(ctor);
-                } catch (e) {}
-                return source.indexOf('class ') !== 0;
-            }
-
-            // Upgrade: swap the plain stub element's prototype to the
-            // registered class/constructor's prototype and run it bound to
-            // the element, then fire connectedCallback. This is exactly what
-            // function-style definitions (`function MyEl(){...}`) expect.
-            // ES6 `class X extends HTMLElement` constructors throw "class
-            // constructor cannot be invoked without 'new'" when called this
-            // way. Keep the prototype swap and still fire connectedCallback;
-            // most framework element work happens there, and skipping it
-            // leaves upgraded nodes inert.
-            function tryUpgrade(el, connect) {
-                if (!el || el.nodeType !== 1) return;
-                var name = el.localName || (el.tagName ? el.tagName.toLowerCase() : '');
-                var definition = getDefinition(name);
-                if (!definition) return;
-                var ctor = definition.ctor;
-                if (!ctor) return;
-                if (el.__ce_upgraded__) {
-                    connectUpgraded(el, name, connect);
-                    return;
-                }
-                el.__ce_upgraded__ = true;
-                attachDefinitionMetadata(el, definition);
-                if (shouldTraceName(name)) trace('upgrade ' + name + ' connect=' + (connect !== false));
-                try {
-                    Object.setPrototypeOf(el, ctor.prototype);
-                    attachDefinitionMetadata(el, definition);
-                    if (shouldReplayConstructor(ctor)) {
-                        var hadObjectInitializeProperties = hasOwn.call(Object.prototype, '_initializeProperties');
-                        var oldObjectInitializeProperties = Object.prototype._initializeProperties;
-                        if (typeof el._initializeProperties !== 'function') {
-                            try {
-                                Object.defineProperty(el, '_initializeProperties', {
-                                    value: function(){},
-                                    configurable: true,
-                                    writable: true
-                                });
-                            } catch (e) {
-                                el._initializeProperties = function(){};
-                            }
-                        }
-                        if (typeof Object.prototype._initializeProperties !== 'function') {
-                            Object.defineProperty(Object.prototype, '_initializeProperties', {
-                                value: function(){},
-                                configurable: true,
-                                writable: true
-                            });
-                        }
-                        upgradeStack.push(el);
-                        try {
-                            ctor.call(el);
-                        } finally {
-                            upgradeStack.pop();
-                            if (hadObjectInitializeProperties) {
-                                Object.prototype._initializeProperties = oldObjectInitializeProperties;
-                            } else {
-                                delete Object.prototype._initializeProperties;
-                            }
-                        }
-                    }
-                } catch (e) {
-                    traceError('constructor ' + name, e);
-                }
-                connectUpgraded(el, name, connect);
-                if (name === 'dom-module') {
-                    registerDomModule(el);
-                }
-                probeCustomElementState(name, el, ctor);
-            }
-
-            function connectUpgraded(el, name, connect) {
-                if (connect === false || typeof el.connectedCallback !== 'function') return;
-                try {
-                    if (!el.__ce_connected__) {
-                        el.__ce_connected__ = true;
-                        if (shouldTraceName(name)) trace('connectedCallback ' + name);
-                        el.connectedCallback();
-                    }
-                } catch (e) { traceError('connectedCallback ' + name, e); }
-            }
-
-            function rememberPending(el) {
-                if (!el || el.nodeType !== 1) return;
-                var name = el.localName || (el.tagName ? el.tagName.toLowerCase() : '');
-                if (!shouldTrack(name)) return;
-                if (getDefinition(name)) {
-                    tryUpgrade(el, true);
-                    return;
-                }
-                if (!pending[name]) pending[name] = [];
-                pending[name].push(el);
-            }
-
-            function flushPending(name) {
-                var list = pending[name];
-                if (!list || !list.length) return;
-                pending[name] = [];
-                for (var i = 0; i < list.length; i++) {
-                    tryUpgrade(list[i], true);
-                }
-            }
-
-            function primeTree(root) {
-                if (!root) return;
-                rememberPending(root);
-                if (typeof root.querySelectorAll === 'function') {
-                    var all = root.querySelectorAll('*');
-                    for (var i = 0; i < all.length; i++) { rememberPending(all[i]); }
-                }
-            }
-
-            function upgradeTree(root) {
-                if (!root) return;
-                try {
-                    primeTree(root);
-                    if (typeof root.querySelectorAll === 'function') {
-                        var all = root.querySelectorAll('*');
-                        for (var i = 0; i < all.length; i++) { tryUpgrade(all[i], true); }
-                    }
-                } catch (e) {}
-            }
-
-            // Newly created elements (`document.createElement('ytd-app')`)
-            // need upgrading too — patch it in lazily once `document` exists
-            // (it doesn't yet at globals-install time).
-            function ensureCreateElementPatch() {
-                if (patchedCreateElement) return;
-                if (typeof document === 'undefined' || typeof document.createElement !== 'function') return;
-                patchedCreateElement = true;
-                var orig = document.createElement.bind(document);
-                originalCreateElement = orig;
-                document.createElement = function(tagName, options) {
-                    var el = orig(tagName, options);
-                    if (String(tagName).indexOf('-') >= 0 && shouldTraceName(String(tagName))) trace('createElement ' + tagName);
-                    rememberPending(el);
-                    tryUpgrade(el, false);
-                    return el;
-                };
-            }
-
-            globalThis.customElements = {
-                define: function(name, ctor, opts) {
-                    if (shouldTraceName(name)) trace('define ' + name);
-                    var definition = ensureDefinitionMetadata(name, ctor);
-                    attachDefinitionMetadata(ctor, definition);
-                    if (name.indexOf('-') >= 0) {
-                        installTemplateAccessor(name, ctor);
-                    }
-                    probeCustomElementState(name, null, ctor);
-                    flushPending(name);
-                },
-                get: function(name) {
-                    var definition = getDefinition(name);
-                    return definition ? definition.ctor : undefined;
-                },
-                whenDefined: function(name) {
-                    return getDefinition(name) ? Promise.resolve(getDefinition(name).ctor) : new Promise(function(res) {
-                        var orig = customElements.define;
-                        customElements.define = function(n, c, o) {
-                            orig.call(customElements, n, c, o);
-                            if (n === name) res(c);
-                        };
-                    });
-                },
-                upgrade: function(root) { trace('customElements.upgrade'); upgradeTree(root); },
-                __aurora_track_custom_element__: function(el) { rememberPending(el); }
-            };
-
-            globalThis.__aurora_init_custom_elements__ = function() { ensureCreateElementPatch(); };
-            globalThis.__aurora_track_custom_element__ = function(el) { rememberPending(el); };
-        })();
-    "#,
+        include_str!("../../js_polyfills/custom_elements.js"),
     );
 
     eval_bootstrap(
         cx,
         global,
         c"css-stub",
-        r#"
-        (function() {
-            globalThis.CSS = {
-                supports: function() { return false; },
-                escape: function(s) { return String(s); }
-            };
-        })();
-    "#,
+        include_str!("../../js_polyfills/css_stub.js"),
     );
 }
 
@@ -2474,69 +1730,217 @@ unsafe extern "C" fn return_empty_array(cx: *mut RawJSContext, argc: u32, vp: *m
     true
 }
 
-unsafe extern "C" fn url_ctor(cx: *mut RawJSContext, argc: u32, vp: *mut Value) -> bool {
-    let mut cx = JSContext::from_ptr(NonNull::new(cx).unwrap());
-    let args = CallArgs::from_vp(vp, argc);
-    let href = arg_to_string(&mut cx, &args, 0);
+unsafe fn install_url_polyfill(cx: &mut JSContext, global: mozjs::gc::Handle<*mut JSObject>) {
+    eval_bootstrap(
+        cx,
+        global,
+        c"url",
+        r#"
+        (function() {
+            function decodePart(value) {
+                try { return decodeURIComponent(String(value).replace(/\+/g, ' ')); }
+                catch (e) { return String(value); }
+            }
+            function encodePart(value) {
+                return encodeURIComponent(String(value)).replace(/%20/g, '+');
+            }
+            function normalizePath(path) {
+                var absolute = path.charAt(0) === '/';
+                var trailing = path.length > 1 && path.charAt(path.length - 1) === '/';
+                var parts = path.split('/');
+                var out = [];
+                for (var i = 0; i < parts.length; i++) {
+                    var part = parts[i];
+                    if (!part || part === '.') continue;
+                    if (part === '..') out.pop();
+                    else out.push(part);
+                }
+                return (absolute ? '/' : '') + out.join('/') + (trailing && out.length ? '/' : '');
+            }
+            function splitQueryAndHash(input) {
+                var rest = String(input);
+                var hash = '';
+                var hashIndex = rest.indexOf('#');
+                if (hashIndex >= 0) {
+                    hash = rest.slice(hashIndex);
+                    rest = rest.slice(0, hashIndex);
+                }
+                var search = '';
+                var queryIndex = rest.indexOf('?');
+                if (queryIndex >= 0) {
+                    search = rest.slice(queryIndex);
+                    rest = rest.slice(0, queryIndex);
+                }
+                return { path: rest, search: search, hash: hash };
+            }
+            function parseAbsolute(input) {
+                var match = /^([a-zA-Z][a-zA-Z0-9+.-]*:)(?:\/\/([^\/?#]*))?([^?#]*)(\?[^#]*)?(#.*)?$/.exec(input);
+                if (!match) return null;
+                var protocol = match[1].toLowerCase();
+                var authority = match[2] || '';
+                var pathname = match[3] || '';
+                var search = match[4] || '';
+                var hash = match[5] || '';
+                var username = '';
+                var password = '';
+                var host = authority;
+                var at = host.lastIndexOf('@');
+                if (at >= 0) {
+                    var userinfo = host.slice(0, at);
+                    host = host.slice(at + 1);
+                    var colon = userinfo.indexOf(':');
+                    username = colon >= 0 ? userinfo.slice(0, colon) : userinfo;
+                    password = colon >= 0 ? userinfo.slice(colon + 1) : '';
+                }
+                var hostname = host;
+                var port = '';
+                if (hostname.charAt(0) !== '[') {
+                    var portIndex = hostname.lastIndexOf(':');
+                    if (portIndex >= 0) {
+                        port = hostname.slice(portIndex + 1);
+                        hostname = hostname.slice(0, portIndex);
+                    }
+                }
+                if (authority && !pathname) pathname = '/';
+                return {
+                    protocol: protocol, username: username, password: password,
+                    host: host, hostname: hostname, port: port,
+                    pathname: pathname || '/', search: search, hash: hash
+                };
+            }
+            function defaultBase() {
+                var loc = globalThis.location || {};
+                return String(loc.href || 'https://youtube.com/');
+            }
+            function parseUrl(input, base) {
+                var raw = String(input);
+                var absolute = parseAbsolute(raw);
+                if (absolute) return absolute;
+                var baseParts = parseAbsolute(base ? String(base) : defaultBase()) || parseAbsolute(defaultBase());
+                var split = splitQueryAndHash(raw);
+                if (raw.indexOf('//') === 0) {
+                    return parseAbsolute(baseParts.protocol + raw);
+                }
+                if (!split.path) {
+                    return Object.assign({}, baseParts, {
+                        search: split.search || baseParts.search,
+                        hash: split.hash
+                    });
+                }
+                var pathname = split.path.charAt(0) === '/'
+                    ? normalizePath(split.path)
+                    : normalizePath(baseParts.pathname.replace(/\/[^\/]*$/, '/') + split.path);
+                return Object.assign({}, baseParts, {
+                    pathname: pathname || '/',
+                    search: split.search,
+                    hash: split.hash
+                });
+            }
+            function serialize(parts) {
+                var auth = parts.host ? '//' + parts.host : '';
+                return parts.protocol + auth + (parts.pathname || '/') + (parts.search || '') + (parts.hash || '');
+            }
+            function URLSearchParams(init) {
+                if (!(this instanceof URLSearchParams)) return new URLSearchParams(init);
+                this._pairs = [];
+                if (!init) return;
+                if (typeof init === 'string') {
+                    var query = init.charAt(0) === '?' ? init.slice(1) : init;
+                    if (!query) return;
+                    var fields = query.split('&');
+                    for (var i = 0; i < fields.length; i++) {
+                        if (!fields[i]) continue;
+                        var eq = fields[i].indexOf('=');
+                        this.append(
+                            decodePart(eq >= 0 ? fields[i].slice(0, eq) : fields[i]),
+                            decodePart(eq >= 0 ? fields[i].slice(eq + 1) : '')
+                        );
+                    }
+                } else if (Array.isArray(init)) {
+                    for (var j = 0; j < init.length; j++) this.append(init[j][0], init[j][1]);
+                } else if (typeof init === 'object') {
+                    for (var key in init) if (Object.prototype.hasOwnProperty.call(init, key)) this.append(key, init[key]);
+                }
+            }
+            URLSearchParams.prototype.append = function(name, value) {
+                this._pairs.push([String(name), String(value)]);
+            };
+            URLSearchParams.prototype.delete = function(name) {
+                name = String(name);
+                this._pairs = this._pairs.filter(function(pair) { return pair[0] !== name; });
+            };
+            URLSearchParams.prototype.get = function(name) {
+                name = String(name);
+                for (var i = 0; i < this._pairs.length; i++) if (this._pairs[i][0] === name) return this._pairs[i][1];
+                return null;
+            };
+            URLSearchParams.prototype.getAll = function(name) {
+                name = String(name);
+                return this._pairs.filter(function(pair) { return pair[0] === name; }).map(function(pair) { return pair[1]; });
+            };
+            URLSearchParams.prototype.has = function(name) {
+                name = String(name);
+                return this._pairs.some(function(pair) { return pair[0] === name; });
+            };
+            URLSearchParams.prototype.set = function(name, value) {
+                name = String(name);
+                value = String(value);
+                var found = false;
+                var next = [];
+                for (var i = 0; i < this._pairs.length; i++) {
+                    if (this._pairs[i][0] === name) {
+                        if (!found) next.push([name, value]);
+                        found = true;
+                    } else {
+                        next.push(this._pairs[i]);
+                    }
+                }
+                if (!found) next.push([name, value]);
+                this._pairs = next;
+            };
+            URLSearchParams.prototype.forEach = function(cb, thisArg) {
+                for (var i = 0; i < this._pairs.length; i++) cb.call(thisArg, this._pairs[i][1], this._pairs[i][0], this);
+            };
+            URLSearchParams.prototype.toString = function() {
+                return this._pairs.map(function(pair) { return encodePart(pair[0]) + '=' + encodePart(pair[1]); }).join('&');
+            };
+            URLSearchParams.prototype.entries = function() { return this._pairs.slice()[Symbol.iterator](); };
+            URLSearchParams.prototype.keys = function() { return this._pairs.map(function(pair) { return pair[0]; })[Symbol.iterator](); };
+            URLSearchParams.prototype.values = function() { return this._pairs.map(function(pair) { return pair[1]; })[Symbol.iterator](); };
+            URLSearchParams.prototype[Symbol.iterator] = URLSearchParams.prototype.entries;
 
-    let obj = new_plain_object(&mut cx);
-    rooted!(&in(cx) let obj_root = obj);
-    set_prop_str(&mut cx, obj_root.handle(), c"href", &href);
-    set_prop_str(&mut cx, obj_root.handle(), c"origin", "http://localhost");
-    set_prop_str(&mut cx, obj_root.handle(), c"protocol", "http:");
-    set_prop_str(&mut cx, obj_root.handle(), c"host", "localhost");
-    set_prop_str(&mut cx, obj_root.handle(), c"hostname", "localhost");
-    set_prop_str(&mut cx, obj_root.handle(), c"port", "");
-    set_prop_str(&mut cx, obj_root.handle(), c"pathname", "/");
-    set_prop_str(&mut cx, obj_root.handle(), c"search", "");
-    set_prop_str(&mut cx, obj_root.handle(), c"hash", "");
-    define_fn(
-        &mut cx,
-        obj_root.handle(),
-        c"toString",
-        Some(url_to_string),
-        0,
+            function URL(input, base) {
+                if (!(this instanceof URL)) return new URL(input, base);
+                var parts = parseUrl(input, base);
+                var self = this;
+                function updateSearchParams() { self.searchParams = new URLSearchParams(parts.search); }
+                function syncSearch() {
+                    var query = self.searchParams.toString();
+                    parts.search = query ? '?' + query : '';
+                }
+                Object.defineProperties(this, {
+                    href: { get: function() { syncSearch(); return serialize(parts); }, set: function(v) { parts = parseUrl(v); updateSearchParams(); }, enumerable: true },
+                    origin: { get: function() { return parts.protocol + '//' + parts.host; }, enumerable: true },
+                    protocol: { get: function() { return parts.protocol; }, set: function(v) { parts.protocol = String(v).replace(/:*$/, ':').toLowerCase(); }, enumerable: true },
+                    username: { get: function() { return parts.username; }, set: function(v) { parts.username = String(v); }, enumerable: true },
+                    password: { get: function() { return parts.password; }, set: function(v) { parts.password = String(v); }, enumerable: true },
+                    host: { get: function() { return parts.host; }, set: function(v) { var p = parseAbsolute(parts.protocol + '//' + String(v) + '/'); if (p) { parts.host = p.host; parts.hostname = p.hostname; parts.port = p.port; } }, enumerable: true },
+                    hostname: { get: function() { return parts.hostname; }, set: function(v) { parts.hostname = String(v); parts.host = parts.hostname + (parts.port ? ':' + parts.port : ''); }, enumerable: true },
+                    port: { get: function() { return parts.port; }, set: function(v) { parts.port = String(v); parts.host = parts.hostname + (parts.port ? ':' + parts.port : ''); }, enumerable: true },
+                    pathname: { get: function() { return parts.pathname; }, set: function(v) { parts.pathname = normalizePath(String(v)); }, enumerable: true },
+                    search: { get: function() { syncSearch(); return parts.search; }, set: function(v) { parts.search = v ? (String(v).charAt(0) === '?' ? String(v) : '?' + String(v)) : ''; updateSearchParams(); }, enumerable: true },
+                    hash: { get: function() { return parts.hash; }, set: function(v) { parts.hash = v ? (String(v).charAt(0) === '#' ? String(v) : '#' + String(v)) : ''; }, enumerable: true }
+                });
+                updateSearchParams();
+            }
+            URL.prototype.toString = function() { return this.href; };
+            URL.prototype.toJSON = function() { return this.href; };
+
+            globalThis.URL = URL;
+            globalThis.URLSearchParams = URLSearchParams;
+        })();
+    "#,
     );
-
-    args.rval().set(ObjectValue(obj));
-    true
-}
-
-unsafe extern "C" fn url_to_string(cx: *mut RawJSContext, _argc: u32, vp: *mut Value) -> bool {
-    let mut cx = JSContext::from_ptr(NonNull::new(cx).unwrap());
-    let args = CallArgs::from_vp(vp, _argc);
-    let js_str = new_js_string(&mut cx, "http://localhost/");
-    if js_str.is_null() {
-        args.rval().set(UndefinedValue());
-    } else {
-        args.rval().set(mozjs::jsval::StringValue(&*js_str));
-    }
-    true
-}
-
-unsafe extern "C" fn url_search_params_ctor(
-    cx: *mut RawJSContext,
-    argc: u32,
-    vp: *mut Value,
-) -> bool {
-    let mut cx = JSContext::from_ptr(NonNull::new(cx).unwrap());
-    let args = CallArgs::from_vp(vp, argc);
-    let obj = new_plain_object(&mut cx);
-    rooted!(&in(cx) let obj_root = obj);
-    define_fn(&mut cx, obj_root.handle(), c"get", Some(prompt_null), 1);
-    define_fn(&mut cx, obj_root.handle(), c"set", Some(noop), 2);
-    define_fn(&mut cx, obj_root.handle(), c"append", Some(noop), 2);
-    define_fn(&mut cx, obj_root.handle(), c"delete", Some(noop), 1);
-    define_fn(&mut cx, obj_root.handle(), c"has", Some(confirm_false), 1);
-    define_fn(
-        &mut cx,
-        obj_root.handle(),
-        c"toString",
-        Some(return_empty_string),
-        0,
-    );
-    args.rval().set(ObjectValue(obj));
-    true
 }
 
 unsafe extern "C" fn abort_controller_ctor(
