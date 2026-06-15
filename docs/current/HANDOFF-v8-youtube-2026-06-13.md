@@ -183,6 +183,73 @@ unchanged (114 vs 113 connectedCallbacks, no regression), and `ytd-watch-flexy`'
 necessary infrastructure but not sufficient. (Note: the shadow-root template in
 `attach_shadow` still uses the legacy registry path; secondary, pre-existing.)
 
+## Bundle trace (2026-06-14): the complete home-load chain, mapped from kevlar.js
+
+Captured YouTube's real scripts with the Chrome UA (`/tmp/yt_home.html`,
+`/tmp/kevlar.js` = 9.8 MB app bundle, `/tmp/scheduler.js`) and traced the entire
+home-page content-load path. **This is the definitive map.**
+
+The inline HTML defines `window.getInitialData()` → returns
+`{page:'browse', endpoint:{…browseEndpoint}, response:<ytInitialData>, url}`.
+**Confirmed present and correct in our runtime.** The bundle reads it via
+`window.getInitialData`/`getDataPromise` (NOT `ytInitialData` — that string is 0×
+in kevlar).
+
+Home-load chain (all names from kevlar.js):
+1. App init runs `c.install(qJp)` (the home lifecycle; `lO$`/`rUN` is the
+   experiment-on variant, `kW3`/`He$` is `/shorts`, `dgV` is `/watch`). Gated on
+   `SHELL_LOAD || kevlar_fetch_initial_data_promise_client || sw_nav_preload_pbj`
+   — all OFF (even on real YT), so the `else c.install(qJp)` branch is normal.
+2. `qJp.initialized` → `jA_ = cUy()` (cUy = `t_q(navService, location.href, …)`,
+   the data load).
+3. `qJp.rendering` → waits `jA_` → `uS(c, data)` → **`c.root.loadData(data)`**
+   (c.root = ytd-app).
+4. `ytd-app.loadData(c)` = `this.loadDepsPromise.then(() => { … if(c.response)
+   _.esx(navMgr, c.endpoint, c, 5, {}) … })`. **`_.esx(...)` is the
+   navigate-with-prefetched-data call that creates `ytd-browse`.**
+5. `loadDepsPromise = _.TrF([_.U9(), pageManagerAttachedPromise.promise])`.
+   `_.U9()` **resolves immediately**; `pageManagerAttachedPromise` resolves in
+   `onYtPageManagerAttached` when `_.Qc(event).id === "page-manager"` (fired when
+   the page-manager attaches).
+
+What I verified at runtime (probe, now removed):
+- `window.getInitialData()` returns the correct `{page,endpoint,response,url}`.
+- `app.loadData(d)` exists and runs **without error**, but no page appears.
+- `app.handleNavigate({command:d.endpoint})` (with the *real* endpoint) **no
+  longer throws `loggingUrls`** — earlier failures were from a hand-built endpoint
+  and from passing `{detail}` instead of `{command}`.
+- Resolving `app.pageManagerAttachedPromise.resolve()` did **not** make the page
+  appear.
+- Microtasks DO drain (verified with a scratch test:
+  `Promise.resolve().then().then()` reaches 2).
+
+So the data path and the entry function (`loadData`) work, but the
+promise/lifecycle chain that ends in `_.esx` doesn't complete. The lifecycle
+plugins (qJp's `initialized`/`rendering`) run via a **`T2` state machine**
+(`T2.prototype.transition` runs plugin phase callbacks on state transitions like
+`application_navigating`). The natural chain never starts because that initial
+state transition never fires — and `getInitialData` is still defined after boot
+(the bootstrap would set it to `void 0` once consumed), proving the consume-step
+never ran.
+
+**Remaining unknowns (where to resume):**
+- Why the `T2` lifecycle state machine's initial transition (which would run
+  `qJp.rendering` → `loadData` → `_.esx`) never fires. This is the natural
+  trigger; everything downstream of it works or is reachable.
+- Why manually calling `loadData` + resolving `pageManagerAttachedPromise`
+  doesn't complete `loadDepsPromise.then` → `_.esx`. Likely the live
+  `this.loadDepsPromise` is the combined `_.TrF` and our `.resolve()` on
+  `pageManagerAttachedPromise` doesn't propagate through YouTube's custom `_.Ht`
+  promise type, OR `_.esx`/`navMgr` (closure-private, `_` not global) needs more.
+- Concrete next experiment: after `loadData`, dispatch the real
+  `yt-page-manager-attached` event the way the page-manager does (so
+  `onYtPageManagerAttached` resolves the gate through the same object), and pump;
+  failing that, find what advances the `T2` state machine on app startup.
+
+All `_`-namespaced internals (`_.esx`, `_.Mt`, `_.TrF`, the nav manager) are
+closure-private — not reachable from the global scope — so driving them requires
+either matching the natural lifecycle trigger or patching inside the bundle.
+
 ## Navigation trace (2026-06-14): data path works, page creation is closure-private
 
 Drove the real handler sequence post-boot (gated on AURORA_DEBUG_YOUTUBE):

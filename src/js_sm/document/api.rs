@@ -540,6 +540,12 @@ pub(in crate::js_sm) unsafe fn create_js_node(cx: &mut JSContext, node: NodePtr)
     define_getter(
         cx,
         obj_root.handle(),
+        c"ownerDocument",
+        Some(get_owner_document),
+    );
+    define_getter(
+        cx,
+        obj_root.handle(),
         c"childElementCount",
         Some(get_child_element_count),
     );
@@ -880,9 +886,9 @@ fn sibling_index_of(root: &NodePtr, target: &NodePtr) -> usize {
 }
 
 fn find_parent(root: &NodePtr, target: &NodePtr) -> Option<NodePtr> {
-    let children = match &*root.borrow() {
-        Node::Element(el) => el.children.clone(),
-        Node::Document { children, .. } => children.clone(),
+    let (children, template_contents): (Vec<NodePtr>, Option<NodePtr>) = match &*root.borrow() {
+        Node::Element(el) => (el.children.clone(), el.template_contents.clone()),
+        Node::Document { children, .. } => (children.clone(), None),
         _ => return None,
     };
     for child in &children {
@@ -890,6 +896,14 @@ fn find_parent(root: &NodePtr, target: &NodePtr) -> Option<NodePtr> {
             return Some(root.clone());
         }
         if let Some(found) = find_parent(child, target) {
+            return Some(found);
+        }
+    }
+    if let Some(content) = template_contents {
+        if Rc::ptr_eq(&content, target) {
+            return Some(root.clone());
+        }
+        if let Some(found) = find_parent(&content, target) {
             return Some(found);
         }
     }
@@ -1455,7 +1469,12 @@ pub(in crate::js_sm) unsafe extern "C" fn element_attach_shadow(
         // the plain `shadowRoot` property — without this, `wrap(host).shadowRoot`
         // stays undefined even after `__shady_attachShadow` runs, and Polymer's
         // `_attachDom` throws on `k.shadowRoot.appendChild`.
-        set_prop_obj(&mut cx, host_root.handle(), c"__shady_shadowRoot", sr_root.get());
+        set_prop_obj(
+            &mut cx,
+            host_root.handle(),
+            c"__shady_shadowRoot",
+            sr_root.get(),
+        );
     }
 
     args.rval().set(ObjectValue(sr_root.get()));
@@ -2079,15 +2098,15 @@ unsafe extern "C" fn node_append_child(cx: *mut RawJSContext, argc: u32, vp: *mu
             } else {
                 false
             };
-            let child_tag = debug_tag_for_node(&child_node);
             if is_fragment {
-                let fragment_children = clone_fragment_children(&child_node);
+                let fragment_children = take_fragment_children(&child_node);
                 for fragment_child in fragment_children {
                     append_child_node(&mut cx, &parent_node, parent_id, fragment_child);
                 }
                 args.rval().set(args.get(0).get());
                 return true;
             }
+            let child_tag = debug_tag_for_node(&child_node);
             match &mut *parent_node.borrow_mut() {
                 Node::Element(el) => {
                     el.children.push(child_node);
@@ -2136,6 +2155,28 @@ unsafe extern "C" fn node_insert_before(cx: *mut RawJSContext, argc: u32, vp: *m
     let state = &mut *get_state_ptr(&cx);
     if let (Some(child_id), Some(parent)) = (child_id, state.registry.lookup(parent_id)) {
         if let Some(child) = state.registry.lookup(child_id) {
+            let is_fragment = if args.get(0).get().is_object() {
+                let child_obj = args.get(0).get().to_object_or_null();
+                rooted!(&in(cx) let child_root = child_obj);
+                get_prop_i32(&mut cx, child_root.handle(), c"nodeType") == 11
+            } else {
+                false
+            };
+            if is_fragment {
+                let fragment_children = take_fragment_children(&child);
+                let ref_node = ref_id.and_then(|id| state.registry.lookup(id));
+                for fragment_child in fragment_children {
+                    insert_before_node(
+                        &mut cx,
+                        &parent,
+                        parent_id,
+                        fragment_child,
+                        ref_node.as_ref(),
+                    );
+                }
+                args.rval().set(args.get(0).get());
+                return true;
+            }
             let child_tag = debug_tag_for_node(&child);
             let ref_node = ref_id.and_then(|id| state.registry.lookup(id));
             let mut p = parent.borrow_mut();
@@ -2237,6 +2278,50 @@ unsafe extern "C" fn node_replace_child(cx: *mut RawJSContext, argc: u32, vp: *m
         if let (Some(new_node), Some(old_node)) =
             (state.registry.lookup(new_id), state.registry.lookup(old_id))
         {
+            let is_fragment = if args.get(0).get().is_object() {
+                let new_obj = args.get(0).get().to_object_or_null();
+                rooted!(&in(cx) let new_root = new_obj);
+                get_prop_i32(&mut cx, new_root.handle(), c"nodeType") == 11
+            } else {
+                false
+            };
+            if is_fragment {
+                let fragment_children = take_fragment_children(&new_node);
+                let mut p = parent.borrow_mut();
+                let kids: &mut Vec<NodePtr> = match &mut *p {
+                    Node::Element(el) => &mut el.children,
+                    Node::Document { children, .. } => children,
+                    _ => {
+                        args.rval().set(args.get(1).get());
+                        return true;
+                    }
+                };
+                if let Some(pos) = kids.iter().position(|c| Rc::ptr_eq(c, &old_node)) {
+                    kids.remove(pos);
+                    for (idx, fragment_child) in fragment_children.iter().enumerate() {
+                        kids.insert(pos + idx, fragment_child.clone());
+                    }
+                    drop(p);
+                    for fragment_child in &fragment_children {
+                        crate::dom::set_parent(fragment_child, &parent);
+                        crate::dom::reparent_subtree(fragment_child);
+                    }
+                    state.registry.mark_needs_reflow();
+                    queue_childlist_mutation(state, parent_id, vec![], vec![old_id]);
+                    for fragment_child in fragment_children {
+                        let child_obj = create_js_node(&mut cx, fragment_child.clone());
+                        call_connected_callback(&mut cx, ObjectValue(child_obj));
+                        if let Some(child_id) = state.registry.node_id(&fragment_child) {
+                            queue_childlist_mutation(state, parent_id, vec![child_id], vec![]);
+                        }
+                    }
+                    args.rval().set(args.get(1).get());
+                    return true;
+                }
+                drop(p);
+                args.rval().set(args.get(1).get());
+                return true;
+            }
             let mut p = parent.borrow_mut();
             let kids: &mut Vec<NodePtr> = match &mut *p {
                 Node::Element(el) => &mut el.children,
@@ -3129,7 +3214,7 @@ unsafe extern "C" fn get_parent_node(cx: *mut RawJSContext, argc: u32, vp: *mut 
         )
     };
     if let (Some(this_node), Some(doc)) = (this_node, doc) {
-        if let Some(parent) = find_parent(&doc, &this_node) {
+        if let Some(parent) = crate::dom::parent_ptr(&this_node).or_else(|| find_parent(&doc, &this_node)) {
             let obj = create_js_node(&mut cx, parent);
             args.rval().set(ObjectValue(obj));
             return true;
@@ -3157,7 +3242,7 @@ unsafe extern "C" fn get_parent_element(cx: *mut RawJSContext, argc: u32, vp: *m
         )
     };
     if let (Some(this_node), Some(doc)) = (this_node, doc) {
-        if let Some(parent) = find_parent(&doc, &this_node) {
+        if let Some(parent) = crate::dom::parent_ptr(&this_node).or_else(|| find_parent(&doc, &this_node)) {
             if matches!(&*parent.borrow(), Node::Element(_)) {
                 let obj = create_js_node(&mut cx, parent);
                 args.rval().set(ObjectValue(obj));
@@ -3345,6 +3430,56 @@ unsafe extern "C" fn get_last_child(cx: *mut RawJSContext, argc: u32, vp: *mut V
         None => {
             args.rval().set(NullValue());
         }
+    }
+    true
+}
+
+unsafe extern "C" fn get_owner_document(
+    cx: *mut RawJSContext,
+    argc: u32,
+    vp: *mut Value,
+) -> bool {
+    let mut cx = JSContext::from_ptr(NonNull::new(cx).unwrap());
+    let args = CallArgs::from_vp(vp, argc);
+    let node_id = match node_id_from_this(&mut cx, &args) {
+        Some(id) => id,
+        None => {
+            args.rval().set(NullValue());
+            return true;
+        }
+    };
+
+    let state = unsafe { &*get_state_ptr(&cx) };
+    let Some(node) = state.registry.lookup(node_id) else {
+        args.rval().set(NullValue());
+        return true;
+    };
+
+    if matches!(&*node.borrow(), Node::Document { .. }) {
+        args.rval().set(NullValue());
+        return true;
+    }
+
+    let global_raw = state.global;
+    if global_raw.is_null() {
+        args.rval().set(NullValue());
+        return true;
+    }
+    rooted!(&in(cx) let global = global_raw);
+    rooted!(&in(cx) let mut doc_val = UndefinedValue());
+    if wrappers2::JS_GetProperty(
+        &mut cx,
+        global.handle(),
+        c"document".as_ptr(),
+        doc_val.handle_mut(),
+    ) {
+        if doc_val.get().is_object() {
+            args.rval().set(doc_val.get());
+        } else {
+            args.rval().set(NullValue());
+        }
+    } else {
+        args.rval().set(NullValue());
     }
     true
 }
@@ -3572,7 +3707,7 @@ fn get_sibling(
     delta: i32,
     element_only: bool,
 ) -> Option<NodePtr> {
-    let parent = find_parent(root, target)?;
+    let parent = crate::dom::parent_ptr(target).or_else(|| find_parent(root, target))?;
     let children = match &*parent.borrow() {
         Node::Element(el) => el.children.clone(),
         Node::Document { children, .. } => children.clone(),
@@ -3685,6 +3820,7 @@ unsafe extern "C" fn set_inner_html(cx: *mut RawJSContext, argc: u32, vp: *mut V
             if let Node::Element(fragment_el) = &mut *content.borrow_mut() {
                 fragment_el.children = new_children;
             }
+            crate::dom::reparent_subtree(&content);
         }
         let state = &mut *get_state_ptr(&cx);
         state.registry.mark_needs_reflow();
@@ -3876,6 +4012,16 @@ fn clone_fragment_children(node: &NodePtr) -> Vec<NodePtr> {
     }
 }
 
+fn take_fragment_children(node: &NodePtr) -> Vec<NodePtr> {
+    let mut borrow = node.borrow_mut();
+    match &mut *borrow {
+        Node::Element(el) if el.tag_name == "#document-fragment" => {
+            std::mem::take(&mut el.children)
+        }
+        _ => vec![],
+    }
+}
+
 unsafe fn append_child_node(
     cx: &mut JSContext,
     parent_node: &NodePtr,
@@ -3887,17 +4033,58 @@ unsafe fn append_child_node(
     let child_id = state.registry.node_id(&child_node);
     match &mut *parent_node.borrow_mut() {
         Node::Element(el) => {
-            el.children.push(child_node);
+            el.children.push(child_node.clone());
         }
         Node::Document { children, .. } => {
-            children.push(child_node);
+            children.push(child_node.clone());
         }
         _ => {}
     }
+    crate::dom::set_parent(&child_node, parent_node);
+    crate::dom::reparent_subtree(&child_node);
     if let Some(child_id) = child_id {
         queue_childlist_mutation(state, parent_id, vec![child_id], vec![]);
     }
     call_connected_callback(cx, ObjectValue(child_obj));
+}
+
+unsafe fn insert_before_node(
+    cx: &mut JSContext,
+    parent_node: &NodePtr,
+    parent_id: u32,
+    child_node: NodePtr,
+    ref_node: Option<&NodePtr>,
+) {
+    let child_obj = create_js_node(cx, child_node.clone());
+    let state = &mut *get_state_ptr(cx);
+    let child_id = state.registry.node_id(&child_node);
+    let inserted = {
+        let mut p = parent_node.borrow_mut();
+        let kids: &mut Vec<NodePtr> = match &mut *p {
+            Node::Element(el) => &mut el.children,
+            Node::Document { children, .. } => children,
+            _ => return,
+        };
+        match ref_node.and_then(|r| kids.iter().position(|c| Rc::ptr_eq(c, r))) {
+            Some(pos) => {
+                kids.insert(pos, child_node.clone());
+                true
+            }
+            None => {
+                kids.push(child_node.clone());
+                true
+            }
+        }
+    };
+    if inserted {
+        crate::dom::set_parent(&child_node, parent_node);
+        crate::dom::reparent_subtree(&child_node);
+        state.registry.mark_needs_reflow();
+        if let Some(child_id) = child_id {
+            queue_childlist_mutation(state, parent_id, vec![child_id], vec![]);
+        }
+        call_connected_callback(cx, ObjectValue(child_obj));
+    }
 }
 
 // ── node_contains helper ──────────────────────────────────────────────────────

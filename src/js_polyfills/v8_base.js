@@ -57,16 +57,23 @@
     }
     EventTarget.prototype.dispatchEvent = function(event) {
         if (!event) return true;
-        // Build the propagation path: target up through ancestors, then document
-        // and window (the two globals where delegated listeners live).
+        // Build the propagation path: target up through ancestors, crossing a
+        // shadow boundary through ShadowRoot.host for composed events, then
+        // document and window (the two globals where delegated listeners live).
         var path = [];
         var n = this;
         var guard = 0;
-        while (n && guard++ < 8192) { path.push(n); n = n.parentNode || null; }
+        while (n && guard++ < 8192) {
+            path.push(n);
+            var parent = n.parentNode || null;
+            if (!parent && event.composed && n.nodeType === 11 && n.host) parent = n.host;
+            n = parent;
+        }
         if (typeof document !== 'undefined' && path.indexOf(document) < 0) path.push(document);
         if (typeof window !== 'undefined' && path.indexOf(window) < 0) path.push(window);
 
         event.target = this;
+        event.composedPath = function() { return path.slice(); };
         event.__immediateStop = false;
         if (event.cancelBubble === undefined) event.cancelBubble = false;
         // Capture phase: root -> target.

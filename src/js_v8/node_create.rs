@@ -89,7 +89,13 @@ pub(super) fn create_js_node<'s>(
     install_method(scope, template, "remove", remove_node, node_external);
     install_method(scope, template, "cloneNode", clone_node, node_external);
     install_method(scope, template, "contains", contains, node_external);
-    install_method(scope, template, "hasChildNodes", has_child_nodes, node_external);
+    install_method(
+        scope,
+        template,
+        "hasChildNodes",
+        has_child_nodes,
+        node_external,
+    );
     install_method(scope, template, "prepend", prepend_children, node_external);
     install_method(scope, template, "before", insert_before_self, node_external);
     install_method(scope, template, "after", insert_after_self, node_external);
@@ -123,7 +129,13 @@ pub(super) fn create_js_node<'s>(
         has_attribute,
         node_external,
     );
-    install_method(scope, template, "hasAttributes", has_attributes, node_external);
+    install_method(
+        scope,
+        template,
+        "hasAttributes",
+        has_attributes,
+        node_external,
+    );
 
     // --- Accessors ---
 
@@ -219,7 +231,13 @@ pub(super) fn create_js_node<'s>(
     install_readonly_accessor(scope, template, "attributes", get_attributes, node_external);
 
     // Tree collections
-    install_readonly_accessor(scope, template, "childNodes", get_child_nodes, node_external);
+    install_readonly_accessor(
+        scope,
+        template,
+        "childNodes",
+        get_child_nodes,
+        node_external,
+    );
     install_readonly_accessor(scope, template, "children", get_children, node_external);
     install_readonly_accessor(
         scope,
@@ -242,7 +260,13 @@ pub(super) fn create_js_node<'s>(
         get_child_element_count,
         node_external,
     );
-    install_readonly_accessor(scope, template, "isConnected", get_is_connected, node_external);
+    install_readonly_accessor(
+        scope,
+        template,
+        "isConnected",
+        get_is_connected,
+        node_external,
+    );
     install_readonly_accessor(
         scope,
         template,
@@ -272,7 +296,13 @@ pub(super) fn create_js_node<'s>(
     );
     install_method(scope, template, "getRootNode", get_root_node, node_external);
     install_method(scope, template, "append", append_children, node_external);
-    install_method(scope, template, "replaceChildren", replace_children, node_external);
+    install_method(
+        scope,
+        template,
+        "replaceChildren",
+        replace_children,
+        node_external,
+    );
     install_method(scope, template, "replaceWith", replace_with, node_external);
     install_method(
         scope,
@@ -306,7 +336,13 @@ pub(super) fn create_js_node<'s>(
 
     // Shadow DOM — the returned "root" proxies the host node itself (no real
     // shadow tree separation), mirroring js_sm's element_attach_shadow.
-    install_method(scope, template, "attachShadow", attach_shadow, node_external);
+    install_method(
+        scope,
+        template,
+        "attachShadow",
+        attach_shadow,
+        node_external,
+    );
     install_method(
         scope,
         template,
@@ -365,11 +401,19 @@ pub(super) fn create_js_node<'s>(
             let dataset = v8::Object::new(scope);
             for (name, value) in &el.attributes {
                 if let Some(key) = data_attr_to_dataset_key(name) {
-                    dataset.set(scope, v8_str(scope, &key).into(), v8_str(scope, value).into());
+                    dataset.set(
+                        scope,
+                        v8_str(scope, &key).into(),
+                        v8_str(scope, value).into(),
+                    );
                 }
             }
             obj.set(scope, v8_str(scope, "dataset").into(), dataset.into());
-            obj.set(scope, v8_str(scope, "shadowRoot").into(), v8::null(scope).into());
+            obj.set(
+                scope,
+                v8_str(scope, "shadowRoot").into(),
+                v8::null(scope).into(),
+            );
             for key in [
                 "offsetWidth",
                 "offsetHeight",
@@ -382,7 +426,11 @@ pub(super) fn create_js_node<'s>(
                 "scrollTop",
                 "scrollLeft",
             ] {
-                obj.set(scope, v8_str(scope, key).into(), v8::Number::new(scope, 0.0).into());
+                obj.set(
+                    scope,
+                    v8_str(scope, key).into(),
+                    v8::Number::new(scope, 0.0).into(),
+                );
             }
             obj.set(
                 scope,
@@ -438,11 +486,7 @@ pub(super) fn create_js_node<'s>(
     obj
 }
 
-fn call_global_hook(
-    scope: &mut v8::PinScope<'_, '_>,
-    name: &str,
-    arg: v8::Local<v8::Object>,
-) {
+fn call_global_hook(scope: &mut v8::PinScope<'_, '_>, name: &str, arg: v8::Local<v8::Object>) {
     let context = scope.get_current_context();
     let global = context.global(scope);
     let key = v8_str(scope, name);
@@ -579,6 +623,25 @@ fn node_from_js(
     registry.lookup(id)
 }
 
+fn is_document_fragment(node: &NodePtr) -> bool {
+    matches!(&*node.borrow(), Node::Element(el) if el.tag_name == "#document-fragment")
+}
+
+fn track_fragment_children(
+    scope: &mut v8::PinScope<'_, '_>,
+    registry: &Rc<NodeRegistry>,
+    document: &NodePtr,
+    children: &[NodePtr],
+) {
+    for child in children {
+        if node_type(child) != 1 {
+            continue;
+        }
+        let js_node = create_js_node(scope, child.clone(), registry, document);
+        call_global_hook(scope, "__aurora_track_custom_element__", js_node);
+    }
+}
+
 fn query_selector(
     scope: &mut v8::PinScope<'_, '_>,
     args: v8::FunctionCallbackArguments,
@@ -683,6 +746,11 @@ fn append_child(
     let node_data = unsafe { &*(external.value() as *const NodeData) };
 
     if let Some(child) = node_from_js(scope, args.get(0), &node_data.registry) {
+        let fragment_children = if is_document_fragment(&child) {
+            child_nodes_of(&child)
+        } else {
+            Vec::new()
+        };
         let target_id = node_data.registry.register(node_data.node.clone());
         let child_id = node_data.registry.register(child.clone());
         mutation::append_child_ptr(&node_data.node, &child);
@@ -692,6 +760,18 @@ fn append_child(
             vec![child_id],
             vec![],
         );
+        if fragment_children.is_empty() {
+            if let Ok(child_obj) = v8::Local::<v8::Object>::try_from(args.get(0)) {
+                call_global_hook(scope, "__aurora_track_custom_element__", child_obj);
+            }
+        } else {
+            track_fragment_children(
+                scope,
+                &node_data.registry,
+                &node_data.document,
+                &fragment_children,
+            );
+        }
         node_data.registry.mark_layout_dirty(&node_data.node);
         retval.set(args.get(0));
     } else {
@@ -738,6 +818,11 @@ fn insert_before(
     let ref_child = node_from_js(scope, args.get(1), &node_data.registry);
 
     if let Some(new_c) = new_child {
+        let fragment_children = if is_document_fragment(&new_c) {
+            child_nodes_of(&new_c)
+        } else {
+            Vec::new()
+        };
         let target_id = node_data.registry.register(node_data.node.clone());
         let new_id = node_data.registry.register(new_c.clone());
         mutation::insert_before_ptr(&node_data.node, &new_c, ref_child.as_ref());
@@ -747,6 +832,18 @@ fn insert_before(
             vec![new_id],
             vec![],
         );
+        if fragment_children.is_empty() {
+            if let Ok(new_obj) = v8::Local::<v8::Object>::try_from(args.get(0)) {
+                call_global_hook(scope, "__aurora_track_custom_element__", new_obj);
+            }
+        } else {
+            track_fragment_children(
+                scope,
+                &node_data.registry,
+                &node_data.document,
+                &fragment_children,
+            );
+        }
         node_data.registry.mark_layout_dirty(&node_data.node);
         retval.set(args.get(0));
     } else {
@@ -767,6 +864,11 @@ fn replace_child(
     let old_child = node_from_js(scope, args.get(1), &node_data.registry);
 
     if let (Some(new_c), Some(old_c)) = (new_child, old_child) {
+        let fragment_children = if is_document_fragment(&new_c) {
+            child_nodes_of(&new_c)
+        } else {
+            Vec::new()
+        };
         let target_id = node_data.registry.register(node_data.node.clone());
         let new_id = node_data.registry.register(new_c.clone());
         let old_id = node_data.registry.register(old_c.clone());
@@ -777,6 +879,18 @@ fn replace_child(
             vec![new_id],
             vec![old_id],
         );
+        if fragment_children.is_empty() {
+            if let Ok(new_obj) = v8::Local::<v8::Object>::try_from(args.get(0)) {
+                call_global_hook(scope, "__aurora_track_custom_element__", new_obj);
+            }
+        } else {
+            track_fragment_children(
+                scope,
+                &node_data.registry,
+                &node_data.document,
+                &fragment_children,
+            );
+        }
         node_data.registry.mark_layout_dirty(&node_data.node);
         retval.set(args.get(1));
     } else {
@@ -808,6 +922,11 @@ fn remove_node(
 }
 
 fn find_parent_for(node_data: &NodeData, node: &NodePtr) -> Option<NodePtr> {
+    if let Some(parent) = crate::dom::parent_ptr(node) {
+        if query::find_parent(&parent, node).is_some() {
+            return Some(parent);
+        }
+    }
     if let Some(parent) = query::find_parent(&node_data.document, node) {
         return Some(parent);
     }
@@ -828,7 +947,8 @@ fn find_parent_for_node(node_data: &NodeData) -> Option<NodePtr> {
 }
 
 fn sibling_for_node(node_data: &NodeData, delta: i32, elements_only: bool) -> Option<NodePtr> {
-    let parent = find_parent_for_node(node_data)?;
+    let parent =
+        crate::dom::parent_ptr(&node_data.node).or_else(|| find_parent_for_node(node_data))?;
     let kids = child_nodes_of(&parent);
     let pos = kids
         .iter()
@@ -1599,8 +1719,7 @@ fn get_first_element_child(
         .find(|c| node_type(c) == 1);
     match first {
         Some(node) => {
-            let js_node =
-                create_js_node(scope, node, &node_data.registry, &node_data.document);
+            let js_node = create_js_node(scope, node, &node_data.registry, &node_data.document);
             retval.set(js_node.into());
         }
         None => retval.set(v8::null(scope).into()),
@@ -1669,7 +1788,9 @@ fn get_bounding_client_rect(
 ) {
     let obj = v8::Object::new(scope);
     let zero = v8::Number::new(scope, 0.0);
-    for key in ["top", "left", "right", "bottom", "width", "height", "x", "y"] {
+    for key in [
+        "top", "left", "right", "bottom", "width", "height", "x", "y",
+    ] {
         obj.set(scope, v8_str(scope, key).into(), zero.into());
     }
     retval.set(obj.into());
@@ -2093,7 +2214,11 @@ fn attach_shadow(
         v8_str(scope, "nodeName").into(),
         v8_str(scope, "#document-fragment").into(),
     );
-    sr.set(scope, v8_str(scope, "mode").into(), v8_str(scope, &mode).into());
+    sr.set(
+        scope,
+        v8_str(scope, "mode").into(),
+        v8_str(scope, &mode).into(),
+    );
     sr.set(
         scope,
         v8_str(scope, "delegatesFocus").into(),

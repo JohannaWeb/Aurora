@@ -94,10 +94,30 @@ fn mutation_observer_ctor(
 
     // Bind the instance methods with their own External over the same registry
     // pointer; each method recovers its observer id from `this.__mo_id__`.
-    let registry_ptr = v8::Local::<v8::External>::try_from(args.data()).unwrap().value();
-    install_method(scope, observer_obj, "observe", mutation_observer_observe, registry_ptr);
-    install_method(scope, observer_obj, "disconnect", mutation_observer_disconnect, registry_ptr);
-    install_method(scope, observer_obj, "takeRecords", mutation_observer_take_records, registry_ptr);
+    let registry_ptr = v8::Local::<v8::External>::try_from(args.data())
+        .unwrap()
+        .value();
+    install_method(
+        scope,
+        observer_obj,
+        "observe",
+        mutation_observer_observe,
+        registry_ptr,
+    );
+    install_method(
+        scope,
+        observer_obj,
+        "disconnect",
+        mutation_observer_disconnect,
+        registry_ptr,
+    );
+    install_method(
+        scope,
+        observer_obj,
+        "takeRecords",
+        mutation_observer_take_records,
+        registry_ptr,
+    );
 
     registry.mo_observers.borrow_mut().insert(
         observer_id,
@@ -152,7 +172,10 @@ fn mutation_observer_observe(
     }
     let obj = target.to_object(scope).unwrap();
     let key = v8_str(scope, "__aurora_node_id");
-    let Some(target_id) = obj.get(scope, key.into()).and_then(|v| v.uint32_value(scope)) else {
+    let Some(target_id) = obj
+        .get(scope, key.into())
+        .and_then(|v| v.uint32_value(scope))
+    else {
         return;
     };
 

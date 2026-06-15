@@ -97,6 +97,40 @@ fn v8_supports_timers_and_raf() {
 }
 
 #[test]
+fn v8_drains_raf_scheduled_from_timer_then_zero_timer() {
+    let mut runtime = V8Runtime::new(blank_dom());
+
+    runtime
+        .execute(
+            r#"
+            globalThis.chain = [];
+            setTimeout(() => {
+                chain.push('timer1');
+                try {
+                    requestAnimationFrame(() => {
+                        chain.push('raf');
+                        setTimeout(() => chain.push('timer2'));
+                    });
+                    chain.push('scheduled');
+                } catch (e) {
+                    chain.push('error:' + e.message);
+                }
+            });
+            "#,
+        )
+        .unwrap();
+
+    let now = std::time::Instant::now();
+    runtime.tick(now + std::time::Duration::from_millis(1));
+    runtime.tick(now + std::time::Duration::from_millis(2));
+
+    assert_eq!(
+        runtime.eval_to_string("chain.join('|')"),
+        Ok("timer1|scheduled|raf|timer2".to_string())
+    );
+}
+
+#[test]
 fn v8_supports_event_listeners() {
     let mut runtime = V8Runtime::new(blank_dom());
 
@@ -116,6 +150,29 @@ fn v8_supports_event_listeners() {
     assert_eq!(
         runtime.eval_to_string("globalThis.eventFired"),
         Ok("true".to_string())
+    );
+}
+
+#[test]
+fn v8_lifecycle_events_reach_window_once() {
+    let mut runtime = V8Runtime::new(blank_dom());
+
+    runtime
+        .execute(
+            r#"
+            globalThis.dclWindowCount = 0;
+            globalThis.dclDocumentCount = 0;
+            window.addEventListener('DOMContentLoaded', () => { globalThis.dclWindowCount++; });
+            document.addEventListener('DOMContentLoaded', () => { globalThis.dclDocumentCount++; });
+            "#,
+        )
+        .unwrap();
+
+    runtime.fire_dom_content_loaded();
+
+    assert_eq!(
+        runtime.eval_to_string("globalThis.dclWindowCount + '|' + globalThis.dclDocumentCount"),
+        Ok("1|1".to_string())
     );
 }
 
@@ -155,7 +212,9 @@ fn v8_mutation_observer_reports_childlist_and_attributes() {
 
     // After disconnect, no further records are delivered.
     runtime
-        .execute("mo.disconnect(); globalThis.records = []; t.appendChild(document.createElement('b'));")
+        .execute(
+            "mo.disconnect(); globalThis.records = []; t.appendChild(document.createElement('b'));",
+        )
         .unwrap();
     assert!(!runtime.deliver_mutation_records());
     assert_eq!(
@@ -182,15 +241,19 @@ fn v8_mutation_observer_subtree_observes_descendants() {
         )
         .unwrap();
     assert!(runtime.deliver_mutation_records());
-    assert_eq!(runtime.eval_to_string("globalThis.hits"), Ok("1".to_string()));
+    assert_eq!(
+        runtime.eval_to_string("globalThis.hits"),
+        Ok("1".to_string())
+    );
 }
 
 #[test]
 fn v8_event_target_capture_once_and_remove() {
     // Exercises the JS EventTarget: capture-phase ordering, `once`, and
     // removeEventListener — all on real DOM nodes.
-    let dom = Parser::new("<html><body><div id='outer'><span id='inner'></span></div></body></html>")
-        .parse_document();
+    let dom =
+        Parser::new("<html><body><div id='outer'><span id='inner'></span></div></body></html>")
+            .parse_document();
     let mut runtime = V8Runtime::new(dom);
 
     // Capture fires on ancestors before the target; `once` auto-removes.
@@ -250,11 +313,57 @@ fn v8_dispatch_event_fires_window_and_document_listeners() {
 }
 
 #[test]
+fn v8_composed_event_reaches_shadow_host() {
+    let mut runtime = V8Runtime::new(blank_dom());
+    assert_eq!(
+        runtime.eval_to_string(
+            r#"(() => {
+                const host = document.createElement('div');
+                document.body.appendChild(host);
+                const root = host.attachShadow({ mode: 'open' });
+                const child = document.createElement('span');
+                root.appendChild(child);
+                let hostCount = 0;
+                host.addEventListener('shadow-ping', () => { hostCount++; });
+                child.dispatchEvent(new CustomEvent('shadow-ping', { bubbles: true, composed: true }));
+                return String(hostCount);
+            })()"#
+        ),
+        Ok("1".to_string())
+    );
+}
+
+#[test]
+fn v8_dispatch_event_sets_composed_path() {
+    let dom =
+        Parser::new("<html><body><div id='outer'><span id='inner'></span></div></body></html>")
+            .parse_document();
+    let mut runtime = V8Runtime::new(dom);
+    assert_eq!(
+        runtime.eval_to_string(
+            r#"(() => {
+                const outer = document.getElementById('outer');
+                const inner = document.getElementById('inner');
+                let result = '';
+                outer.addEventListener('path-ping', event => {
+                    const path = event.composedPath();
+                    result = (path[0] === inner) + '|' + path.some(node => node === outer);
+                });
+                inner.dispatchEvent(new CustomEvent('path-ping', { bubbles: true, composed: true }));
+                return result;
+            })()"#
+        ),
+        Ok("true|true".to_string())
+    );
+}
+
+#[test]
 fn v8_dispatch_event_bubbles_to_ancestors_and_document() {
     // Regression: element dispatch fired only the target's own listeners. A
     // bubbling event must reach ancestor elements and document-level listeners.
-    let dom = Parser::new("<html><body><div id='outer'><span id='inner'></span></div></body></html>")
-        .parse_document();
+    let dom =
+        Parser::new("<html><body><div id='outer'><span id='inner'></span></div></body></html>")
+            .parse_document();
     let mut runtime = V8Runtime::new(dom);
     assert_eq!(
         runtime.eval_to_string(
@@ -531,11 +640,125 @@ fn v8_attributed_string_setup_props_tolerates_inherited_callable_style() {
             }
             customElements.define('yt-attributed-string', YtAttributedString);
             var el = document.createElement('yt-attributed-string');
+            document.body.appendChild(el);
             return String(el.__setup_ok__ === true);
             })()
             "#
         ),
         Ok("true".to_string())
+    );
+}
+
+#[test]
+fn v8_custom_element_connects_only_after_append() {
+    let mut runtime = V8Runtime::new(blank_dom());
+
+    assert_eq!(
+        runtime.eval_to_string(
+            r#"
+            (() => {
+            const calls = [];
+            class LateConnect extends HTMLElement {
+                ready() {
+                    calls.push('ready:' + this.isConnected);
+                }
+                connectedCallback() {
+                    calls.push('connected:' + this.isConnected);
+                }
+            }
+            customElements.define('late-connect', LateConnect);
+            const el = document.createElement('late-connect');
+            const before = calls.join(',');
+            document.body.appendChild(el);
+            return before + '|' + calls.join(',');
+            })()
+            "#
+        ),
+        Ok("|ready:true,connected:true".to_string())
+    );
+}
+
+#[test]
+fn v8_custom_element_calls_attached_when_connected_callback_missing() {
+    let mut runtime = V8Runtime::new(blank_dom());
+
+    assert_eq!(
+        runtime.eval_to_string(
+            r#"
+            (() => {
+            function LegacyAttached() {
+                HTMLElement.call(this);
+            }
+            LegacyAttached.prototype = Object.create(HTMLElement.prototype);
+            LegacyAttached.prototype.constructor = LegacyAttached;
+            LegacyAttached.prototype.attached = function() {
+                this.__attached_count__ = (this.__attached_count__ || 0) + 1;
+            };
+            customElements.define('legacy-attached', LegacyAttached);
+            const el = document.createElement('legacy-attached');
+            const before = el.__attached_count__ || 0;
+            document.body.appendChild(el);
+            document.body.appendChild(el);
+            return before + '|' + el.__attached_count__;
+            })()
+            "#
+        ),
+        Ok("0|1".to_string())
+    );
+}
+
+#[test]
+fn v8_custom_element_runs_before_register_and_created() {
+    let mut runtime = V8Runtime::new(blank_dom());
+
+    assert_eq!(
+        runtime.eval_to_string(
+            r#"
+            (() => {
+            function PolymerLike() {
+                HTMLElement.call(this);
+            }
+            PolymerLike.prototype = Object.create(HTMLElement.prototype);
+            PolymerLike.prototype.constructor = PolymerLike;
+            PolymerLike.prototype.beforeRegister = function() {
+                this.__before_register_count__ = (this.__before_register_count__ || 0) + 1;
+            };
+            PolymerLike.prototype.created = function() {
+                this.__created_count__ = (this.__created_count__ || 0) + 1;
+            };
+            customElements.define('polymer-like', PolymerLike);
+            const el = document.createElement('polymer-like');
+            return [el.__before_register_count__, el.__created_count__].join('|');
+            })()
+            "#
+        ),
+        Ok("1|1".to_string())
+    );
+}
+
+#[test]
+fn v8_custom_element_before_register_can_be_invoked_on_upgrade() {
+    let mut runtime = V8Runtime::new(blank_dom());
+
+    assert_eq!(
+        runtime.eval_to_string(
+            r#"
+            (() => {
+            function LateBeforeRegister() {
+                HTMLElement.call(this);
+            }
+            LateBeforeRegister.prototype = Object.create(HTMLElement.prototype);
+            LateBeforeRegister.prototype.constructor = LateBeforeRegister;
+            customElements.define('late-before-register', LateBeforeRegister);
+            LateBeforeRegister.prototype.beforeRegister = function() {
+                this.__before_register_count__ = (this.__before_register_count__ || 0) + 1;
+            };
+            const el = document.createElement('late-before-register');
+            return String(el.__before_register_count__);
+            })()
+            "#
+        ),
+        Ok("1".to_string())
     );
 }
 
@@ -546,8 +769,10 @@ fn v8_append_child_moves_node_out_of_previous_parent() {
     // in two places, so `oldParent.firstChild` never changes — which spun
     // YouTube's `while (el.firstChild) frag.appendChild(el.firstChild)` icon
     // clear-loop forever.
-    let dom = Parser::new("<html><body><div id='a'><span id='c'></span></div><div id='b'></div></body></html>")
-        .parse_document();
+    let dom = Parser::new(
+        "<html><body><div id='a'><span id='c'></span></div><div id='b'></div></body></html>",
+    )
+    .parse_document();
     let mut runtime = V8Runtime::new(dom);
 
     assert_eq!(
@@ -568,6 +793,31 @@ fn v8_append_child_moves_node_out_of_previous_parent() {
             "#
         ),
         Ok("true|0|true|true".to_string())
+    );
+
+    assert_eq!(
+        runtime.eval_to_string(
+            r#"
+            (() => {
+            const host = document.getElementById('a');
+            const frag = document.createDocumentFragment();
+            const one = document.createElement('span');
+            const two = document.createElement('em');
+            frag.appendChild(one);
+            frag.appendChild(two);
+            host.appendChild(frag);
+            return [
+                frag.childNodes.length,
+                host.childNodes.length,
+                host.firstChild === one,
+                host.lastChild === two,
+                one.parentNode === host,
+                two.parentNode === host
+            ].join('|');
+            })()
+            "#
+        ),
+        Ok("0|2|true|true|true|true".to_string())
     );
 
     // A clear-and-rebuild loop must terminate.
@@ -591,9 +841,70 @@ fn v8_append_child_moves_node_out_of_previous_parent() {
 }
 
 #[test]
+fn v8_polymer_id_map_exposes_direct_and_camel_aliases_before_ready() {
+    // YouTube/Polymer templates expose stamped ids both through `this.$` and as
+    // direct host properties before `ready()` runs. `ytd-watch-flexy.ready()`
+    // relies on `this.primary`/`this.secondary`; dashed ids are commonly read as
+    // camelCase properties such as `this.playerContainer`.
+    let mut runtime = V8Runtime::new(blank_dom());
+
+    assert_eq!(
+        runtime.eval_to_string(
+            r#"
+            (() => {
+            function TestPolymerIdMap() {
+                HTMLElement.call(this);
+                const root = this.attachShadow({ mode: 'open' });
+                const primary = document.createElement('div');
+                primary.id = 'primary';
+                const player = document.createElement('div');
+                player.id = 'player-container';
+                root.appendChild(primary);
+                root.appendChild(player);
+            }
+            TestPolymerIdMap.prototype = Object.create(HTMLElement.prototype);
+            TestPolymerIdMap.prototype.constructor = TestPolymerIdMap;
+            TestPolymerIdMap.prototype.ready = function() {
+                globalThis.idMapProbe = [
+                    this.$ && this.$.primary === this.primary,
+                    this.primary && this.primary.id,
+                    this.$ && this.$['player-container'] === this.playerContainer,
+                    this.playerContainer && this.playerContainer.id
+                ].join('|');
+            };
+            customElements.define('test-polymer-id-map', TestPolymerIdMap);
+            document.createElement('test-polymer-id-map');
+            const tpl = document.createElement('template');
+            tpl.innerHTML = '<div id="secondary"></div><div id="player-container"></div>';
+            function TestLazyIdMap() { HTMLElement.call(this); }
+            TestLazyIdMap.template = tpl;
+            TestLazyIdMap.prototype = Object.create(HTMLElement.prototype);
+            TestLazyIdMap.prototype.constructor = TestLazyIdMap;
+            TestLazyIdMap.prototype.ready = function() {
+                const t = this.constructor.template;
+                const root = this.attachShadow({ mode: 'open' });
+                root.appendChild(t.content.cloneNode(true));
+                globalThis.lazyIdMapProbe = [
+                    this.secondary && this.secondary.id,
+                    this.playerContainer && this.playerContainer.id,
+                    typeof this.secondary.addEventListener
+                ].join('|');
+            };
+            customElements.define('test-lazy-id-map', TestLazyIdMap);
+            document.createElement('test-lazy-id-map');
+            return globalThis.idMapProbe + '||' + globalThis.lazyIdMapProbe;
+            })()
+            "#
+        ),
+        Ok("true|primary|true|player-container||secondary|player-container|function".to_string())
+    );
+}
+
+#[test]
 fn v8_supports_prepend_before_after_mutation_helpers() {
-    let dom = Parser::new("<html><body><div id='root'><span id='middle'></span></div></body></html>")
-        .parse_document();
+    let dom =
+        Parser::new("<html><body><div id='root'><span id='middle'></span></div></body></html>")
+            .parse_document();
     let mut runtime = V8Runtime::new(dom);
 
     assert_eq!(
@@ -613,8 +924,9 @@ fn v8_supports_prepend_before_after_mutation_helpers() {
 
 #[test]
 fn v8_supports_insert_adjacent_and_replace_helpers() {
-    let dom = Parser::new("<html><body><div id='root'><span id='middle'></span></div></body></html>")
-        .parse_document();
+    let dom =
+        Parser::new("<html><body><div id='root'><span id='middle'></span></div></body></html>")
+            .parse_document();
     let mut runtime = V8Runtime::new(dom);
 
     assert_eq!(
@@ -688,9 +1000,63 @@ fn v8_template_inner_html_parses_as_fragment() {
 }
 
 #[test]
+fn v8_template_content_children_keep_parent_links() {
+    let mut runtime = V8Runtime::new(blank_dom());
+
+    assert_eq!(
+        runtime.eval_to_string(
+            r#"
+            (() => {
+            const template = document.createElement('template');
+            template.innerHTML = '<div id="a"><span id="b"></span></div><p id="c"></p>';
+            const original = template.content;
+            const cloned = original.cloneNode(true);
+            const firstOriginal = original.firstChild;
+            const firstClone = cloned.firstChild;
+            return [
+                firstOriginal.parentNode === original,
+                firstOriginal.firstChild.parentNode === firstOriginal,
+                firstClone.parentNode === cloned,
+                firstClone.firstChild.parentNode === firstClone
+            ].join('|');
+            })()
+            "#
+        ),
+        Ok("true|true|true|true".to_string())
+    );
+}
+
+#[test]
+fn v8_template_content_parent_and_siblings_are_visible() {
+    let mut runtime = V8Runtime::new(blank_dom());
+
+    assert_eq!(
+        runtime.eval_to_string(
+            r#"
+            (() => {
+            const template = document.createElement('template');
+            template.innerHTML = '<div id="a"></div><p id="b"></p>';
+            const content = template.content;
+            const first = content.firstChild;
+            const second = first.nextSibling;
+            return [
+                first.parentNode === content,
+                second.parentNode === content,
+                first.nextSibling === second,
+                second.previousSibling === first
+            ].join('|');
+            })()
+            "#
+        ),
+        Ok("true|true|true|true".to_string())
+    );
+}
+
+#[test]
 fn v8_dom_constructor_prototypes_forward_to_native_wrappers() {
-    let dom = Parser::new("<html><body><div id='root'><span id='child'></span></div></body></html>")
-        .parse_document();
+    let dom =
+        Parser::new("<html><body><div id='root'><span id='child'></span></div></body></html>")
+            .parse_document();
     let mut runtime = V8Runtime::new(dom);
 
     assert_eq!(
@@ -758,6 +1124,31 @@ fn v8_exposes_common_element_metric_and_attribute_probes() {
             "#
         ),
         Ok("true|true|0|0|0|0|function".to_string())
+    );
+}
+
+#[test]
+fn v8_connected_custom_elements_get_metric_fallbacks() {
+    let mut runtime = V8Runtime::new(blank_dom());
+
+    assert_eq!(
+        runtime.eval_to_string(
+            r#"
+            (() => {
+            const regular = document.createElement('div');
+            const custom = document.createElement('metric-probe');
+            const before = custom.clientWidth;
+            document.body.appendChild(custom);
+            return [
+                regular.clientWidth,
+                before,
+                custom.clientWidth > 0,
+                custom.offsetWidth === custom.clientWidth
+            ].join('|');
+            })()
+            "#
+        ),
+        Ok("0|0|true|true".to_string())
     );
 }
 

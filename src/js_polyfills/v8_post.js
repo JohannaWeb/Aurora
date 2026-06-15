@@ -229,6 +229,75 @@
     // Element decoration — called from the native bridge for every element
     // wrapper. Installs per-element JS APIs that are simpler here than native.
     globalThis.__aurora_decorate_element__ = function(el) {
+        // Most wrappers inherit these through HTMLElement -> Node -> EventTarget,
+        // but template/shadow stamping can surface older wrappers whose prototype
+        // chain was established before the JS skeletons existed. Keep event
+        // delivery available on the instance so Polymer-ready code can safely
+        // attach listeners to stamped ids.
+        if (typeof el.addEventListener !== 'function' && globalThis.EventTarget) {
+            el.addEventListener = EventTarget.prototype.addEventListener;
+            el.removeEventListener = EventTarget.prototype.removeEventListener;
+            el.dispatchEvent = EventTarget.prototype.dispatchEvent;
+        }
+        if (!el.__aurora_metric_fallbacks__) {
+            try {
+                Object.defineProperty(el, '__aurora_metric_fallbacks__', {
+                    value: true,
+                    configurable: true
+                });
+            } catch (e) {
+                el.__aurora_metric_fallbacks__ = true;
+            }
+            var isCustomElement = function() {
+                try {
+                    var name = el.localName || '';
+                    return name.indexOf('-') >= 0;
+                } catch (e) {
+                    return false;
+                }
+            };
+            var connected = function() {
+                try { return el.isConnected === true; } catch (e) { return false; }
+            };
+            var widthFallback = function() {
+                if (!isCustomElement() || !connected()) return 0;
+                var parent = null;
+                try { parent = el.parentElement || el.parentNode || null; } catch (e) {}
+                if (parent && parent !== el) {
+                    try {
+                        var parentWidth = Number(parent.clientWidth || parent.offsetWidth || 0);
+                        if (parentWidth > 0) return parentWidth;
+                    } catch (e2) {}
+                }
+                return Number(globalThis.innerWidth || 0);
+            };
+            var heightFallback = function() {
+                if (!isCustomElement() || !connected()) return 0;
+                return Number(globalThis.innerHeight || 0);
+            };
+            function metric(name, fallback) {
+                var value = 0;
+                try { value = Number(el[name] || 0); } catch (e) {}
+                try {
+                    Object.defineProperty(el, name, {
+                        configurable: true,
+                        enumerable: true,
+                        get: function() {
+                            return value || fallback();
+                        },
+                        set: function(next) {
+                            value = Number(next || 0);
+                        }
+                    });
+                } catch (e) {}
+            }
+            metric('clientWidth', widthFallback);
+            metric('offsetWidth', widthFallback);
+            metric('scrollWidth', widthFallback);
+            metric('clientHeight', heightFallback);
+            metric('offsetHeight', heightFallback);
+            metric('scrollHeight', heightFallback);
+        }
         el.animate = function() {
             var anim = {
                 playState: 'finished', currentTime: 0, startTime: 0,

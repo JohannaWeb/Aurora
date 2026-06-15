@@ -18,10 +18,18 @@ pub(crate) fn query_first(root: &NodePtr, selector: &str, start_node: &NodePtr) 
     // ancestors via a full-tree `find_parent` walk.
     let mut ancestors = build_ancestor_chain(root, start_node);
     let mut found = None;
-    collect_matches(start_node, &selectors, &mut ancestors, &[], 0, true, &mut |n| {
-        found = Some(n.clone());
-        true
-    });
+    collect_matches(
+        start_node,
+        &selectors,
+        &mut ancestors,
+        &[],
+        0,
+        true,
+        &mut |n| {
+            found = Some(n.clone());
+            true
+        },
+    );
     found
 }
 
@@ -29,10 +37,18 @@ pub(crate) fn query_all(root: &NodePtr, selector: &str, start_node: &NodePtr) ->
     let selectors = parse_selectors(selector);
     let mut ancestors = build_ancestor_chain(root, start_node);
     let mut out = Vec::new();
-    collect_matches(start_node, &selectors, &mut ancestors, &[], 0, true, &mut |n| {
-        out.push(n.clone());
-        false
-    });
+    collect_matches(
+        start_node,
+        &selectors,
+        &mut ancestors,
+        &[],
+        0,
+        true,
+        &mut |n| {
+            out.push(n.clone());
+            false
+        },
+    );
     out
 }
 
@@ -149,6 +165,16 @@ fn find_parent_scan(root: &NodePtr, target: &NodePtr) -> Option<NodePtr> {
         }
         if let Some(found) = find_parent_scan(child, target) {
             return Some(found);
+        }
+    }
+    if let Node::Element(el) = &*root.borrow() {
+        if let Some(content) = &el.template_contents {
+            if Rc::ptr_eq(content, target) {
+                return Some(root.clone());
+            }
+            if let Some(found) = find_parent_scan(content, target) {
+                return Some(found);
+            }
         }
     }
     None
@@ -290,13 +316,23 @@ fn collect_matches(
     };
     let child_siblings: Vec<ElementData> = children.iter().filter_map(element_data_of).collect();
 
-    let pushed = element_data_of(node).map(|data| ancestors.push(data)).is_some();
+    let pushed = element_data_of(node)
+        .map(|data| ancestors.push(data))
+        .is_some();
     let mut stopped = false;
     let mut element_index = 0usize;
     for child in &children {
         let is_element = matches!(&*child.borrow(), Node::Element(_));
         let index = if is_element { element_index } else { 0 };
-        if collect_matches(child, selectors, ancestors, &child_siblings, index, false, on_match) {
+        if collect_matches(
+            child,
+            selectors,
+            ancestors,
+            &child_siblings,
+            index,
+            false,
+            on_match,
+        ) {
             stopped = true;
             break;
         }

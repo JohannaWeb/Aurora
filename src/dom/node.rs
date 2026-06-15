@@ -48,13 +48,16 @@ pub fn parent_ptr(node: &NodePtr) -> Option<NodePtr> {
 
 /// Point every (element) child of `node` at `node`.
 pub fn link_children(node: &NodePtr) {
-    let children: Vec<NodePtr> = match &*node.borrow() {
-        Node::Element(el) => el.children.clone(),
-        Node::Document { children, .. } => children.clone(),
+    let (children, template_contents): (Vec<NodePtr>, Option<NodePtr>) = match &*node.borrow() {
+        Node::Element(el) => (el.children.clone(), el.template_contents.clone()),
+        Node::Document { children, .. } => (children.clone(), None),
         _ => return,
     };
     for child in &children {
         set_parent(child, node);
+    }
+    if let Some(content) = template_contents {
+        link_children(&content);
     }
 }
 
@@ -63,14 +66,17 @@ pub fn link_children(node: &NodePtr) {
 /// Used to link a freshly parsed tree in one pass; mutation primitives maintain
 /// the pointers incrementally thereafter.
 pub fn reparent_subtree(node: &NodePtr) {
-    let children: Vec<NodePtr> = match &*node.borrow() {
-        Node::Element(el) => el.children.clone(),
-        Node::Document { children, .. } => children.clone(),
+    let (children, template_contents): (Vec<NodePtr>, Option<NodePtr>) = match &*node.borrow() {
+        Node::Element(el) => (el.children.clone(), el.template_contents.clone()),
+        Node::Document { children, .. } => (children.clone(), None),
         _ => return,
     };
     for child in &children {
         set_parent(child, node);
         reparent_subtree(child);
+    }
+    if let Some(content) = template_contents {
+        reparent_subtree(&content);
     }
 }
 

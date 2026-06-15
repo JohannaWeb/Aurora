@@ -548,6 +548,9 @@ fn script_created_template_supports_kevlar_build_sequence() {
                 d.content.insertBefore(clone, d.content.firstChild);
                 steps.push('insertBefore:ok');
                 steps.push('finalKids:' + d.content.childNodes.length);
+                steps.push('order:' + d.content.childNodes[0].localName + ',' + d.content.childNodes[1].localName);
+                steps.push('parent:' + String(d.content.firstChild.parentNode === d.content));
+                steps.push('sibling:' + String(d.content.firstChild.nextSibling === d.content.childNodes[1]));
             } catch (e) {
                 steps.push('THREW:' + e.message);
             }
@@ -558,8 +561,30 @@ fn script_created_template_supports_kevlar_build_sequence() {
 
     assert_eq!(
         text_content(&dom),
-        "create:ok|innerHTML:ok|content:ok|kids:1|clone:ok|insertBefore:ok|finalKids:2"
+        "create:ok|innerHTML:ok|content:ok|kids:1|clone:ok|insertBefore:ok|finalKids:2|order:style,div|parent:true|sibling:true"
     );
+}
+
+#[test]
+fn owner_document_is_present_on_custom_element_templates() {
+    let dom = Parser::new("<html><body></body></html>").parse_document();
+    let mut runtime = SmRuntime::new(dom.clone());
+
+    runtime
+        .execute(
+            r#"
+            const template = document.createElement('template');
+            const div = document.createElement('div');
+            document.body.textContent = [
+                String(template.content.ownerDocument === document),
+                String(div.ownerDocument === document),
+                String(document.ownerDocument === null)
+            ].join('|');
+            "#,
+        )
+        .unwrap();
+
+    assert_eq!(text_content(&dom), "true|true|false");
 }
 
 fn text_content(node: &NodePtr) -> String {

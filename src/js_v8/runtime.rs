@@ -619,9 +619,13 @@ impl V8Runtime {
     fn fire_lifecycle_event(&mut self, event_type: &str) {
         // Lifecycle listeners live on the JS `document`/`window` EventTargets, so
         // fire through the JS event model rather than the legacy id-0 registry.
+        // These events are delivered to both globals for compatibility, but they
+        // must not bubble from document to window and then be dispatched again.
         let source = format!(
-            "(function(){{ try {{ var e = new Event({event_type:?}, {{ bubbles: true }}); \
-             document.dispatchEvent(e); window.dispatchEvent(e); }} catch (err) {{}} }})();"
+            "(function(){{ try {{ \
+             document.dispatchEvent(new Event({event_type:?}, {{ bubbles: false }})); \
+             window.dispatchEvent(new Event({event_type:?}, {{ bubbles: false }})); \
+             }} catch (err) {{}} }})();"
         );
         self.run_js_quiet(&source);
     }
@@ -1282,25 +1286,31 @@ impl crate::js_engine::JsRuntime for V8Runtime {
             return false;
         }
 
-        v8::scope_with_context!(let scope, &mut self.isolate, &self.context);
-        let context = v8::Local::new(scope, &self.context);
-        let global = context.global(scope);
+        {
+            v8::scope_with_context!(let scope, &mut self.isolate, &self.context);
+            let context = v8::Local::new(scope, &self.context);
+            let global = context.global(scope);
 
-        for entry in ready {
-            let callback = v8::Local::new(scope, entry.callback);
-            let _ = callback.call(scope, global.into(), &[]);
+            for entry in ready {
+                let callback = v8::Local::new(scope, entry.callback);
+                let _ = callback.call(scope, global.into(), &[]);
 
-            if let Some(interval) = entry.interval {
-                self.window
-                    .borrow_mut()
-                    .timers
-                    .push(super::capture::TimerEntry {
-                        id: entry.id,
-                        callback: v8::Global::new(scope, callback),
-                        deadline: now + interval,
-                        interval: Some(interval),
-                    });
+                if let Some(interval) = entry.interval {
+                    self.window
+                        .borrow_mut()
+                        .timers
+                        .push(super::capture::TimerEntry {
+                            id: entry.id,
+                            callback: v8::Global::new(scope, callback),
+                            deadline: now + interval,
+                            interval: Some(interval),
+                        });
+                }
             }
+        }
+
+        if self.has_animation_frame_callbacks() {
+            let _ = self.drain_animation_frame_callbacks(now);
         }
 
         true
