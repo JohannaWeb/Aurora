@@ -176,11 +176,67 @@ fn run_scripts(
     pump_ready_work(runtime.as_mut());
     runtime.fire_load();
     pump_ready_work(runtime.as_mut());
+    drive_polymer_page_manager_navigation(runtime.as_mut());
+    pump_ready_work(runtime.as_mut());
     if env::var("AURORA_DEBUG_YOUTUBE").is_ok() {
         run_youtube_initial_navigation_probe(runtime.as_mut());
         pump_ready_work(runtime.as_mut());
+        dump_render_diagnostics(runtime.as_mut());
     }
     Some(runtime)
+}
+
+/// Kevlar/Polymer apps (e.g. YouTube) normally create their first page through
+/// a closure-private navigation/lifecycle manager (`_.esx` via a `T2` state
+/// machine) whose initial transition never fires in our environment. `<ytd-page-manager>`
+/// is a public custom element whose own `updatePageData` can construct and
+/// attach the active page directly from `window.getInitialData()`, bypassing
+/// that closure entirely. Once the page is attached, its data-bound renderers
+/// (e.g. `ytd-rich-grid-renderer`) still need a nudge: assigning `.data` here
+/// doesn't run through Polymer's property-effects system, so `shownItems`
+/// stays empty until `dataChanged`/`reflowContent` is called explicitly.
+fn drive_polymer_page_manager_navigation(runtime: &mut dyn crate::js_engine::JsRuntime) {
+    let _ = runtime.execute(
+        r#"
+        (function() {
+            try {
+                var pageManager = document.querySelector && document.querySelector('ytd-page-manager');
+                var getInitialData = window.getInitialData;
+                if (!pageManager || typeof pageManager.updatePageData !== 'function' ||
+                    typeof getInitialData !== 'function') {
+                    return;
+                }
+                var data = getInitialData();
+                if (!data) return;
+
+                var attempts = 0;
+                function settleRenderers() {
+                    attempts++;
+                    var all = document.querySelectorAll ? document.querySelectorAll('*') : [];
+                    for (var i = 0; i < all.length; i++) {
+                        var el = all[i];
+                        var elData = el.data || (el.__data && el.__data.data);
+                        if (!elData || !elData.contents || !elData.contents.length) continue;
+                        var shown = el.shownItems || (el.__data && el.__data.shownItems);
+                        if (shown && shown.length) continue;
+                        try {
+                            if (typeof el.dataChanged === 'function') el.dataChanged();
+                            else if (typeof el.reflowContent === 'function') el.reflowContent(true);
+                        } catch (e) {}
+                    }
+                    if (attempts < 5) setTimeout(settleRenderers, 0);
+                }
+
+                var result = pageManager.updatePageData(data);
+                if (result && typeof result.then === 'function') {
+                    result.then(settleRenderers, function() {});
+                } else {
+                    settleRenderers();
+                }
+            } catch (e) {}
+        })();
+        "#,
+    );
 }
 
 /// Drive the JS event loop toward quiescence after a script or lifecycle step.
@@ -248,6 +304,41 @@ fn pump_ready_work(runtime: &mut dyn crate::js_engine::JsRuntime) {
             None => break,
         }
     }
+}
+
+/// Diagnostic dump of the rich-grid content subtree's layout/style state, to
+/// distinguish "real content with no layout box" from "no content stamped".
+fn dump_render_diagnostics(runtime: &mut dyn crate::js_engine::JsRuntime) {
+    let _ = runtime.execute(
+        r#"
+        (function() {
+            try {
+                function describe(el) {
+                    if (!el) return 'null';
+                    var cs = (typeof getComputedStyle === 'function') ? getComputedStyle(el) : null;
+                    var text = (el.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 80);
+                    return (el.tagName || el.nodeName) +
+                        ' display=' + (cs && cs.display) +
+                        ' kids=' + (el.children ? el.children.length : 'n/a') +
+                        ' w=' + el.clientWidth + ' h=' + el.clientHeight +
+                        ' text="' + text + '"';
+                }
+                var rich = document.querySelector && document.querySelector('ytd-rich-grid-renderer');
+                var contents = rich && rich.querySelector ? rich.querySelector('#contents') : null;
+                console.log('[yt-render] rich=' + describe(rich));
+                console.log('[yt-render] contents=' + describe(contents));
+                if (contents && contents.children) {
+                    for (var i = 0; i < contents.children.length; i++) {
+                        console.log('[yt-render] contents child ' + i + ' = ' + describe(contents.children[i]));
+                    }
+                }
+                console.log('[yt-render] styleSheets=' + (document.styleSheets ? document.styleSheets.length : 'n/a'));
+            } catch (e) {
+                console.log('[yt-render] ERROR ' + e);
+            }
+        })();
+        "#,
+    );
 }
 
 fn run_youtube_initial_navigation_probe(runtime: &mut dyn crate::js_engine::JsRuntime) {

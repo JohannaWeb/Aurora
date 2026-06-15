@@ -1013,6 +1013,12 @@
 
             function installRichGridFallback(el) {
                 if (!el || el.localName !== 'ytd-rich-grid-renderer' || el.__aurora_rich_grid_fallback__) return;
+                // Synthesizes placeholder sections/boxes into document.body when real
+                // Polymer rendering hasn't populated #contents yet. Now that
+                // drive_polymer_page_manager_navigation() makes real dataChanged()-driven
+                // rendering work, this fallback only adds duplicate/misleading debug
+                // boxes on top of real content, so restrict it to debug runs.
+                if (!globalThis.__aurora_debug_youtube__) return;
                 try {
                     Object.defineProperty(el, '__aurora_rich_grid_fallback__', {
                         value: true,

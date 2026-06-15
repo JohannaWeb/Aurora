@@ -1,10 +1,16 @@
 # Handoff: V8 YouTube compatibility
 
-**Date:** 2026-06-13 (updated)
-**Status:** YouTube now boots to completion and **renders a screenshot** (clean
-`EXIT=0`). It paints the page shell — masthead chrome + loading spinners/circles —
-but the main content (`ytd-rich-grid`) does not stamp yet. Next frontier is
-content-renderer template/data hydration, not a crash or hang.
+**Date:** 2026-06-15 (updated)
+**Status:** Home feed content now renders. `ytd-page-manager.updatePageData(window
+.getInitialData())` — wired into the unconditional boot path as
+`drive_polymer_page_manager_navigation()` in `src/runner/pipeline.rs` — bypasses
+the closure-private `_.esx`/`T2` navigation chain entirely and stamps `ytd-browse`
+plus the rich-grid renderer's first section. The "Current frontier"/"Bundle
+trace"/"Navigation trace" sections below describing navigation as "a substantial
+architectural effort, not bounded" are **superseded** — see "Resolved 2026-06-15"
+below. The new frontier is CSS/layout application: the DOM grows to ~412 nodes and
+the dark masthead/background theme paints, but the rich-grid content area isn't
+visibly laid out yet.
 
 ## Resolved this session
 
@@ -82,7 +88,98 @@ Conclusion: YouTube's `yt-icon` `applyIconShape` generator walks the DOM
 never becomes true in our engine — i.e. some DOM accessor returns a subtly wrong
 value that breaks the generator's exit condition.
 
-## Current frontier: the initial navigation never fires (no content page)
+## Resolved 2026-06-15: page-manager bypass unblocks content rendering
+
+The "Current frontier" / "Bundle trace" / "Navigation trace" / "(Earlier framing)"
+sections below all converge on one conclusion: `_.esx`/`navMgr`/`T2` are
+closure-private and YouTube's own initial-navigation trigger never fires, so
+content can't be created. That conclusion is **correct but incomplete** — it
+assumed page creation could *only* happen through that closure-private chain.
+
+`<ytd-page-manager>` is a **public, registered custom element** (unlike `_.esx`).
+Its `updatePageData(data)` method constructs and attaches the active page
+(`ytd-browse`) directly, with `data = window.getInitialData()` — entirely
+bypassing `_.esx`/`navMgr`/`T2`. This call was already present (buried) in the
+debug-only probe, but never reached the unconditional boot path.
+
+Separately, Polymer's reactive property-effects system doesn't fire automatically
+when `.data` is assigned programmatically in our environment — renderers like
+`ytd-rich-grid-renderer` need an explicit `.dataChanged()` (or
+`.reflowContent(true)`) call to populate `shownItems` and stamp `#contents`.
+
+### Fix: `drive_polymer_page_manager_navigation()` (`src/runner/pipeline.rs`)
+Called unconditionally after `fire_load()` + `pump_ready_work()` in
+`run_scripts()`:
+1. `pm.updatePageData(getInitialData())` on `ytd-page-manager`.
+2. `settleRenderers()`: up to 5 retries (via `setTimeout(..., 0)`, pumped each
+   time) that call `.dataChanged()`/`.reflowContent(true)` on any element with
+   non-empty `data.contents` but empty `shownItems`.
+
+Verified **without** `AURORA_DEBUG_YOUTUBE`: `ytd-browse` exists,
+`pm.currentPage === ytd-browse`, and the rich-grid renderer reports
+`contentsLen=1 shownItemsLen=1 contentsKids=1`. The old debug-only probe
+(`run_youtube_initial_navigation_probe`, still present and gated on
+`AURORA_DEBUG_YOUTUBE`) now finds its own `updatePageData`/`dataChanged` calls are
+no-ops, since `shownItems` is already populated by the time it runs.
+
+### Fallback-renderer subsystem is now debug-only
+`installRichGridFallback`/`installRichSectionFallback`/`installFeedNudgeFallback`
+(`src/js_polyfills/custom_elements.js`, added in `4f17366`, ~500 lines) wrap
+`ytd-rich-grid-renderer.dataChanged` and, whenever `#contents` isn't yet
+populated, synthesize placeholder `ytd-rich-section-renderer`/
+`ytd-feed-nudge-renderer` elements and unconditionally insert "aurora rich-section
+... feedNudgeRenderer feedNudgeRenderer" debug boxes at the start of
+`document.body`.
+
+Because `drive_polymer_page_manager_navigation()` now calls `dataChanged()`
+repeatedly via `settleRenderers()`, the wrapped `dataChanged` re-triggers
+`maybeRenderFallback()` each time — producing **multiple duplicate debug boxes**
+that visually dominated the screenshot and don't represent real YouTube content.
+
+Fix: gated `installRichGridFallback` behind `globalThis.__aurora_debug_youtube__`
+(one early return) — it remains available as a diagnostic under
+`AURORA_DEBUG_YOUTUBE=1`, but no longer mutates the DOM in production. With it
+disabled, a non-debug screenshot shows the real dark masthead/background theme
+(YouTube dark-theme CSS applying at the body level), a handful of header/avatar
+placeholder boxes, and **412 DOM nodes** in the shell.
+
+## New frontier: stamped content is real elements, but unevaluated templates
+
+Added `dump_render_diagnostics()` (`src/runner/pipeline.rs`, gated on
+`AURORA_DEBUG_YOUTUBE`) to inspect the rich-grid subtree after boot. Output:
+
+```
+[yt-render] rich=YTD-RICH-GRID-RENDERER display= kids=6 w=1200 h=800 text="[[getSimpleString(data.title)]]"
+[yt-render] contents=DIV display= kids=1 w=0 h=0 text=""
+[yt-render] contents child 0 = YTD-RICH-SECTION-RENDERER display= kids=0 w=1200 h=800 text=""
+[yt-render] styleSheets=n/a
+```
+
+Two distinct, narrower problems than "no content":
+1. **Unevaluated Polymer template bindings.** `ytd-rich-grid-renderer`'s
+   `textContent` literally contains `"[[getSimpleString(data.title)]]"` — the
+   raw `[[...]]` one-way-binding annotation from Polymer's template, never
+   evaluated against `data`. The element *types* are real
+   (`ytd-rich-section-renderer` etc., matching `richData.contents`), but their
+   *content* is template source, not rendered values. Fixing this for real
+   requires (a subset of) Polymer's property-effects/template-binding evaluator
+   — a large, separate feature.
+2. **`#contents` has a real child but `w=0 h=0`.** `ytd-rich-section-renderer`
+   reports `w=1200 h=800` despite its parent `#contents` being `0x0` —
+   inconsistent box sizes suggest `:host`-based sizing rules aren't being
+   applied consistently to `#contents` itself. Also, `document.styleSheets` is
+   `undefined` (the JS `StyleSheetList`/`CSSStyleSheet` API isn't implemented),
+   so any YouTube/Polymer code that queries stylesheets via JS gets nothing
+   (separate from `Stylesheet::from_dom`, which does collect `<style>`/`<link>`
+   CSS at the Rust layer).
+
+Both are real, bounded-*er* problems (vs. the previous "navigation never
+fires"), but (1) in particular — template-binding evaluation — is itself a
+substantial feature, not a small fix, and is the actual reason the rendered page
+looks "static": real custom elements exist, but their visible text/content is
+literal template source rather than evaluated `ytInitialData` values.
+
+## (Superseded by "Resolved 2026-06-15" above) Former frontier: the initial navigation never fires (no content page)
 
 The page renders its shell but the home feed is empty; live, you only see the
 masthead hamburger + avatar/spinner circles.
@@ -182,6 +279,15 @@ unchanged (114 vs 113 connectedCallbacks, no regression), and `ytd-watch-flexy`'
 **Still no content** — navigation never fires, so the EventTarget rework was
 necessary infrastructure but not sufficient. (Note: the shadow-root template in
 `attach_shadow` still uses the legacy registry path; secondary, pre-existing.)
+
+**The following three sections (Bundle trace / Navigation trace / "Earlier
+framing") document the investigation that led to the "navigation never fires"
+conclusion above. Their findings about `_.esx`/`navMgr`/`T2`/event-routing are
+still accurate as far as they go, but their overall conclusion — that content
+rendering requires "a substantial architectural effort... not bounded" — is
+superseded by "Resolved 2026-06-15" above: `ytd-page-manager.updatePageData()` is
+a public bypass that sidesteps this entire closure-private chain. Kept for
+historical record.**
 
 ## Bundle trace (2026-06-14): the complete home-load chain, mapped from kevlar.js
 
@@ -344,7 +450,17 @@ or a lighter target than the full desktop Polymer app). Ties into the PAGE_TOKEN
 data-injection note in [[v8-youtube-hydration-status]].
 
 ## Verification
-- `cargo test --no-default-features --features v8` → 95 pass.
-- `cargo test js_sm::runtime_tests` (default backend) → 15 pass.
-- Live probe: `AURORA_DEBUG_YOUTUBE=1 AURORA_HEADLESS=1 AURORA_SCREENSHOT=/tmp/yt.png ./target/debug/aurora https://www.youtube.com/`
-  (hangs in the icon loop; no screenshot yet).
+- `cargo test --no-default-features --features v8 --lib` → 112 pass, 1 pre-existing
+  failure unrelated to this work
+  (`v8_polymer_id_map_exposes_direct_and_camel_aliases_before_ready`, fails on
+  `main`/`HEAD` without any of these changes too).
+- Live probe (no debug flag): `AURORA_HEADLESS=1 AURORA_SCREENSHOT=/tmp/yt_fix4.png
+  ./target/debug/aurora https://www.youtube.com/` → clean `EXIT=0`, `ytd-browse`
+  exists, `pm.currentPage === ytd-browse`, rich-grid `contentsLen=1
+  shownItemsLen=1 contentsKids=1`, shell grows to 412 DOM nodes, dark
+  masthead/background theme paints. Rich-grid content area not yet visibly laid
+  out (CSS/layout gap, see "Resolved 2026-06-15" above).
+- Debug probe: `AURORA_DEBUG_YOUTUBE=1 AURORA_HEADLESS=1
+  AURORA_SCREENSHOT=/tmp/yt_fix1_debug.png ./target/debug/aurora
+  https://www.youtube.com/` still works as a diagnostic; the fallback-renderer
+  subsystem remains active under this flag.
