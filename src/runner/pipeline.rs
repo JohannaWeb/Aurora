@@ -299,6 +299,7 @@ mod tests {
     use crate::html::Parser;
 
     #[test]
+    #[cfg(feature = "engine-sm")]
     fn hydrated_blitz_doc_reflects_dom_mutations_before_first_paint() {
         let html = "<html><body><div id='root'>before</div></body></html>";
         let dom = Parser::new(html).parse_document();
@@ -341,6 +342,6 @@ pub(crate) fn build_hydrated_blitz_doc(
     content_w: u32,
     content_h: u32,
 ) -> Option<BlitzDocument> {
-    let hydrated_html = crate::js_sm::serialize_outer_html(dom);
+    let hydrated_html = crate::dom::serialize_outer_html(dom);
     BlitzDocument::try_from_html(&hydrated_html, base_url, identity, content_w, content_h)
 }

@@ -9,6 +9,7 @@ mod identity;
 #[cfg(feature = "engine-boa")]
 mod js_boa;
 mod js_engine;
+#[cfg(feature = "engine-sm")]
 mod js_sm;
 #[cfg(feature = "v8")]
 mod js_v8;

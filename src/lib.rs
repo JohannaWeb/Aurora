@@ -1,4 +1,11 @@
-//! Aurora browser engine — library interface for integration tests.
+//! Aurora browser engine.
+//!
+//! The public embedding API lives in [`api`] and is re-exported at the crate
+//! root: [`Browser`], [`Page`], [`Capabilities`], [`Error`]. Everything else is
+//! internal engine machinery, exposed as `pub(crate)` for the binary and tests.
+
+pub mod api;
+pub use api::{Browser, BrowserBuilder, Capabilities, Error, Page};
 
 pub(crate) mod blitz_document;
 pub mod render;
@@ -14,6 +21,7 @@ pub(crate) mod identity;
 #[cfg(feature = "engine-boa")]
 pub(crate) mod js_boa;
 pub(crate) mod js_engine;
+#[cfg(feature = "engine-sm")]
 pub(crate) mod js_sm;
 #[cfg(feature = "v8")]
 pub(crate) mod js_v8;
