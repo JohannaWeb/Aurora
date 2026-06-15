@@ -1,6 +1,6 @@
-#[cfg(all(feature = "engine-spidermonkey", feature = "v8"))]
+#[cfg(all(feature = "engine-sm", feature = "v8"))]
 compile_error!(
-    "features `engine-spidermonkey` and `v8` are mutually exclusive: SpiderMonkey (mozjs) \
+    "features `engine-sm` and `v8` are mutually exclusive: SpiderMonkey (mozjs) \
      and V8 cannot be statically linked into the same binary (duplicate v8::internal/diplomat_free \
      symbols). Build with `--no-default-features --features v8` to use V8."
 );
@@ -16,7 +16,7 @@ mod identity;
 #[cfg(feature = "engine-boa")]
 mod js_boa;
 mod js_engine;
-#[cfg(feature = "engine-spidermonkey")]
+#[cfg(feature = "engine-sm")]
 mod js_sm;
 #[cfg(feature = "v8")]
 mod js_v8;
