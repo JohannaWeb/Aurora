@@ -233,7 +233,7 @@ fn class_custom_element_upgrade_preserves_constructor_template_lookup() {
 }
 
 #[test]
-fn class_custom_element_upgrade_does_not_replay_constructor() {
+fn class_custom_element_upgrade_replays_constructor() {
     let dom = Parser::new("<html><body><test-card></test-card></body></html>").parse_document();
     let mut runtime = SmRuntime::new(dom.clone());
 
@@ -256,7 +256,7 @@ fn class_custom_element_upgrade_does_not_replay_constructor() {
         )
         .unwrap();
 
-    assert_eq!(text_content(&dom), "0");
+    assert_eq!(text_content(&dom), "1");
 }
 
 #[test]
@@ -278,6 +278,47 @@ fn document_current_script_tracks_running_script_node() {
     runtime.set_current_script(None);
 
     assert_eq!(text_content(&dom), "SCRIPT:/app.js");
+}
+
+#[test]
+fn element_attributes_exposes_named_node_map() {
+    let dom = Parser::new("<html><body><div id=\"app\" class=\"one\"></div></body></html>")
+        .parse_document();
+    let mut runtime = SmRuntime::new(dom.clone());
+
+    runtime
+        .execute(
+            r##"
+            const el = document.querySelector("#app");
+            const attrs = el.attributes;
+            const before = [
+                attrs.length,
+                attrs.getNamedItem("id").value,
+                attrs.item(0).name ? "item" : "missing"
+            ].join(":");
+            attrs.getNamedItem("class").value = "two";
+            attrs.removeNamedItem("id");
+            attrs.setNamedItem({ name: "data-ready", value: before });
+            document.body.setAttribute(
+                "data-result",
+                [
+                    before,
+                    el.getAttribute("class"),
+                    el.hasAttribute("id"),
+                    el.getAttribute("data-ready"),
+                    el.attributes.length
+                ].join("|")
+            );
+            "##,
+        )
+        .unwrap();
+
+    let body = find_first_tag(&dom, "body").unwrap();
+    let result = match &*body.borrow() {
+        Node::Element(element) => element.attributes.get("data-result").cloned(),
+        _ => None,
+    };
+    assert_eq!(result.as_deref(), Some("2:app:item|two|false|2:app:item|2"));
 }
 
 #[test]
@@ -317,6 +358,40 @@ fn message_channel_delivers_messages() {
         .unwrap();
 
     assert_eq!(text_content(&dom), "ping");
+}
+
+#[test]
+fn url_polyfill_resolves_relative_urls_and_query_params() {
+    let dom = Parser::new("<html><body></body></html>").parse_document();
+    let mut runtime = SmRuntime::new(dom.clone());
+
+    runtime
+        .execute(
+            r#"
+            const url = new URL('/watch?v=abc123&feature=share', 'https://www.youtube.com/feed/subscriptions?persist=1');
+            url.searchParams.set('feature', 'related');
+            url.searchParams.append('t', '42');
+            const relative = new URL('../shorts/xyz?si=token', 'https://www.youtube.com/watch/');
+            const params = new URLSearchParams('a=1&a=2&empty=');
+            document.body.textContent = [
+                url.href,
+                url.origin,
+                url.hostname,
+                url.searchParams.get('v'),
+                url.searchParams.get('feature'),
+                url.searchParams.getAll('a').length,
+                relative.href,
+                params.getAll('a').join(','),
+                String(params.has('empty'))
+            ].join('|');
+            "#,
+        )
+        .unwrap();
+
+    assert_eq!(
+        text_content(&dom),
+        "https://www.youtube.com/watch?v=abc123&feature=related&t=42|https://www.youtube.com|www.youtube.com|abc123|related|0|https://www.youtube.com/shorts/xyz?si=token|1,2|true"
+    );
 }
 
 #[test]
@@ -473,6 +548,9 @@ fn script_created_template_supports_kevlar_build_sequence() {
                 d.content.insertBefore(clone, d.content.firstChild);
                 steps.push('insertBefore:ok');
                 steps.push('finalKids:' + d.content.childNodes.length);
+                steps.push('order:' + d.content.childNodes[0].localName + ',' + d.content.childNodes[1].localName);
+                steps.push('parent:' + String(d.content.firstChild.parentNode === d.content));
+                steps.push('sibling:' + String(d.content.firstChild.nextSibling === d.content.childNodes[1]));
             } catch (e) {
                 steps.push('THREW:' + e.message);
             }
@@ -483,8 +561,30 @@ fn script_created_template_supports_kevlar_build_sequence() {
 
     assert_eq!(
         text_content(&dom),
-        "create:ok|innerHTML:ok|content:ok|kids:1|clone:ok|insertBefore:ok|finalKids:2"
+        "create:ok|innerHTML:ok|content:ok|kids:1|clone:ok|insertBefore:ok|finalKids:2|order:style,div|parent:true|sibling:true"
     );
+}
+
+#[test]
+fn owner_document_is_present_on_custom_element_templates() {
+    let dom = Parser::new("<html><body></body></html>").parse_document();
+    let mut runtime = SmRuntime::new(dom.clone());
+
+    runtime
+        .execute(
+            r#"
+            const template = document.createElement('template');
+            const div = document.createElement('div');
+            document.body.textContent = [
+                String(template.content.ownerDocument === document),
+                String(div.ownerDocument === document),
+                String(document.ownerDocument === null)
+            ].join('|');
+            "#,
+        )
+        .unwrap();
+
+    assert_eq!(text_content(&dom), "true|true|false");
 }
 
 fn text_content(node: &NodePtr) -> String {

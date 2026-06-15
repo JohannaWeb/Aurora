@@ -1,5 +1,12 @@
 //! Aurora browser engine — library interface for integration tests.
 
+#[cfg(all(feature = "engine-spidermonkey", feature = "v8"))]
+compile_error!(
+    "features `engine-spidermonkey` and `v8` are mutually exclusive: SpiderMonkey (mozjs) \
+     and V8 cannot be statically linked into the same binary (duplicate v8::internal/diplomat_free \
+     symbols). Build with `--no-default-features --features v8` to use V8."
+);
+
 pub(crate) mod blitz_document;
 pub mod render;
 
@@ -14,6 +21,7 @@ pub(crate) mod identity;
 #[cfg(feature = "engine-boa")]
 pub(crate) mod js_boa;
 pub(crate) mod js_engine;
+#[cfg(feature = "engine-spidermonkey")]
 pub(crate) mod js_sm;
 #[cfg(feature = "v8")]
 pub(crate) mod js_v8;
