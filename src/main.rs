@@ -1,3 +1,10 @@
+#[cfg(all(feature = "engine-sm", feature = "v8"))]
+compile_error!(
+    "features `engine-sm` and `v8` are mutually exclusive: SpiderMonkey (mozjs) \
+     and V8 cannot be statically linked into the same binary (duplicate v8::internal/diplomat_free \
+     symbols). Build with `--no-default-features --features v8` to use V8."
+);
+
 mod atlas;
 mod blitz_document;
 mod css;

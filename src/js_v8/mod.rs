@@ -5,8 +5,15 @@
 //! can hot-swap engines through `js_engine::create_runtime`. No DOM bridge is
 //! wired up yet — scripts run in a bare global scope.
 
+mod capture;
+mod mutation_observer;
+mod node_create;
+mod registry;
 mod runtime;
 #[cfg(test)]
 mod runtime_tests;
+mod selectors;
+mod style_class;
+mod tree;
 
 pub(crate) use runtime::V8Runtime;

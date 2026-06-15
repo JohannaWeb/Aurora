@@ -1,12 +1,84 @@
 use std::cell::RefCell;
 use std::collections::BTreeMap;
-use std::rc::Rc;
+use std::rc::{Rc, Weak};
 
 /// Shared mutable DOM node pointer.
 ///
 /// RUST FUNDAMENTAL: `Rc<T>` provides shared ownership and `RefCell<T>`
 /// provides runtime-checked interior mutability.
 pub type NodePtr = Rc<RefCell<Node>>;
+
+/// Back-pointer from a node to its parent.
+///
+/// Stored as a `Weak` so the parent→child `Rc` ownership doesn't form a cycle.
+/// Wrapped in a newtype with trivial equality so `ElementNode` can keep deriving
+/// `PartialEq`/`Eq` (structural node equality intentionally ignores the parent
+/// back-reference, and `Weak` doesn't implement `PartialEq` anyway).
+#[derive(Debug, Clone, Default)]
+pub struct ParentLink(pub Weak<RefCell<Node>>);
+
+impl PartialEq for ParentLink {
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
+}
+impl Eq for ParentLink {}
+
+/// Set `child`'s parent back-pointer to `parent` (no-op for non-element children).
+pub fn set_parent(child: &NodePtr, parent: &NodePtr) {
+    if let Node::Element(el) = &mut *child.borrow_mut() {
+        el.parent = ParentLink(Rc::downgrade(parent));
+    }
+}
+
+/// Clear `child`'s parent back-pointer (e.g. when detaching it from the tree).
+pub fn clear_parent(child: &NodePtr) {
+    if let Node::Element(el) = &mut *child.borrow_mut() {
+        el.parent = ParentLink(Weak::new());
+    }
+}
+
+/// Read `node`'s stored parent, if it is an element with a live parent pointer.
+pub fn parent_ptr(node: &NodePtr) -> Option<NodePtr> {
+    if let Node::Element(el) = &*node.borrow() {
+        return el.parent.0.upgrade();
+    }
+    None
+}
+
+/// Point every (element) child of `node` at `node`.
+pub fn link_children(node: &NodePtr) {
+    let (children, template_contents): (Vec<NodePtr>, Option<NodePtr>) = match &*node.borrow() {
+        Node::Element(el) => (el.children.clone(), el.template_contents.clone()),
+        Node::Document { children, .. } => (children.clone(), None),
+        _ => return,
+    };
+    for child in &children {
+        set_parent(child, node);
+    }
+    if let Some(content) = template_contents {
+        link_children(&content);
+    }
+}
+
+/// Recursively (re)establish parent back-pointers for an entire subtree.
+///
+/// Used to link a freshly parsed tree in one pass; mutation primitives maintain
+/// the pointers incrementally thereafter.
+pub fn reparent_subtree(node: &NodePtr) {
+    let (children, template_contents): (Vec<NodePtr>, Option<NodePtr>) = match &*node.borrow() {
+        Node::Element(el) => (el.children.clone(), el.template_contents.clone()),
+        Node::Document { children, .. } => (children.clone(), None),
+        _ => return,
+    };
+    for child in &children {
+        set_parent(child, node);
+        reparent_subtree(child);
+    }
+    if let Some(content) = template_contents {
+        reparent_subtree(&content);
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DocumentMode {
@@ -40,6 +112,9 @@ pub struct ElementNode {
     pub children: Vec<NodePtr>,
     /// Parsed `<template>` contents, stored separately from light DOM children.
     pub template_contents: Option<NodePtr>,
+    /// Back-pointer to the parent node, maintained by the mutation primitives so
+    /// connectivity/ancestor queries are O(depth) instead of full-tree scans.
+    pub parent: ParentLink,
 }
 
 impl Node {
@@ -62,12 +137,16 @@ impl Node {
         attributes: BTreeMap<String, String>,
         children: Vec<NodePtr>,
     ) -> NodePtr {
-        Rc::new(RefCell::new(Self::Element(ElementNode {
+        let node = Rc::new(RefCell::new(Self::Element(ElementNode {
             tag_name: tag_name.into(),
             attributes,
             children,
             template_contents: None,
-        })))
+            parent: ParentLink::default(),
+        })));
+        // Link any children supplied at construction time to this new node.
+        link_children(&node);
+        node
     }
 
     /// Create an element node with tag name and children.

@@ -4,10 +4,13 @@
 
 mod display;
 mod node;
-mod serialize;
+mod serialize_html;
 
-pub use node::{DocumentMode, ElementNode, Node, NodePtr};
-pub(crate) use serialize::serialize_outer_html;
+pub use node::{
+    DocumentMode, ElementNode, Node, NodePtr, clear_parent, parent_ptr, reparent_subtree,
+    set_parent,
+};
+pub(crate) use serialize_html::serialize_outer_html;
 
 /// Serialize an SVG DOM node back to an SVG markup string.
 /// Used by the painter to render inline `<svg>` elements via usvg.
