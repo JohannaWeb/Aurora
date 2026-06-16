@@ -524,6 +524,28 @@
     document.activeElement = document.body || null;
     document.scrollingElement = document.documentElement || null;
     document.location = globalThis.location;
+
+    // StyleSheetList and CSSStyleSheet wiring.
+    (function() {
+        var list = new globalThis.StyleSheetList();
+        var synced = false;
+        function sync() {
+            if (synced || !document.querySelectorAll) return;
+            synced = true;
+            var nodes = document.querySelectorAll('style, link[rel="stylesheet"]');
+            for (var i = 0; i < nodes.length; i++) {
+                var sheet = new globalThis.CSSStyleSheet();
+                sheet.ownerNode = nodes[i];
+                if (nodes[i].localName === 'link') sheet.href = nodes[i].getAttribute('href');
+                list[list.length++] = sheet;
+            }
+        }
+        Object.defineProperty(document, 'styleSheets', {
+            get: function() { sync(); return list; },
+            configurable: true
+        });
+    })();
+
     document.fonts = {
         ready: Promise.resolve(),
         load: function() { return Promise.resolve([]); },
