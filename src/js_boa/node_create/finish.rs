@@ -33,7 +33,7 @@ pub(in crate::js_boa) fn finish_node_object(
         let text_val = {
             let b = cap.node.borrow();
             if let Node::Text(t) = &*b {
-                t.clone()
+                t.content.clone()
             } else {
                 String::new()
             }

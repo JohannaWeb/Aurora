@@ -524,6 +524,59 @@
     document.activeElement = document.body || null;
     document.scrollingElement = document.documentElement || null;
     document.location = globalThis.location;
+
+    // StyleSheetList and CSSStyleSheet wiring.
+    (function() {
+        var list = new globalThis.StyleSheetList();
+        var sheetsMap = new WeakMap();
+
+        function getOrCreateSheet(node) {
+            var sheet = sheetsMap.get(node);
+            if (!sheet) {
+                sheet = new globalThis.CSSStyleSheet();
+                sheet.ownerNode = node;
+                if (node.localName === 'link') sheet.href = node.getAttribute('href');
+                sheetsMap.set(node, sheet);
+            }
+            return sheet;
+        }
+
+        function sync() {
+            if (!document.querySelectorAll) return;
+            var nodes = document.querySelectorAll('style, link[rel="stylesheet"]');
+            // Reset the list length and contents.
+            for (var j = 0; j < list.length; j++) delete list[j];
+            list.length = 0;
+
+            for (var i = 0; i < nodes.length; i++) {
+                var node = nodes[i];
+                var sheet = getOrCreateSheet(node);
+                list[i] = sheet;
+                list.length++;
+            }
+        }
+
+        Object.defineProperty(document, 'styleSheets', {
+            get: function() { sync(); return list; },
+            configurable: true
+        });
+
+        // Add .sheet property to <style> and <link> elements.
+        try {
+            Object.defineProperty(globalThis.HTMLStyleElement.prototype, 'sheet', {
+                get: function() { return getOrCreateSheet(this); },
+                configurable: true
+            });
+            Object.defineProperty(globalThis.HTMLLinkElement.prototype, 'sheet', {
+                get: function() {
+                    if (this.rel !== 'stylesheet') return null;
+                    return getOrCreateSheet(this);
+                },
+                configurable: true
+            });
+        } catch (e) {}
+    })();
+
     document.fonts = {
         ready: Promise.resolve(),
         load: function() { return Promise.resolve([]); },

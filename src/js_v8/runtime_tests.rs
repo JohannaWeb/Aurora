@@ -1387,3 +1387,21 @@ fn compiled_out_engines_return_err_not_panic() {
         assert!(err.is_some_and(|e| e.contains("engine-boa")));
     }
 }
+
+#[test]
+fn v8_text_node_move_detaches_from_previous_parent() {
+    let html = "<html><body><div id='p1'>hello</div><div id='p2'></div></body></html>";
+    let mut runtime = V8Runtime::new(Parser::new(html).parse_document());
+
+    runtime.execute(r#"
+        const p1 = document.getElementById('p1');
+        const p2 = document.getElementById('p2');
+        const text = p1.firstChild;
+        p2.appendChild(text);
+    "#).unwrap();
+
+    // The text node should no longer be a child of p1
+    assert_eq!(runtime.eval_to_string("document.getElementById('p1').childNodes.length"), Ok("0".to_string()));
+    assert_eq!(runtime.eval_to_string("document.getElementById('p2').childNodes.length"), Ok("1".to_string()));
+    assert_eq!(runtime.eval_to_string("document.getElementById('p2').firstChild.textContent"), Ok("hello".to_string()));
+}

@@ -525,7 +525,7 @@ impl V8Runtime {
                 // HTMLElement/queueMicrotask that event_constructors and
                 // custom_elements build on; v8_post wires document-dependent
                 // pieces and primes the custom-element registry.
-                let bootstrap_blocks: [(&str, &str); 6] = [
+                let bootstrap_blocks: [(&str, &str); 7] = [
                     ("v8-base", include_str!("../js_polyfills/v8_base.js")),
                     (
                         "event-constructors",
@@ -541,6 +541,10 @@ impl V8Runtime {
                     ),
                     ("css-stub", include_str!("../js_polyfills/css_stub.js")),
                     ("v8-post", include_str!("../js_polyfills/v8_post.js")),
+                    (
+                        "polymer-shim",
+                        include_str!("../js_polyfills/polymer_shim.js"),
+                    ),
                 ];
                 for (label, source) in bootstrap_blocks {
                     if let Err(e) = compile_and_run(scope, source) {
