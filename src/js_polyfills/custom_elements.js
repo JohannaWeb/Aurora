@@ -940,6 +940,15 @@
                         } finally {
                             suppressTrackedConnect--;
                             rebuildPolymerIdMap(this);
+                            // Re-collect bindings and events from the newly stamped
+                            // subtree. Reset the guards so installBindingHooks /
+                            // wireEventHandlers re-scan, but _propertiesChanged is
+                            // only wrapped once (its own __aurora_binding_wrapped__
+                            // flag survives the guard reset).
+                            try { delete this.__aurora_bindings_installed__; } catch (e) {}
+                            try { delete this.__aurora_events_wired__; } catch (e) {}
+                            installBindingHooks(this);
+                            wireEventHandlers(this);
                         }
                     };
                     try {
@@ -1634,6 +1643,155 @@
                 scheduleRetry();
             }
 
+            // ── Polymer data-binding shim ─────────────────────────────────────────
+            // Scans the stamped light-DOM subtree for [[prop]] / {{prop}} annotations
+            // that Polymer's own _bindTemplate left unreplaced (template.content clone
+            // gaps in Aurora's flattened model), applies current property values, and
+            // re-applies on each _propertiesChanged call so property changes propagate.
+
+            function parseBindingParts(str) {
+                var parts = [];
+                var re = /\[\[([^\]]+)\]\]|\{\{([^}]+)\}\}/g;
+                var last = 0;
+                var m;
+                while ((m = re.exec(str)) !== null) {
+                    if (m.index > last) parts.push({ literal: str.slice(last, m.index) });
+                    parts.push({ path: (m[1] || m[2]).trim() });
+                    last = m.index + m[0].length;
+                }
+                if (last < str.length) parts.push({ literal: str.slice(last) });
+                return parts.some(function(p) { return p.path; }) ? parts : null;
+            }
+
+            function resolveBindingPath(el, path) {
+                var segments = path.split('.');
+                var obj = (el.__data && segments[0] in el.__data) ? el.__data : el;
+                for (var i = 0; i < segments.length && obj != null; i++) {
+                    try { obj = obj[segments[i]]; } catch (e) { return undefined; }
+                }
+                return obj;
+            }
+
+            function evalParts(el, parts) {
+                var out = '';
+                for (var i = 0; i < parts.length; i++) {
+                    var p = parts[i];
+                    if (p.literal !== undefined) {
+                        out += p.literal;
+                    } else {
+                        var pval = resolveBindingPath(el, p.path);
+                        out += pval == null ? '' : String(pval);
+                    }
+                }
+                return out;
+            }
+
+            function collectStampedBindings(el) {
+                var bindings = [];
+                function walkNode(node, depth) {
+                    if (!node || depth > 30) return;
+                    var nodeType;
+                    try { nodeType = node.nodeType; } catch (e) { return; }
+                    if (nodeType === 3) {
+                        var raw;
+                        try { raw = node.textContent || ''; } catch (e) { return; }
+                        var tbp = parseBindingParts(raw);
+                        if (tbp) bindings.push({ node: node, kind: 'text', parts: tbp });
+                    } else if (nodeType === 1) {
+                        var tagName;
+                        try { tagName = node.localName || ''; } catch (e) {}
+                        var isCE = tagName && tagName.indexOf('-') >= 0 && tagName !== el.localName;
+                        var nodeAttrs;
+                        try { nodeAttrs = node.attributes; } catch (e) {}
+                        if (nodeAttrs) {
+                            for (var ai = 0; ai < nodeAttrs.length; ai++) {
+                                try {
+                                    var attr = nodeAttrs[ai];
+                                    var attrParts = parseBindingParts(attr.value);
+                                    if (attrParts) {
+                                        var aname = attr.name;
+                                        var isBool = aname.charAt(aname.length - 1) === '$';
+                                        bindings.push({
+                                            node: node, kind: 'attr',
+                                            attrName: isBool ? aname.slice(0, -1) : aname,
+                                            isBool: isBool, parts: attrParts
+                                        });
+                                    }
+                                } catch (e) {}
+                            }
+                        }
+                        if (!isCE) {
+                            var wchild;
+                            try { wchild = node.firstChild; } catch (e) {}
+                            while (wchild) {
+                                walkNode(wchild, depth + 1);
+                                try { wchild = wchild.nextSibling; } catch (e) { break; }
+                            }
+                        }
+                    }
+                }
+                var root;
+                try { root = el.root || el.shadowRoot || el.__shady_shadowRoot || el; } catch (e) { root = el; }
+                var sc;
+                try { sc = root.firstChild; } catch (e) {}
+                while (sc) {
+                    walkNode(sc, 0);
+                    try { sc = sc.nextSibling; } catch (e) { break; }
+                }
+                return bindings;
+            }
+
+            function applyStampedBindings(el, bindings) {
+                if (!bindings || !bindings.length) return;
+                for (var bi = 0; bi < bindings.length; bi++) {
+                    var b = bindings[bi];
+                    try {
+                        var bval = evalParts(el, b.parts);
+                        if (b.kind === 'text') {
+                            b.node.textContent = bval;
+                        } else if (b.isBool) {
+                            var falsy = !bval || bval === 'false';
+                            if (falsy) { try { b.node.removeAttribute(b.attrName); } catch (e) {} }
+                            else { try { b.node.setAttribute(b.attrName, ''); } catch (e) {} }
+                        } else {
+                            try { b.node.setAttribute(b.attrName, bval); } catch (e) {}
+                        }
+                    } catch (e) {}
+                }
+            }
+
+            function installBindingHooks(el) {
+                if (!el || el.__aurora_bindings_installed__) return;
+                try {
+                    Object.defineProperty(el, '__aurora_bindings_installed__', {
+                        value: true, configurable: true
+                    });
+                } catch (e) { el.__aurora_bindings_installed__ = true; }
+                var bindings = collectStampedBindings(el);
+                if (!bindings.length) return;
+                try {
+                    Object.defineProperty(el, '__aurora_bindings__', {
+                        value: bindings, configurable: true, writable: true
+                    });
+                } catch (e) { el.__aurora_bindings__ = bindings; }
+                applyStampedBindings(el, bindings);
+                if (typeof el._propertiesChanged === 'function'
+                        && !el._propertiesChanged.__aurora_binding_wrapped__) {
+                    var origPc = el._propertiesChanged;
+                    var wrappedPc = function(currentProps, changedProps, oldProps) {
+                        var r = origPc.apply(this, arguments);
+                        try { applyStampedBindings(this, this.__aurora_bindings__); } catch (e) {}
+                        return r;
+                    };
+                    try {
+                        Object.defineProperty(wrappedPc, '__aurora_binding_wrapped__', {
+                            value: true, configurable: true
+                        });
+                    } catch (e) {}
+                    try { el._propertiesChanged = wrappedPc; } catch (e) {}
+                }
+            }
+
             function shouldReplayConstructor(ctor) {
                 if (typeof ctor !== 'function') return false;
                 var source = '';
@@ -1759,6 +1917,8 @@
                 rebuildPolymerIdMap(el);
                 el.ready();
                 rebuildPolymerIdMap(el);
+                installBindingHooks(el);
+                wireEventHandlers(el);
             }
 
             function connectUpgraded(el, name, connect) {
@@ -1795,6 +1955,14 @@
                             el.__ce_connected__ = true;
                             rebuildPolymerIdMap(el);
                             return;
+                        }
+                        // If the constructor called _initializeProperties (which sets
+                        // __dataEnabled = false) but nothing has called _enableProperties
+                        // yet, do it now. Polymer normally calls it from inside
+                        // connectedCallback, but if that path is broken the data system
+                        // stays dark and _propertiesChanged / observers never fire.
+                        if (el.__dataEnabled === false && typeof el._enableProperties === 'function') {
+                            try { el._enableProperties(); } catch (e) {}
                         }
                         if (typeof el.connectedCallback === 'function') {
                             if (shouldTraceName(name)) trace('connectedCallback ' + name);
@@ -1921,6 +2089,45 @@
                 __aurora_track_custom_element__: function(el) { rememberPending(el); }
             };
 
+            // Wire on-* event handler attributes in the stamped subtree to
+            // instance methods on the host element. Runs once after ready().
+            function wireEventHandlers(el) {
+                if (!el || el.__aurora_events_wired__) return;
+                try {
+                    Object.defineProperty(el, '__aurora_events_wired__', { value: true, configurable: true });
+                } catch (e) { el.__aurora_events_wired__ = true; }
+                var root;
+                try { root = el.root || el.shadowRoot || el.__shady_shadowRoot || el; } catch (e) { root = el; }
+                function wireNode(node, depth) {
+                    if (!node || depth > 30) return;
+                    var nt; try { nt = node.nodeType; } catch (e) { return; }
+                    if (nt !== 1) return;
+                    var attrs; try { attrs = node.attributes; } catch (e) {}
+                    if (attrs) {
+                        for (var ai = 0; ai < attrs.length; ai++) {
+                            try {
+                                var aname = attrs[ai].name;
+                                if (aname.indexOf('on-') !== 0) continue;
+                                var eventName = aname.slice(3);
+                                var raw = attrs[ai].value.replace(/^\[\[|\]\]$|^\{\{|\}\}$/g, '').trim();
+                                if (!raw) continue;
+                                (function(n, ev, mn) {
+                                    n.addEventListener(ev, function(e) {
+                                        var fn = el[mn];
+                                        if (typeof fn === 'function') try { fn.call(el, e); } catch (ex) {}
+                                    });
+                                })(node, eventName, raw);
+                            } catch (e) {}
+                        }
+                    }
+                    var wc; try { wc = node.firstChild; } catch (e) {}
+                    while (wc) { wireNode(wc, depth + 1); try { wc = wc.nextSibling; } catch (e) { break; } }
+                }
+                var sc; try { sc = root.firstChild; } catch (e) {}
+                while (sc) { wireNode(sc, 0); try { sc = sc.nextSibling; } catch (e) { break; } }
+            }
+
             globalThis.__aurora_init_custom_elements__ = function() { ensureCreateElementPatch(); };
             globalThis.__aurora_track_custom_element__ = function(el) { rememberPending(el); };
+            globalThis.__aurora_apply_stamped_bindings__ = applyStampedBindings;
         })();

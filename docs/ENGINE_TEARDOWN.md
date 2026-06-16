@@ -8,6 +8,110 @@
 
 Date: 2026-06-16 · Branch: `feature/continued-youtube-support` · ~37.5k LOC Rust
 
+> **Errata (corrected):** the original draft of §3 claimed SpiderMonkey was the
+> only wired engine and V8/Boa were dead code. That is backwards. The default
+> build is `default = ["v8"]`; the engine modules are mutually-exclusive
+> features, so in a default build **only `js_v8` compiles and only V8 is
+> wired** — `js_sm`/`js_boa` aren't in the build at all. The `SmRuntime::new`
+> the draft cited at `pipeline.rs:947` is inside a `#[cfg(feature="engine-sm")]`
+> unit test, not the pipeline. §3, §4, §5, §10 and the appendix are corrected
+> accordingly below.
+
+---
+
+## Implementation status — 2026-06-16
+
+Work done this session on `feature/continued-youtube-support`. All changes are
+in `src/js_polyfills/`.
+
+### What was built
+
+**`custom_elements.js`** — the core custom-elements shim grew substantially:
+
+- **ShadyCSS-lite** (`shimDomModuleStyles` / `scopeCss` / `rewriteScopedSelector`):
+  hoists each `<dom-module>` `<style>` into `<head>` and rewrites `:host` /
+  `::slotted` / `:host-context` selectors to target Aurora's flattened light DOM.
+- **Polymer data-binding shim** (`parseBindingParts` / `collectStampedBindings` /
+  `applyStampedBindings` / `installBindingHooks`): after `ready()`, walks the
+  stamped subtree for literal `[[prop]]` / `{{prop}}` annotations Polymer's own
+  `_bindTemplate` left unreplaced, resolves them against `el.__data` / the
+  element, and re-applies on every `_propertiesChanged` call.
+- **`on-*` event binding** (`wireEventHandlers`): after `ready()`, walks the
+  stamped subtree and wires every `on-*` attribute to the host element's instance
+  method via `addEventListener`.
+
+**`polymer_shim.js`** — new file, loads after `v8_post.js`:
+
+| Piece | What it does |
+|---|---|
+| `POLYMER_PROTO` | 20+ utility methods (`fire`, `$$`, `async`, `debounce`, `set`, `notifyPath`, `push`/`pop`/`splice`, `toggleClass`, `listen`, `resolveUrl`, …) installed on every registered element prototype |
+| `dom-repeat` | Clones `<template>` child once per item, substitutes `[[item.*]]` bindings statically, inserts stamped nodes as siblings, triggers custom-element upgrade on stamped descendants |
+| `dom-if` | Stamps template on `if=true`, removes on `if=false`, triggers upgrade |
+| `Polymer.dom()` | Full DOM-API wrapper with `observeNodes`/`unobserveNodes` via MutationObserver |
+| `Polymer.RenderStatus` | `afterNextRender` / `beforeNextRender` / `whenReady` via `queueMicrotask` |
+| `Polymer.Async` | `microTask`, `timeOut`, `animationFrame`, `idlePeriod` schedulers |
+| `Polymer.Element` | Stub base class so `class Foo extends Polymer.Element` doesn't throw before YouTube's bundle defines the real one |
+| `Polymer.LegacyElementMixin` | Stub mixin factory |
+| `Polymer.mixinBehaviors` | Copies behavior properties onto target prototype |
+| `Polymer.dedupingMixin` | Identity passthrough |
+| `Polymer({is:…})` | Legacy factory stub for pre-class registration syntax |
+| `customElements.define` wrapper | Installs all utility methods on each ctor prototype at registration time |
+
+**`runtime.rs`** — `bootstrap_blocks` array extended from 6 to 7 to include
+`polymer_shim.js` (loads last, after `v8_post.js` so `document` is live).
+
+### What's still needed to load YouTube
+
+These are the remaining gaps, in rough priority order:
+
+1. **`template.content` stamping by Polymer's own `_stampTemplate`** — our
+   polyfill patches the environment, but Polymer's real `_stampTemplate` (in
+   YouTube's bundle) calls `document.importNode(template.content, true)` and then
+   walks the result for annotation nodes. If the walk misses nodes (e.g. because
+   Aurora's `querySelectorAll` on a DocumentFragment doesn't recurse into nested
+   templates), Polymer's binding infrastructure silently produces no bindings.
+   Needs a targeted test: stamp a Polymer template and verify bindings fire.
+
+2. **Property observer and computed-property callbacks** — Polymer's
+   `properties: { foo: { observer: '_onFoo' } }` and `observers: ['_x(a,b)']`
+   declarations are handled by Polymer's own `_propertiesChanged` once the bundle
+   loads, but only if `_enableProperties()` is called. If `__dataEnabled` stays
+   `false` (because `_initializeProperties` is never called, or because our
+   upgrade path calls `connectedCallback` before Polymer's own `created`/`ready`
+   sequence sets up the data system), observers never fire. Check the
+   `__dataEnabled` / `__dataReady` flags in probe output.
+
+3. **`<slot>` distribution** — Aurora flattens shadow to light, so `<slot>`
+   elements land in the light DOM as literal `<slot>` tags. Polymer's
+   `_attachDom` calls `Polymer.dom(root).appendChild(dom)` which we forward to
+   native; but light-DOM children that should be distributed into a slot just sit
+   before the slot element instead of inside it. For YouTube's masthead / drawer
+   this causes mis-ordered DOM. A `<slot>` shim that moves light children into
+   the slot's position would fix it.
+
+4. **`document.createTreeWalker` on template content** — Polymer 2's
+   `TemplateStamp._parseTemplateAnnotations` uses `createTreeWalker` to walk
+   template nodes looking for binding annotations. Our `createTreeWalker` in
+   `v8_post.js` exists, but verify it recurses into `DocumentFragment` children
+   correctly (the `root` parameter is `template.content`, a fragment).
+
+5. **Attribute reflection → property** — Polymer's `_attributeToProperty` syncs
+   HTML attributes to properties when `attributeChangedCallback` fires. Our
+   upgrade path doesn't invoke `attributeChangedCallback` when attributes are
+   already set on the element at upgrade time (only future mutations go through
+   `MutationObserver`). Static attributes like `disabled="[[standalone]]"` that
+   were never resolved will stay as literal strings on the element without this.
+
+6. **`Polymer.Gestures` / touch event shims** — `ytd-app` registers gesture
+   listeners at boot. Without `Polymer.Gestures`, those calls throw. A stub
+   `{ addListener: ()=>{}, removeListener: ()=>{} }` is enough to not crash.
+
+7. **`iron-*` / `paper-*` element stubs** — YouTube's boot sequence touches a
+   handful of `iron-iconset-svg` and `iron-meta` elements before the main bundle
+   defines them. If they're not registered (or not upgraded), property accesses on
+   them throw. A catch-all `rememberPending` already queues them; verify they
+   actually get upgraded once their definitions arrive.
+
 ---
 
 ## TL;DR
@@ -96,41 +200,60 @@ only current job is to feed a serializer.
 
 ---
 
-## 3. Three JavaScript engines, two of them wired to nothing
+## 3. Three JavaScript engine bridges in the tree, only one compiled
 
 ```
-src/js_sm/   10,152 LOC   SpiderMonkey   ← the only one runner actually calls
-src/js_v8/    6,959 LOC   V8             ← not referenced from runner/ or window/
-src/js_boa/   5,757 LOC   Boa            ← not referenced from runner/ or window/
+src/js_v8/    6,959 LOC   V8           ← the default, the wired one (default = ["v8"])
+src/js_sm/   10,152 LOC   SpiderMonkey ← behind engine-sm; off by default
+src/js_boa/   5,757 LOC   Boa          ← behind engine-boa; off by default
 src/js_polyfills/  3,341 LOC  JS shims
 ```
 
-The only runtime constructed in the real pipeline is
-`crate::js_sm::SmRuntime::new(...)` at `src/runner/pipeline.rs:947`. Grepping
-`runner/` and `window/` for `V8Runtime`, `BoaRuntime`, `js_v8::`, `js_boa::`
-returns **nothing**. So ~12,700 lines of `registry.rs` / `runtime.rs` /
-`mutation_observer.rs` / `capture.rs` / `node_create.rs` — triplicated, file
-for file — exist to be compiled (behind features), maintained, and to confuse
-every search you ever run in this tree. The `JsRuntime` trait was supposed to
-make the engine swappable; instead it became a license to re-implement the
-entire DOM bridge three times.
+The three engine directories are **mutually-exclusive Cargo features**, not
+three bridges all compiled at once. `Cargo.toml` declares `default = ["v8"]`,
+the `js_sm`/`js_boa`/`js_v8` modules are each `#[cfg(feature = ...)]`-gated, and
+`EngineKind::default_compiled()` returns `V8` whenever the `v8` feature is on.
+So a default build compiles **only `js_v8`** and `js_sm`/`js_boa` aren't in the
+binary at all.
 
-The commit log tells the story: `b0dee4f Spider monkey`,
-`c90a338 move-to-spider-monkey`, then `4f17366 Added more v8 features`. You
-*migrated* to SpiderMonkey and then kept growing a V8 bridge anyway. Decide.
-For a JIT-backed YouTube target, SpiderMonkey or V8 — **one** — and delete the
-other two directories outright. Boa (no JIT) has no place on the critical path
-and the architecture doc admits it "cannot run YouTube."
+The runtime in the real pipeline is built at `src/runner/pipeline.rs:143` via
+`create_runtime(EngineKind::from_env(), dom)`, which — with default features —
+constructs `crate::js_v8::V8Runtime::new(...)`. Grepping `runner/`/`window/` for
+`V8Runtime`/`js_v8::` returns nothing **because the wiring is deliberately
+indirect**: a `create_runtime` factory returning `Box<dyn JsRuntime>`, so no
+concrete engine type is named at the call site. The absence of the name is the
+DI seam working, not evidence the engine is dead. (The one `SmRuntime::new`
+reference in `runner/` is at `pipeline.rs:947`, inside a
+`#[cfg(feature = "engine-sm")]` unit test — not the pipeline.)
 
-This single decision removes ~12k LOC and roughly a third of the maintenance
-surface at zero functional cost, because the deleted code runs in production
-exactly never.
+The duplication critique still stands, just inverted from the first draft: the
+`JsRuntime` trait was meant to make the engine swappable and instead became a
+license to re-implement the entire DOM bridge three times. The commit log shows
+the churn — `c90a338 move-to-spider-monkey` then `4f17366 Added more v8
+features`: a migration *to* SpiderMonkey, then a migration *back* to V8 as the
+default, with the abandoned bridge left in the tree. The two non-default
+directories (`js_sm` + `js_boa`, ~15.9k LOC) are compiled exactly never in a
+default build, yet are maintained, carried, and confuse every search in the
+tree.
+
+Decide and delete. V8 is already the default and the only JIT-backed engine
+that boots YouTube here — keep `js_v8`, `rm -rf` `js_sm` and `js_boa` and their
+features. Boa (no JIT) has no place on the critical path and the architecture
+doc admits it "cannot run YouTube." This removes ~15.9k LOC and most of the
+bridge maintenance surface at zero functional cost.
 
 ---
 
 ## 4. The NodeRegistry leaks the entire document, forever
 
-`src/js_sm/registry.rs`. Two maps key the bridge:
+> Corrected: the original draft cited `src/js_sm/registry.rs` (SpiderMonkey, not
+> the default engine). The **identical** defect is in the actually-wired engine,
+> `src/js_v8/registry.rs` — `reverse_nodes` keyed on `Rc::as_ptr(&node) as usize`
+> (`registry.rs:116`), `register()` never paired with any `remove`/`unregister`.
+> So everything below applies to the shipping V8 bridge; the SpiderMonkey copy
+> has the same bug but isn't in the default build.
+
+`src/js_v8/registry.rs` (and its `js_sm` twin). Two maps key the bridge:
 
 ```rust
 nodes: BTreeMap<u32, NodePtr>,              // id  -> Rc clone of the node
@@ -159,14 +282,22 @@ js_wrappers: BTreeMap<u32, RootedTraceableBox<Heap<*mut JSObject>>>,
 
 ---
 
-## 5. 391 `unsafe`, 261 of it in the SpiderMonkey bridge
+## 5. 391 `unsafe` — 261 in the dormant SM bridge, 91 in the wired V8 one
 
-| Dir | `unsafe` |
-|---|---|
-| `src/js_sm/` | 261 |
-| `src/js_v8/` | 91 |
-| `src/stylo_bridge/` | 20 |
-| `src/js_boa/` | 19 |
+> Corrected framing: the bulk of the `unsafe` (261 blocks, the 4,253-line
+> `api.rs`) is in `src/js_sm/`, which is **not the default build**. The wired
+> engine, `src/js_v8/`, carries 91 `unsafe` blocks of its own — a smaller but
+> still-unaudited GC/handle frontier (V8 `Local`/`HandleScope` rather than
+> SpiderMonkey rooting). The argument below is the same; for the shipping
+> engine, point it at `js_v8`. The `js_sm` numbers describe code that costs
+> review attention while running in production exactly never (see §3).
+
+| Dir | `unsafe` | In default build? |
+|---|---|---|
+| `src/js_sm/` | 261 | no (`engine-sm`) |
+| `src/js_v8/` | 91 | **yes** (default) |
+| `src/stylo_bridge/` | 20 | no (dead) |
+| `src/js_boa/` | 19 | no (`engine-boa`) |
 
 `src/js_sm/document/api.rs` is **4,253 lines** with **102 `unsafe` blocks** in
 that one file. This is the GC-rooting frontier: every one of those blocks is a
@@ -260,9 +391,9 @@ A browser is hard enough with **one** of each.
    mutations through blitz-dom's node API; paint reads it directly. This is the
    whole ballgame — nothing else matters until the document stops being
    rebuilt from a string every frame. (Kills §1 and §2 together.)
-2. **Delete two JS engines.** Keep SpiderMonkey (or V8 — pick one), `rm -rf`
-   the other two bridge directories and their features. ~12k LOC gone, zero
-   functional loss. (§3)
+2. **Delete two JS engines.** V8 is already the default and only-compiled
+   engine — keep `js_v8`, `rm -rf` `js_sm` and `js_boa` and their features.
+   ~15.9k LOC gone, zero functional loss (neither is in a default build). (§3)
 3. **Delete the legacy DOM/layout/parser/CSS stacks** once #1 lands. The
    hand-rolled `html`, `css`, `layout`, `render`, `style`, `stylo_bridge`
    modules are all downstream of the serialize hack and die with it. (§2, §8)
@@ -287,11 +418,11 @@ architecture, not features.
 ```
 Total Rust LOC ............. 37,520
 JS bridge LOC (sm+v8+boa) .. 22,868   (61% of tree)
-  js_sm .................... 10,152   (the only one wired to runner)
-  js_v8 ....................  6,959   (dead: unreferenced in runner/window)
-  js_boa ...................  5,757   (dead: unreferenced in runner/window)
+  js_v8 ....................  6,959   (the wired engine; default = ["v8"])
+  js_sm .................... 10,152   (dormant: behind engine-sm, off by default)
+  js_boa ...................  5,757   (dormant: behind engine-boa, off by default)
 JS polyfills (.js) .........  3,341
-Largest file: src/js_sm/document/api.rs ... 4,253 LOC, 102 unsafe blocks
+Largest file: src/js_sm/document/api.rs ... 4,253 LOC, 102 unsafe blocks (dormant engine)
 unsafe blocks .............. 391  (js_sm 261)
 unwrap() ................... 381
 expect() ...................  39
@@ -302,6 +433,9 @@ Cargo.lock packages ........ 685
 ```
 
 Sources: every figure above is reproducible from the tree at commit `3084a1e`.
-The render-by-reserialize path is `src/window/input.rs:76-86`; the single wired
-runtime is `src/runner/pipeline.rs:947`; the leaking registry is
-`src/js_sm/registry.rs`.
+The render-by-reserialize path is `src/window/input.rs:76-86`; the wired runtime
+is built at `src/runner/pipeline.rs:143` via `create_runtime(EngineKind::from_env(), …)`
+→ V8 by default (`Cargo.toml: default = ["v8"]`); the leaking registry is
+`src/js_v8/registry.rs` (and its dormant `src/js_sm/registry.rs` twin). The
+`SmRuntime::new` at `pipeline.rs:947` is a `#[cfg(feature="engine-sm")]` test,
+not the pipeline.
