@@ -14,7 +14,7 @@ fn take_document_fragment_children(node: &NodePtr) -> Option<Vec<NodePtr>> {
 pub(crate) fn collect_text(node: &NodePtr) -> String {
     let b = node.borrow();
     match &*b {
-        Node::Text(t) => t.clone(),
+        Node::Text(t) => t.content.clone(),
         Node::Element(el) => el
             .children
             .iter()
@@ -30,9 +30,13 @@ pub(crate) fn collect_text(node: &NodePtr) -> String {
 }
 
 pub(crate) fn set_text_content(node: &NodePtr, text: &str) {
-    let new_text = Node::text(text.to_string());
-    if let Node::Element(el) = &mut *node.borrow_mut() {
-        el.children = vec![new_text];
+    match &mut *node.borrow_mut() {
+        Node::Element(el) => el.children = vec![Node::text(text.to_string())],
+        // Per spec, setting `textContent` on a Text node replaces its data.
+        // Without this, writes to a text node (e.g. Polymer binding updates
+        // rewriting `[[expr]]` annotations) were silently dropped.
+        Node::Text(t) => t.content = text.to_string(),
+        Node::Document { .. } => {}
     }
 }
 
@@ -194,7 +198,7 @@ pub(crate) fn clone_node(node: &NodePtr, deep: bool) -> NodePtr {
     let cloned = {
         let b = node.borrow();
         match &*b {
-            Node::Text(t) => Node::text(t.clone()),
+            Node::Text(t) => Node::text(t.content.clone()),
             Node::Element(el) => {
                 let children = if deep {
                     el.children.iter().map(|c| clone_node(c, true)).collect()

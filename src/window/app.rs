@@ -7,7 +7,7 @@ use vello::{Renderer, RendererOptions, Scene, wgpu};
 use winit::window::Window;
 
 use super::BROWSER_CHROME_HEIGHT;
-use super::chrome::paint_browser_chrome_scene;
+use super::chrome::ChromeRenderer;
 use super::input::WindowInput;
 
 pub(super) struct AuroraApp {
@@ -19,6 +19,7 @@ pub(super) struct AuroraApp {
     pub(super) scroll_y: f64,
     pub(super) mouse_x: f64,
     pub(super) mouse_y: f64,
+    pub(super) chrome: ChromeRenderer,
 }
 
 impl AuroraApp {
@@ -32,6 +33,7 @@ impl AuroraApp {
             scroll_y: 0.0,
             mouse_x: 0.0,
             mouse_y: 0.0,
+            chrome: ChromeRenderer::default(),
         }
     }
 
@@ -90,10 +92,17 @@ impl AuroraApp {
 
         let mut scene = Scene::new();
         paint_content_layer(self, &mut scene, width, height);
-        paint_browser_chrome_scene(
+        let url = self
+            .input
+            .base_url
+            .clone()
+            .unwrap_or_else(|| "aurora://local".to_string());
+        self.chrome.paint(
             &mut scene,
             width,
-            self.input.base_url.as_deref().unwrap_or("aurora://local"),
+            &url,
+            &self.input.dom,
+            &self.input.identity,
         );
 
         let surface = self.surface.as_ref().unwrap();
@@ -164,12 +173,16 @@ fn renderer_for_surface<'a>(
 fn paint_content_layer(app: &mut AuroraApp, scene: &mut Scene, width: u32, height: u32) {
     let content_top = BROWSER_CHROME_HEIGHT as f64;
     let content_height = (height as f32 - BROWSER_CHROME_HEIGHT).max(1.0) as u32;
+    // The clip only needs to keep content from painting up into the chrome, so
+    // it matters vertically (top = content_top). Pulling the left/right edges a
+    // hair outside the viewport keeps the content's x=0 column off the clip's
+    // antialiased boundary, which was shaving the left edge of the page.
     scene.push_layer(
         Fill::NonZero,
         vello::peniko::BlendMode::default(),
         1.0,
         Affine::IDENTITY,
-        &vello::kurbo::Rect::new(0.0, content_top, width as f64, height as f64),
+        &vello::kurbo::Rect::new(-2.0, content_top, width as f64 + 2.0, height as f64),
     );
     let mut content_scene = Scene::new();
     if let Some(blitz_doc) = &mut app.input.blitz_doc {

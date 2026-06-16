@@ -31,7 +31,7 @@ impl StyledNode {
     pub fn text(&self) -> Option<String> {
         let node = self.node.borrow();
         if let Node::Text(text) = &*node {
-            Some(text.clone())
+            Some(text.content.clone())
         } else {
             None
         }

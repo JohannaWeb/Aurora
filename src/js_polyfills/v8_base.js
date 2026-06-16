@@ -173,135 +173,78 @@
     globalThis.Range = function Range() {};
     globalThis.Selection = function Selection() {};
     globalThis.CSSStyleDeclaration = function CSSStyleDeclaration() {};
-    globalThis.CSSStyleSheet = function CSSStyleSheet() {};
-    function createFallbackStyleDeclaration() {
-        var style = function() { return style.cssText || undefined; };
-        style.cssText = '';
-        style.getPropertyValue = function(name) { return style[name] || ''; };
-        style.setProperty = function(name, value) {
-            style[name] = String(value == null ? '' : value);
-            style.cssText = style.cssText || '';
-        };
-        style.removeProperty = function(name) {
-            var old = style[name] || '';
-            delete style[name];
-            return old;
-        };
-        return style;
-    }
-    function normalizeFallbackStyle(value) {
-        if (value && typeof value === 'object') return value;
-        var style = createFallbackStyleDeclaration();
-        if (value != null) style.cssText = String(value);
-        return style;
-    }
-    if (!Object.prototype.hasOwnProperty('__aurora_fallback_style__')) {
-        Object.defineProperty(Object.prototype, 'style', {
-            get: function() {
-                if (!this.__aurora_fallback_style__) {
-                    Object.defineProperty(this, '__aurora_fallback_style__', {
-                        value: createFallbackStyleDeclaration(),
-                        configurable: true
-                    });
-                }
-                return this.__aurora_fallback_style__;
-            },
-            set: function(value) {
-                Object.defineProperty(this, '__aurora_fallback_style__', {
-                    value: normalizeFallbackStyle(value),
-                    configurable: true
-                });
-            },
-            configurable: true
-        });
-    }
-    globalThis.Worker = function Worker() {
-        this.postMessage = function(){};
-        this.terminate = function(){};
-        this.addEventListener = function(){};
-        this.removeEventListener = function(){};
-        this.onmessage = null; this.onerror = null;
+    globalThis.StyleSheetList = function StyleSheetList() {
+        this.length = 0;
     };
-    globalThis.SharedWorker = globalThis.Worker;
+    StyleSheetList.prototype.item = function(index) { return this[index] || null; };
 
-    globalThis.DOMException = function DOMException(message, name) {
-        this.message = message || '';
-        this.name = name || 'Error';
-        this.code = 0;
+    globalThis.CSSStyleSheet = function CSSStyleSheet() {
+        this.disabled = false;
+        this.href = null;
+        this.media = { mediaText: '', appendMedium: function(){}, deleteMedium: function(){} };
+        this.ownerNode = null;
+        this.parentStyleSheet = null;
+        this.title = null;
+        this.type = 'text/css';
+        this.cssRules = [];
     };
-    DOMException.prototype = Object.create(Error.prototype);
-
-    // AbortSignal / AbortController (replaces the minimal stub installed with
-    // the networking polyfills — fetch-polyfill.js references the constructor).
-    globalThis.AbortSignal = function AbortSignal() {
-        this.aborted = false;
-        this.reason = undefined;
-        this.onabort = null;
-    };
-    AbortSignal.prototype = Object.create(EventTarget.prototype);
-    AbortSignal.prototype.constructor = AbortSignal;
-    AbortSignal.prototype.throwIfAborted = function() {
-        if (this.aborted) throw this.reason;
-    };
-    AbortSignal.abort = function(reason) {
-        var s = new AbortSignal();
-        s.aborted = true;
-        s.reason = reason;
-        return s;
-    };
-    AbortSignal.timeout = function() { return new AbortSignal(); };
-    AbortSignal.any = function() { return new AbortSignal(); };
-
-    globalThis.AbortController = function AbortController() {
-        this.signal = new AbortSignal();
-    };
-    AbortController.prototype.abort = function(reason) {
-        this.signal.aborted = true;
-        this.signal.reason = reason;
-        if (typeof this.signal.onabort === 'function') {
-            try { this.signal.onabort({ type: 'abort', target: this.signal }); } catch (e) {}
-        }
-    };
-
-    // Performance
-    var timeOrigin = Date.now();
-    globalThis.performance = {
-        timeOrigin: timeOrigin,
-        now: function() { return Date.now() - timeOrigin; },
-        mark: function() {}, measure: function() {},
-        clearMarks: function() {}, clearMeasures: function() {},
-        clearResourceTimings: function() {}, setResourceTimingBufferSize: function() {},
-        getEntries: function() { return []; },
-        getEntriesByName: function() { return []; },
-        getEntriesByType: function() { return []; },
-        navigation: { type: 0, redirectCount: 0 },
-        timing: {
-            navigationStart: timeOrigin, fetchStart: timeOrigin,
-            domainLookupStart: timeOrigin, domainLookupEnd: timeOrigin,
-            connectStart: timeOrigin, connectEnd: timeOrigin,
-            requestStart: timeOrigin, responseStart: timeOrigin,
-            responseEnd: timeOrigin, domLoading: timeOrigin,
-            domInteractive: 0, domContentLoadedEventStart: 0,
-            domContentLoadedEventEnd: 0, domComplete: 0,
-            loadEventStart: 0, loadEventEnd: 0, unloadEventStart: 0,
-            unloadEventEnd: 0, redirectStart: 0, redirectEnd: 0,
-            secureConnectionStart: 0
-        }
-    };
+    CSSStyleSheet.prototype.insertRule = function(rule, index) { return index || 0; };
+    CSSStyleSheet.prototype.deleteRule = function(index) {};
 
     // MutationObserver is implemented natively (see js_v8/mutation_observer.rs);
-    // don't override it here. IntersectionObserver remains a no-op stub.
-    globalThis.IntersectionObserver = function IntersectionObserver(cb) { this._cb = cb; };
-    IntersectionObserver.prototype.observe = function() {};
+    // don't override it here. IntersectionObserver and ResizeObserver are
+    // optimistic stubs that fire once to unblock content waiting for visibility/size.
+    globalThis.IntersectionObserver = function IntersectionObserver(cb) {
+        this._cb = cb;
+    };
+    IntersectionObserver.prototype.observe = function(el) {
+        if (typeof this._cb === 'function') {
+            var self = this;
+            queueMicrotask(function() {
+                if (typeof self._cb === 'function') {
+                    try {
+                        self._cb([{
+                            target: el,
+                            isIntersecting: true,
+                            intersectionRatio: 1.0,
+                            boundingClientRect: (typeof el.getBoundingClientRect === 'function')
+                                ? el.getBoundingClientRect()
+                                : { top: 0, left: 0, width: 1440, height: 1024, bottom: 1024, right: 1440, x: 0, y: 0 },
+                            intersectionRect: { top: 0, left: 0, width: 1440, height: 1024, bottom: 1024, right: 1440, x: 0, y: 0 },
+                            rootBounds: { top: 0, left: 0, width: 1440, height: 1024, bottom: 1024, right: 1440, x: 0, y: 0 }
+                        }], self);
+                    } catch (e) {}
+                }
+            });
+        }
+    };
     IntersectionObserver.prototype.unobserve = function() {};
-    IntersectionObserver.prototype.disconnect = function() {};
+    IntersectionObserver.prototype.disconnect = function() { this._cb = null; };
     IntersectionObserver.prototype.takeRecords = function() { return []; };
     globalThis.IntersectionObserverEntry = function IntersectionObserverEntry() {};
 
-    globalThis.ResizeObserver = function ResizeObserver(cb) { this._cb = cb; };
-    ResizeObserver.prototype.observe = function() {};
+    globalThis.ResizeObserver = function ResizeObserver(cb) {
+        this._cb = cb;
+    };
+    ResizeObserver.prototype.observe = function(el) {
+        if (typeof this._cb === 'function') {
+            var self = this;
+            queueMicrotask(function() {
+                if (typeof self._cb === 'function') {
+                    try {
+                        self._cb([{
+                            target: el,
+                            contentRect: (typeof el.getBoundingClientRect === 'function')
+                                ? el.getBoundingClientRect()
+                                : { top: 0, left: 0, width: 1440, height: 1024, bottom: 1024, right: 1440, x: 0, y: 0 }
+                        }], self);
+                    } catch (e) {}
+                }
+            });
+        }
+    };
     ResizeObserver.prototype.unobserve = function() {};
-    ResizeObserver.prototype.disconnect = function() {};
+    ResizeObserver.prototype.disconnect = function() { this._cb = null; };
 
     globalThis.PerformanceObserver = function PerformanceObserver(cb) { this._cb = cb; };
     PerformanceObserver.prototype.observe = function() {};
@@ -387,6 +330,14 @@
         replaceState: function(state) { this.state = state; },
         back: function() {}, forward: function() {}, go: function() {}
     };
+
+    globalThis.Screen = function Screen() {
+        this.width = 1440; this.height = 1024;
+        this.availWidth = 1440; this.availHeight = 1024;
+        this.colorDepth = 24; this.pixelDepth = 24;
+        this.orientation = { angle: 0, type: 'landscape-primary', onchange: null };
+    };
+    globalThis.screen = new globalThis.Screen();
 
     var playerContextDefaults = {
         WEB_PLAYER_CONTEXT_CONFIG_ID_KEVLAR_WATCH: {
@@ -742,4 +693,93 @@
             return new Uint8Array(out);
         };
     };
+
+    // AbortController / AbortSignal. YouTube's kevlar_base bundle references
+    // `AbortSignal` during init (fetch + scheduler plumbing); without it the
+    // main module throws a ReferenceError before ytd-app boots. Built on the
+    // real EventTarget above so 'abort' listeners actually fire. DOMException
+    // is referenced lazily because it's a host-provided global that may not
+    // exist; we fall back to a named Error when it's missing.
+    if (typeof globalThis.AbortSignal !== 'function') {
+        function makeAbortError(message, name) {
+            message = message || 'signal is aborted without reason';
+            name = name || 'AbortError';
+            if (typeof globalThis.DOMException === 'function') {
+                return new DOMException(message, name);
+            }
+            var err = new Error(message);
+            err.name = name;
+            return err;
+        }
+
+        function fireAbort(signal, reason) {
+            if (signal.aborted) return;
+            signal.aborted = true;
+            signal.reason = reason === undefined ? makeAbortError() : reason;
+            var event;
+            try {
+                event = typeof globalThis.Event === 'function'
+                    ? new Event('abort')
+                    : { type: 'abort' };
+            } catch (e) {
+                event = { type: 'abort' };
+            }
+            if (typeof signal.onabort === 'function') {
+                try { signal.onabort.call(signal, event); } catch (e) {}
+            }
+            try { signal.dispatchEvent(event); } catch (e) {}
+        }
+
+        function AbortSignal() {
+            EventTarget.call(this);
+            this.aborted = false;
+            this.reason = undefined;
+            this.onabort = null;
+        }
+        AbortSignal.prototype = Object.create(EventTarget.prototype);
+        AbortSignal.prototype.constructor = AbortSignal;
+        AbortSignal.prototype.throwIfAborted = function() {
+            if (this.aborted) throw this.reason;
+        };
+
+        AbortSignal.abort = function(reason) {
+            var signal = new AbortSignal();
+            signal.aborted = true;
+            signal.reason = reason === undefined ? makeAbortError() : reason;
+            return signal;
+        };
+        AbortSignal.timeout = function(ms) {
+            var signal = new AbortSignal();
+            setTimeout(function() {
+                fireAbort(signal, makeAbortError('signal timed out', 'TimeoutError'));
+            }, ms);
+            return signal;
+        };
+        AbortSignal.any = function(signals) {
+            var result = new AbortSignal();
+            var list = Array.prototype.slice.call(signals || []);
+            for (var i = 0; i < list.length; i++) {
+                if (list[i] && list[i].aborted) {
+                    fireAbort(result, list[i].reason);
+                    return result;
+                }
+            }
+            list.forEach(function(s) {
+                if (s && typeof s.addEventListener === 'function') {
+                    s.addEventListener('abort', function() { fireAbort(result, s.reason); });
+                }
+            });
+            return result;
+        };
+
+        function AbortController() {
+            this.signal = new AbortSignal();
+        }
+        AbortController.prototype.abort = function(reason) {
+            fireAbort(this.signal, reason);
+        };
+
+        globalThis.AbortSignal = AbortSignal;
+        globalThis.AbortController = AbortController;
+    }
 })();

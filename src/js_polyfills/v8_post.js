@@ -524,6 +524,59 @@
     document.activeElement = document.body || null;
     document.scrollingElement = document.documentElement || null;
     document.location = globalThis.location;
+
+    // StyleSheetList and CSSStyleSheet wiring.
+    (function() {
+        var list = new globalThis.StyleSheetList();
+        var sheetsMap = new WeakMap();
+
+        function getOrCreateSheet(node) {
+            var sheet = sheetsMap.get(node);
+            if (!sheet) {
+                sheet = new globalThis.CSSStyleSheet();
+                sheet.ownerNode = node;
+                if (node.localName === 'link') sheet.href = node.getAttribute('href');
+                sheetsMap.set(node, sheet);
+            }
+            return sheet;
+        }
+
+        function sync() {
+            if (!document.querySelectorAll) return;
+            var nodes = document.querySelectorAll('style, link[rel="stylesheet"]');
+            // Reset the list length and contents.
+            for (var j = 0; j < list.length; j++) delete list[j];
+            list.length = 0;
+
+            for (var i = 0; i < nodes.length; i++) {
+                var node = nodes[i];
+                var sheet = getOrCreateSheet(node);
+                list[i] = sheet;
+                list.length++;
+            }
+        }
+
+        Object.defineProperty(document, 'styleSheets', {
+            get: function() { sync(); return list; },
+            configurable: true
+        });
+
+        // Add .sheet property to <style> and <link> elements.
+        try {
+            Object.defineProperty(globalThis.HTMLStyleElement.prototype, 'sheet', {
+                get: function() { return getOrCreateSheet(this); },
+                configurable: true
+            });
+            Object.defineProperty(globalThis.HTMLLinkElement.prototype, 'sheet', {
+                get: function() {
+                    if (this.rel !== 'stylesheet') return null;
+                    return getOrCreateSheet(this);
+                },
+                configurable: true
+            });
+        } catch (e) {}
+    })();
+
     document.fonts = {
         ready: Promise.resolve(),
         load: function() { return Promise.resolve([]); },
@@ -646,4 +699,141 @@
     if (globalThis.customElements && document.documentElement) {
         customElements.upgrade(document.documentElement);
     }
+
+    // CSSStyleSheet & document.styleSheets / adoptedStyleSheets polyfills
+    (function() {
+        function CSSStyleSheet(ownerNode) {
+            this.ownerNode = ownerNode || null;
+            this.cssRules = [];
+            this.disabled = false;
+            this.href = null;
+            this.media = {
+                mediaText: '',
+                length: 0,
+                item: function() { return null; },
+                appendMedium: function() {},
+                deleteMedium: function() {}
+            };
+            this.title = '';
+            this.type = 'text/css';
+        }
+        CSSStyleSheet.prototype.insertRule = function(rule, index) {
+            var rules = this.cssRules;
+            index = index === undefined ? 0 : index;
+            if (index < 0 || index > rules.length) {
+                throw new DOMException('Index out of range', 'IndexSizeError');
+            }
+            var ruleObj = {
+                cssText: rule,
+                parentStyleSheet: this,
+                parentRule: null,
+                selectorText: '',
+                style: {
+                    cssText: '',
+                    getPropertyValue: function() { return ''; },
+                    setProperty: function() {},
+                    removeProperty: function() {}
+                }
+            };
+            var parts = rule.split('{');
+            if (parts.length >= 2) {
+                ruleObj.selectorText = parts[0].trim();
+                ruleObj.style.cssText = parts[1].split('}')[0].trim();
+            }
+            rules.splice(index, 0, ruleObj);
+            return index;
+        };
+        CSSStyleSheet.prototype.deleteRule = function(index) {
+            var rules = this.cssRules;
+            if (index < 0 || index >= rules.length) {
+                throw new DOMException('Index out of range', 'IndexSizeError');
+            }
+            rules.splice(index, 1);
+        };
+        CSSStyleSheet.prototype.replace = function(text) {
+            var self = this;
+            return new Promise(function(resolve) {
+                self.replaceSync(text);
+                resolve(self);
+            });
+        };
+        CSSStyleSheet.prototype.replaceSync = function(text) {
+            this.cssRules = [];
+            var self = this;
+            var rules = text.split('}');
+            rules.forEach(function(r) {
+                r = r.trim();
+                if (r) {
+                    try {
+                        self.insertRule(r + '}', self.cssRules.length);
+                    } catch (e) {}
+                }
+            });
+        };
+        globalThis.CSSStyleSheet = CSSStyleSheet;
+
+        var styleSheetsCache = new WeakMap();
+        function getOrCreateSheet(el) {
+            if (styleSheetsCache.has(el)) {
+                return styleSheetsCache.get(el);
+            }
+            var sheet = new CSSStyleSheet(el);
+            if (el.localName === 'style') {
+                sheet.replaceSync(el.textContent || '');
+            } else if (el.localName === 'link') {
+                sheet.href = el.getAttribute('href');
+            }
+            styleSheetsCache.set(el, sheet);
+            return sheet;
+        }
+
+        Object.defineProperty(globalThis.Element.prototype, 'sheet', {
+            get: function() {
+                var tag = this.localName || '';
+                if (tag === 'style' || tag === 'link') {
+                    return getOrCreateSheet(this);
+                }
+                return undefined;
+            },
+            configurable: true
+        });
+
+        Object.defineProperty(document, 'styleSheets', {
+            get: function() {
+                var list = [];
+                var styles = document.querySelectorAll('style, link[rel="stylesheet"]');
+                for (var i = 0; i < styles.length; i++) {
+                    list.push(getOrCreateSheet(styles[i]));
+                }
+                list.item = function(index) { return this[index]; };
+                return list;
+            },
+            configurable: true
+        });
+
+        var adoptedSheetsMap = new WeakMap();
+        function getAdoptedStyleSheets(node) {
+            if (!adoptedSheetsMap.has(node)) {
+                adoptedSheetsMap.set(node, []);
+            }
+            return adoptedSheetsMap.get(node);
+        }
+        function setAdoptedStyleSheets(node, value) {
+            adoptedSheetsMap.set(node, Array.from(value || []));
+        }
+        if (globalThis.Document) {
+            Object.defineProperty(Document.prototype, 'adoptedStyleSheets', {
+                get: function() { return getAdoptedStyleSheets(this); },
+                set: function(v) { setAdoptedStyleSheets(this, v); },
+                configurable: true
+            });
+        }
+        if (globalThis.ShadowRoot) {
+            Object.defineProperty(ShadowRoot.prototype, 'adoptedStyleSheets', {
+                get: function() { return getAdoptedStyleSheets(this); },
+                set: function(v) { setAdoptedStyleSheets(this, v); },
+                configurable: true
+            });
+        }
+    })();
 })();

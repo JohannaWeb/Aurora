@@ -351,12 +351,137 @@
                 return tpl;
             }
 
+            // ── ShadyCSS-lite ────────────────────────────────────────────────
+            // Aurora flattens shadow DOM into light DOM (attachShadow proxies the
+            // host's own subtree) and paints via blitz/Stylo from a serialized
+            // light-DOM HTML string. A component's <style> lives inside its
+            // <dom-module><template>, which is inert and never serialized — and
+            // even when reached, its shadow-scoped selectors (:host, ::slotted)
+            // match nothing in the flattened tree, so components stamp but render
+            // unstyled (collapsed layout boxes).
+            //
+            // This shim hoists each dom-module's <style> into <head> (light DOM,
+            // so it serializes and paints) and rewrites the shadow-scoped
+            // selectors to target the flattened tree, scoping rules by the
+            // component's tag name so they don't leak across components.
+            var shimmedStyleScopes = Object.create(null);
+
+            // Split `str` on top-level `sep`, ignoring it inside (), [], "", ''.
+            function splitTopLevel(str, sep) {
+                var out = [], depth = 0, quote = null, start = 0;
+                for (var i = 0; i < str.length; i++) {
+                    var c = str[i];
+                    if (quote) { if (c === quote && str[i - 1] !== '\\') quote = null; continue; }
+                    if (c === '"' || c === "'") { quote = c; continue; }
+                    if (c === '(' || c === '[') depth++;
+                    else if (c === ')' || c === ']') depth--;
+                    else if (c === sep && depth === 0) { out.push(str.slice(start, i)); start = i + 1; }
+                }
+                out.push(str.slice(start));
+                return out;
+            }
+
+            // Rewrite one complex selector for the flattened (no-shadow) tree.
+            function rewriteScopedSelector(sel, tag) {
+                sel = sel.trim();
+                if (!sel) return sel;
+                // :host-context(x) y  ->  x tag y   (approx: ancestor context)
+                var ctx = sel.match(/^:host-context\(([^)]*)\)\s*([\s\S]*)$/);
+                if (ctx) {
+                    var rest = ctx[2].trim();
+                    return (ctx[1].trim() + ' ' + tag + (rest ? ' ' + rest : '')).trim();
+                }
+                if (sel.indexOf(':host') !== -1) {
+                    // :host(x) -> tagx ; :host -> tag  (combinators preserved)
+                    return sel.replace(/:host\(([^)]*)\)/g, tag + '$1').replace(/:host/g, tag);
+                }
+                if (sel.indexOf('::slotted') !== -1) {
+                    // flattened: slotted light children are plain descendants
+                    return sel.replace(/::slotted\(([^)]*)\)/g, tag + ' $1');
+                }
+                // Component-internal rule: scope as a descendant of the host tag.
+                return tag + ' ' + sel;
+            }
+
+            function rewriteSelectorList(list, tag) {
+                return splitTopLevel(list, ',').map(function(s) {
+                    return rewriteScopedSelector(s, tag);
+                }).join(', ');
+            }
+
+            // Walk top-level rules, rewriting selector preludes. Recurses into
+            // @media/@supports; leaves @keyframes/@font-face/@import untouched.
+            function scopeCss(css, tag) {
+                var out = '', i = 0, n = css.length, prelude = '';
+                while (i < n) {
+                    var c = css[i];
+                    if (c === '{') {
+                        var depth = 1, j = i + 1;
+                        while (j < n && depth > 0) {
+                            if (css[j] === '{') depth++;
+                            else if (css[j] === '}') depth--;
+                            j++;
+                        }
+                        var body = css.slice(i + 1, j - 1);
+                        var pre = prelude.trim();
+                        if (pre.charAt(0) === '@') {
+                            var low = pre.toLowerCase();
+                            if (low.indexOf('@media') === 0 || low.indexOf('@supports') === 0) {
+                                out += pre + '{' + scopeCss(body, tag) + '}';
+                            } else {
+                                out += pre + '{' + body + '}';
+                            }
+                        } else if (pre) {
+                            out += rewriteSelectorList(pre, tag) + '{' + body + '}';
+                        } else {
+                            out += '{' + body + '}';
+                        }
+                        prelude = '';
+                        i = j;
+                    } else {
+                        prelude += c;
+                        i++;
+                    }
+                }
+                return out + prelude; // keep any trailing @import/;-rule verbatim
+            }
+
+            function shimDomModuleStyles(id, tpl) {
+                if (!id || shimmedStyleScopes[id]) return;
+                var content = tpl && tpl.content;
+                if (!content || typeof content.querySelectorAll !== 'function') return;
+                var styles;
+                try { styles = content.querySelectorAll('style'); } catch (e) { return; }
+                if (!styles || !styles.length) return;
+                shimmedStyleScopes[id] = true;
+                var head = document.head || document.documentElement;
+                if (!head) return;
+                for (var s = 0; s < styles.length; s++) {
+                    var cssText = '';
+                    try { cssText = styles[s].textContent || ''; } catch (e) {}
+                    // strip comments first so braces/quotes inside them can't
+                    // unbalance the rule scanner
+                    cssText = cssText.replace(/\/\*[\s\S]*?\*\//g, '');
+                    if (!cssText.trim()) continue;
+                    var scoped;
+                    try { scoped = scopeCss(cssText, id); } catch (e) { scoped = null; }
+                    if (!scoped) continue;
+                    try {
+                        var out = document.createElement('style');
+                        out.setAttribute('data-style-scope', id);
+                        out.textContent = scoped;
+                        head.appendChild(out);
+                    } catch (e) {}
+                }
+            }
+
             function registerDomModule(el) {
                 var id = getElementId(el);
                 if (!id) return null;
                 var tpl = findTemplateForDomModule(el);
                 if (!tpl) return null;
                 domModules[id] = tpl;
+                try { shimDomModuleStyles(id, tpl); } catch (e) {}
                 if (globalThis.__aurora_debug_youtube__ && debugProbeName(id)) {
                     trace('dom-module registered ' + id +
                         ' template=' + (!!tpl) +
@@ -815,6 +940,15 @@
                         } finally {
                             suppressTrackedConnect--;
                             rebuildPolymerIdMap(this);
+                            // Re-collect bindings and events from the newly stamped
+                            // subtree. Reset the guards so installBindingHooks /
+                            // wireEventHandlers re-scan, but _propertiesChanged is
+                            // only wrapped once (its own __aurora_binding_wrapped__
+                            // flag survives the guard reset).
+                            try { delete this.__aurora_bindings_installed__; } catch (e) {}
+                            try { delete this.__aurora_events_wired__; } catch (e) {}
+                            installBindingHooks(this);
+                            wireEventHandlers(this);
                         }
                     };
                     try {
@@ -1013,6 +1147,12 @@
 
             function installRichGridFallback(el) {
                 if (!el || el.localName !== 'ytd-rich-grid-renderer' || el.__aurora_rich_grid_fallback__) return;
+                // Synthesizes placeholder sections/boxes into document.body when real
+                // Polymer rendering hasn't populated #contents yet. Now that
+                // drive_polymer_page_manager_navigation() makes real dataChanged()-driven
+                // rendering work, this fallback only adds duplicate/misleading debug
+                // boxes on top of real content, so restrict it to debug runs.
+                if (!globalThis.__aurora_debug_youtube__) return;
                 try {
                     Object.defineProperty(el, '__aurora_rich_grid_fallback__', {
                         value: true,
@@ -1503,6 +1643,215 @@
                 scheduleRetry();
             }
 
+            // ── Polymer data-binding shim ─────────────────────────────────────────
+            // Scans the stamped light-DOM subtree for [[prop]] / {{prop}} annotations
+            // that Polymer's own _bindTemplate left unreplaced (template.content clone
+            // gaps in Aurora's flattened model), applies current property values, and
+            // re-applies on each _propertiesChanged call so property changes propagate.
+
+            function parseBindingParts(str) {
+                var parts = [];
+                var re = /\[\[([^\]]+)\]\]|\{\{([^}]+)\}\}/g;
+                var last = 0;
+                var m;
+                while ((m = re.exec(str)) !== null) {
+                    if (m.index > last) parts.push({ literal: str.slice(last, m.index) });
+                    parts.push({ path: (m[1] || m[2]).trim() });
+                    last = m.index + m[0].length;
+                }
+                if (last < str.length) parts.push({ literal: str.slice(last) });
+                return parts.some(function(p) { return p.path; }) ? parts : null;
+            }
+
+            function resolveBindingPath(el, path) {
+                var segments = path.split('.');
+                var obj = (el.__data && segments[0] in el.__data) ? el.__data : el;
+                for (var i = 0; i < segments.length && obj != null; i++) {
+                    try { obj = obj[segments[i]]; } catch (e) { return undefined; }
+                }
+                return obj;
+            }
+
+            // Split a computed-binding arg list on top-level commas (ignoring
+            // commas inside quotes or nested parens).
+            function splitBindingArgs(str) {
+                var args = [], depth = 0, cur = '', quote = null;
+                for (var i = 0; i < str.length; i++) {
+                    var ch = str.charAt(i);
+                    if (quote) { cur += ch; if (ch === quote) quote = null; continue; }
+                    if (ch === '"' || ch === "'") { quote = ch; cur += ch; continue; }
+                    if (ch === '(') { depth++; cur += ch; continue; }
+                    if (ch === ')') { depth--; cur += ch; continue; }
+                    if (ch === ',' && depth === 0) { args.push(cur); cur = ''; continue; }
+                    cur += ch;
+                }
+                if (cur.trim() !== '') args.push(cur);
+                return args;
+            }
+
+            // Resolve a single computed-binding argument: string/number/boolean
+            // literal, or a property path on the element.
+            function resolveBindingArg(el, arg) {
+                arg = arg.trim();
+                if (arg === '') return undefined;
+                var c = arg.charAt(0);
+                if (c === '"' || c === "'") return arg.slice(1, -1);
+                if (arg === 'true') return true;
+                if (arg === 'false') return false;
+                if (arg === 'null') return null;
+                if (arg === 'undefined') return undefined;
+                if (/^-?\d+(\.\d+)?$/.test(arg)) return Number(arg);
+                return resolveBindingPath(el, arg);
+            }
+
+            // Evaluate a binding expression: a plain path (`data.title`), a
+            // computed method call (`getSimpleString(data.title)`), with optional
+            // leading `!` negation(s).
+            function resolveBindingExpr(el, expr) {
+                expr = expr.trim();
+                var negate = false;
+                while (expr.charAt(0) === '!') { negate = !negate; expr = expr.slice(1).trim(); }
+                var val;
+                var paren = expr.indexOf('(');
+                if (paren > 0 && expr.charAt(expr.length - 1) === ')') {
+                    var method = expr.slice(0, paren).trim();
+                    var argStr = expr.slice(paren + 1, -1).trim();
+                    var fn;
+                    try { fn = el[method]; } catch (e) { fn = null; }
+                    if (typeof fn === 'function') {
+                        var args = argStr === '' ? [] : splitBindingArgs(argStr).map(function(a) {
+                            return resolveBindingArg(el, a);
+                        });
+                        try { val = fn.apply(el, args); } catch (e) { val = undefined; }
+                    } else {
+                        val = undefined;
+                    }
+                } else {
+                    val = resolveBindingPath(el, expr);
+                }
+                return negate ? !val : val;
+            }
+
+            function evalParts(el, parts) {
+                var out = '';
+                for (var i = 0; i < parts.length; i++) {
+                    var p = parts[i];
+                    if (p.literal !== undefined) {
+                        out += p.literal;
+                    } else {
+                        var pval = resolveBindingExpr(el, p.path);
+                        out += pval == null ? '' : String(pval);
+                    }
+                }
+                return out;
+            }
+
+            function collectStampedBindings(el) {
+                var bindings = [];
+                function walkNode(node, depth) {
+                    if (!node || depth > 30) return;
+                    var nodeType;
+                    try { nodeType = node.nodeType; } catch (e) { return; }
+                    if (nodeType === 3) {
+                        var raw;
+                        try { raw = node.textContent || ''; } catch (e) { return; }
+                        var tbp = parseBindingParts(raw);
+                        if (tbp) bindings.push({ node: node, kind: 'text', parts: tbp });
+                    } else if (nodeType === 1) {
+                        var tagName;
+                        try { tagName = node.localName || ''; } catch (e) {}
+                        var isCE = tagName && tagName.indexOf('-') >= 0 && tagName !== el.localName;
+                        var nodeAttrs;
+                        try { nodeAttrs = node.attributes; } catch (e) {}
+                        if (nodeAttrs) {
+                            for (var ai = 0; ai < nodeAttrs.length; ai++) {
+                                try {
+                                    var attr = nodeAttrs[ai];
+                                    var attrParts = parseBindingParts(attr.value);
+                                    if (attrParts) {
+                                        var aname = attr.name;
+                                        var isBool = aname.charAt(aname.length - 1) === '$';
+                                        bindings.push({
+                                            node: node, kind: 'attr',
+                                            attrName: isBool ? aname.slice(0, -1) : aname,
+                                            isBool: isBool, parts: attrParts
+                                        });
+                                    }
+                                } catch (e) {}
+                            }
+                        }
+                        if (!isCE) {
+                            var wchild;
+                            try { wchild = node.firstChild; } catch (e) {}
+                            while (wchild) {
+                                walkNode(wchild, depth + 1);
+                                try { wchild = wchild.nextSibling; } catch (e) { break; }
+                            }
+                        }
+                    }
+                }
+                var root;
+                try { root = el.root || el.shadowRoot || el.__shady_shadowRoot || el; } catch (e) { root = el; }
+                var sc;
+                try { sc = root.firstChild; } catch (e) {}
+                while (sc) {
+                    walkNode(sc, 0);
+                    try { sc = sc.nextSibling; } catch (e) { break; }
+                }
+                return bindings;
+            }
+
+            function applyStampedBindings(el, bindings) {
+                if (!bindings || !bindings.length) return;
+                for (var bi = 0; bi < bindings.length; bi++) {
+                    var b = bindings[bi];
+                    try {
+                        var bval = evalParts(el, b.parts);
+                        if (b.kind === 'text') {
+                            b.node.textContent = bval;
+                        } else if (b.isBool) {
+                            var falsy = !bval || bval === 'false';
+                            if (falsy) { try { b.node.removeAttribute(b.attrName); } catch (e) {} }
+                            else { try { b.node.setAttribute(b.attrName, ''); } catch (e) {} }
+                        } else {
+                            try { b.node.setAttribute(b.attrName, bval); } catch (e) {}
+                        }
+                    } catch (e) {}
+                }
+            }
+
+            function installBindingHooks(el) {
+                if (!el || el.__aurora_bindings_installed__) return;
+                try {
+                    Object.defineProperty(el, '__aurora_bindings_installed__', {
+                        value: true, configurable: true
+                    });
+                } catch (e) { el.__aurora_bindings_installed__ = true; }
+                var bindings = collectStampedBindings(el);
+                if (!bindings.length) return;
+                try {
+                    Object.defineProperty(el, '__aurora_bindings__', {
+                        value: bindings, configurable: true, writable: true
+                    });
+                } catch (e) { el.__aurora_bindings__ = bindings; }
+                applyStampedBindings(el, bindings);
+                if (typeof el._propertiesChanged === 'function'
+                        && !el._propertiesChanged.__aurora_binding_wrapped__) {
+                    var origPc = el._propertiesChanged;
+                    var wrappedPc = function(currentProps, changedProps, oldProps) {
+                        var r = origPc.apply(this, arguments);
+                        try { applyStampedBindings(this, this.__aurora_bindings__); } catch (e) {}
+                        return r;
+                    };
+                    try {
+                        Object.defineProperty(wrappedPc, '__aurora_binding_wrapped__', {
+                            value: true, configurable: true
+                        });
+                    } catch (e) {}
+                    try { el._propertiesChanged = wrappedPc; } catch (e) {}
+                }
+            }
+
             function shouldReplayConstructor(ctor) {
                 if (typeof ctor !== 'function') return false;
                 var source = '';
@@ -1606,6 +1955,7 @@
                 }
                 maybeCallCreated(el, name);
                 installRichGridFallback(el);
+                readyUpgraded(el, name);
                 if (globalThis.__aurora_debug_youtube__ && debugProbeName(name)) {
                     trace('upgrade-stage ' + name + ' connect-start');
                 }
@@ -1628,6 +1978,8 @@
                 rebuildPolymerIdMap(el);
                 el.ready();
                 rebuildPolymerIdMap(el);
+                installBindingHooks(el);
+                wireEventHandlers(el);
             }
 
             function connectUpgraded(el, name, connect) {
@@ -1664,6 +2016,14 @@
                             el.__ce_connected__ = true;
                             rebuildPolymerIdMap(el);
                             return;
+                        }
+                        // If the constructor called _initializeProperties (which sets
+                        // __dataEnabled = false) but nothing has called _enableProperties
+                        // yet, do it now. Polymer normally calls it from inside
+                        // connectedCallback, but if that path is broken the data system
+                        // stays dark and _propertiesChanged / observers never fire.
+                        if (el.__dataEnabled === false && typeof el._enableProperties === 'function') {
+                            try { el._enableProperties(); } catch (e) {}
                         }
                         if (typeof el.connectedCallback === 'function') {
                             if (shouldTraceName(name)) trace('connectedCallback ' + name);
@@ -1790,6 +2150,76 @@
                 __aurora_track_custom_element__: function(el) { rememberPending(el); }
             };
 
+            // Wire on-* event handler attributes in the stamped subtree to
+            // instance methods on the host element. Runs once after ready().
+            function wireEventHandlers(el) {
+                if (!el || el.__aurora_events_wired__) return;
+                try {
+                    Object.defineProperty(el, '__aurora_events_wired__', { value: true, configurable: true });
+                } catch (e) { el.__aurora_events_wired__ = true; }
+                var root;
+                try { root = el.root || el.shadowRoot || el.__shady_shadowRoot || el; } catch (e) { root = el; }
+                function wireNode(node, depth) {
+                    if (!node || depth > 30) return;
+                    var nt; try { nt = node.nodeType; } catch (e) { return; }
+                    if (nt !== 1) return;
+                    var attrs; try { attrs = node.attributes; } catch (e) {}
+                    if (attrs) {
+                        for (var ai = 0; ai < attrs.length; ai++) {
+                            try {
+                                var aname = attrs[ai].name;
+                                if (aname.indexOf('on-') !== 0) continue;
+                                var eventName = aname.slice(3);
+                                var raw = attrs[ai].value.replace(/^\[\[|\]\]$|^\{\{|\}\}$/g, '').trim();
+                                if (!raw) continue;
+                                (function(n, ev, mn) {
+                                    n.addEventListener(ev, function(e) {
+                                        var fn = el[mn];
+                                        if (typeof fn === 'function') try { fn.call(el, e); } catch (ex) {}
+                                    });
+                                })(node, eventName, raw);
+                            } catch (e) {}
+                        }
+                    }
+                    var wc; try { wc = node.firstChild; } catch (e) {}
+                    while (wc) { wireNode(wc, depth + 1); try { wc = wc.nextSibling; } catch (e) { break; } }
+                }
+                var sc; try { sc = root.firstChild; } catch (e) {}
+                while (sc) { wireNode(sc, 0); try { sc = sc.nextSibling; } catch (e) { break; } }
+            }
+
             globalThis.__aurora_init_custom_elements__ = function() { ensureCreateElementPatch(); };
             globalThis.__aurora_track_custom_element__ = function(el) { rememberPending(el); };
+            globalThis.__aurora_apply_stamped_bindings__ = applyStampedBindings;
+
+            // Walk a subtree (light DOM + shadow roots) and install binding hooks
+            // on every custom element that hasn't been hooked yet. Feed renderers
+            // (ytd-rich-grid-renderer, ytd-rich-item-renderer, …) are stamped
+            // natively by Polymer's property-effects during navigation, so they
+            // never pass through tryUpgrade()/readyUpgraded() where binding hooks
+            // are normally installed; without this sweep their `[[…]]` text/attr
+            // annotations render literally. Idempotent (guarded per element).
+            globalThis.__aurora_sweep_bindings__ = function(root) {
+                root = root || (document && document.body);
+                var count = 0;
+                function walk(node, depth) {
+                    if (!node || depth > 60) return;
+                    var nt; try { nt = node.nodeType; } catch (e) { return; }
+                    if (nt === 1) {
+                        var ln; try { ln = node.localName || ''; } catch (e) { ln = ''; }
+                        if (ln.indexOf('-') >= 0 && !node.__aurora_bindings_installed__) {
+                            try { installBindingHooks(node); count++; } catch (e) {}
+                        }
+                    }
+                    var sr; try { sr = node.shadowRoot || node.__shady_shadowRoot; } catch (e) {}
+                    if (sr) {
+                        var s; try { s = sr.firstChild; } catch (e) {}
+                        while (s) { walk(s, depth + 1); try { s = s.nextSibling; } catch (e) { break; } }
+                    }
+                    var c; try { c = node.firstChild; } catch (e) {}
+                    while (c) { walk(c, depth + 1); try { c = c.nextSibling; } catch (e) { break; } }
+                }
+                walk(root, 0);
+                return count;
+            };
         })();

@@ -32,7 +32,7 @@ fn collect_element_styles(
     if element.tag_name == "style" {
         for child in &element.children {
             if let Node::Text(text) = &*child.borrow() {
-                output.push_str(text);
+                output.push_str(&text.content);
                 output.push('\n');
             }
         }

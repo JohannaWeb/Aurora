@@ -11,7 +11,7 @@ impl StyledNode {
         match &*node_borrow {
             Node::Document { .. } => writeln!(f, "{indent}#styled-document")?,
             Node::Element(el) => writeln!(f, "{indent}<{}> {}", el.tag_name, self.styles)?,
-            Node::Text(text) => writeln!(f, "{indent}\"{text}\" {}", self.styles)?,
+            Node::Text(text) => writeln!(f, "{indent}\"{}\" {}", text.content, self.styles)?,
         }
 
         drop(node_borrow);

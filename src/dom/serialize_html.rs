@@ -43,9 +43,9 @@ fn serialize_node(node: &NodePtr, out: &mut String, is_rawtext: bool) {
         }
         Node::Text(t) => {
             if is_rawtext {
-                out.push_str(t);
+                out.push_str(&t.content);
             } else {
-                out.push_str(&html_escape(t));
+                out.push_str(&html_escape(&t.content));
             }
         }
     }

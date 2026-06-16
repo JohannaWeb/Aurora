@@ -674,7 +674,7 @@ fn v8_custom_element_connects_only_after_append() {
             })()
             "#
         ),
-        Ok("|ready:true,connected:true".to_string())
+        Ok("ready:false|ready:false,connected:true".to_string())
     );
 }
 
@@ -1088,6 +1088,9 @@ fn v8_exposes_youtube_bootstrap_constructor_and_config_shape() {
             [
                 Object.getOwnPropertyNames(Element.prototype).indexOf('style') >= 0,
                 typeof document.createElement('div').style.cssText,
+                // A plain object's `style` is an ordinary property: the old
+                // callable `Object.prototype.style` shim was removed (it leaked
+                // into Polymer's rawProps.style), so this stays `undefined:undefined`.
                 (() => { const o = {}; o.style = 'display: block'; return o.style.cssText + ':' + typeof o.style.call; })(),
                 (ytcfg.set({WEB_PLAYER_CONTEXT_CONFIGS: {OTHER: {contextId: 'OTHER'}}}), typeof ytcfg.get('WEB_PLAYER_CONTEXT_CONFIGS').WEB_PLAYER_CONTEXT_CONFIG_ID_KEVLAR_WATCH.serializedExperimentIds),
                 ytcfg.get('WEB_PLAYER_CONTEXT_CONFIGS').WEB_PLAYER_CONTEXT_CONFIG_ID_KEVLAR_WATCH.serializedExperimentFlags,
@@ -1098,7 +1101,7 @@ fn v8_exposes_youtube_bootstrap_constructor_and_config_shape() {
             ].join('|')
             "#
         ),
-        Ok("true|string|display: block:function|string|0|0|true|7|function".to_string())
+        Ok("true|string|undefined:undefined|string|0|0|true|7|function".to_string())
     );
 }
 
@@ -1339,14 +1342,15 @@ fn v8_supports_document_structure_and_screen() {
         Ok("true".to_string())
     );
 
-    // screen stub
+    // screen stub — desktop dimensions (matches the 1440x1024 viewport the V8
+    // bootstrap reports so sites like YouTube take their desktop layout path).
     assert_eq!(
         runtime.eval_to_string("screen.width"),
-        Ok("1200".to_string())
+        Ok("1440".to_string())
     );
     assert_eq!(
         runtime.eval_to_string("screen.height"),
-        Ok("800".to_string())
+        Ok("1024".to_string())
     );
 }
 
@@ -1386,4 +1390,22 @@ fn compiled_out_engines_return_err_not_panic() {
         let err = create_runtime(EngineKind::Boa, &dom).err();
         assert!(err.is_some_and(|e| e.contains("engine-boa")));
     }
+}
+
+#[test]
+fn v8_text_node_move_detaches_from_previous_parent() {
+    let html = "<html><body><div id='p1'>hello</div><div id='p2'></div></body></html>";
+    let mut runtime = V8Runtime::new(Parser::new(html).parse_document());
+
+    runtime.execute(r#"
+        const p1 = document.getElementById('p1');
+        const p2 = document.getElementById('p2');
+        const text = p1.firstChild;
+        p2.appendChild(text);
+    "#).unwrap();
+
+    // The text node should no longer be a child of p1
+    assert_eq!(runtime.eval_to_string("document.getElementById('p1').childNodes.length"), Ok("0".to_string()));
+    assert_eq!(runtime.eval_to_string("document.getElementById('p2').childNodes.length"), Ok("1".to_string()));
+    assert_eq!(runtime.eval_to_string("document.getElementById('p2').firstChild.textContent"), Ok("hello".to_string()));
 }

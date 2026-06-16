@@ -58,7 +58,7 @@ fn collect_script(
     for child in &el.children {
         let child_borrow = child.borrow();
         if let crate::dom::Node::Text(t) = &*child_borrow {
-            content.push_str(t);
+            content.push_str(&t.content);
         }
     }
 

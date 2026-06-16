@@ -3,7 +3,7 @@ use super::*;
 pub(in crate::js_boa) fn collect_text(node: &NodePtr) -> String {
     let b = node.borrow();
     match &*b {
-        Node::Text(t) => t.clone(),
+        Node::Text(t) => t.content.clone(),
         Node::Element(el) => el
             .children
             .iter()

@@ -16,6 +16,28 @@ pub(super) fn parse_screenshot_color(color_str: &str) -> Rgba<u8> {
         }
     }
 
+    // rgb(r, g, b) / rgba(r, g, b, a) — channels 0-255, alpha 0.0-1.0.
+    if let Some(rest) = color_str
+        .strip_prefix("rgba(")
+        .or_else(|| color_str.strip_prefix("rgb("))
+    {
+        if let Some(inner) = rest.strip_suffix(')') {
+            let parts: Vec<&str> = inner.split(',').map(str::trim).collect();
+            if parts.len() >= 3 {
+                let chan = |s: &str| s.parse::<f32>().ok().map(|v| v.clamp(0.0, 255.0) as u8);
+                if let (Some(r), Some(g), Some(b)) = (chan(parts[0]), chan(parts[1]), chan(parts[2]))
+                {
+                    let a = parts
+                        .get(3)
+                        .and_then(|s| s.parse::<f32>().ok())
+                        .map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8)
+                        .unwrap_or(255);
+                    return Rgba([r, g, b, a]);
+                }
+            }
+        }
+    }
+
     match color_str.as_str() {
         "black" => Rgba([0, 0, 0, 255]),
         "white" => Rgba([255, 255, 255, 255]),
