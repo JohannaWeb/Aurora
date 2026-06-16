@@ -780,6 +780,8 @@
             var sheet = new CSSStyleSheet(el);
             if (el.localName === 'style') {
                 sheet.replaceSync(el.textContent || '');
+            } else if (el.localName === 'link') {
+                sheet.href = el.getAttribute('href');
             }
             styleSheetsCache.set(el, sheet);
             return sheet;

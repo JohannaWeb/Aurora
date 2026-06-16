@@ -173,12 +173,16 @@ fn renderer_for_surface<'a>(
 fn paint_content_layer(app: &mut AuroraApp, scene: &mut Scene, width: u32, height: u32) {
     let content_top = BROWSER_CHROME_HEIGHT as f64;
     let content_height = (height as f32 - BROWSER_CHROME_HEIGHT).max(1.0) as u32;
+    // The clip only needs to keep content from painting up into the chrome, so
+    // it matters vertically (top = content_top). Pulling the left/right edges a
+    // hair outside the viewport keeps the content's x=0 column off the clip's
+    // antialiased boundary, which was shaving the left edge of the page.
     scene.push_layer(
         Fill::NonZero,
         vello::peniko::BlendMode::default(),
         1.0,
         Affine::IDENTITY,
-        &vello::kurbo::Rect::new(0.0, content_top, width as f64, height as f64),
+        &vello::kurbo::Rect::new(-2.0, content_top, width as f64 + 2.0, height as f64),
     );
     let mut content_scene = Scene::new();
     if let Some(blitz_doc) = &mut app.input.blitz_doc {
