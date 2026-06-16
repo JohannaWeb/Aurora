@@ -1,0 +1,1969 @@
+[19:48:58.596 INFO] Aurora logging started → logs/aurora_20260616_194858.log
+[19:48:58.596 INFO] Aurora: Starting up...
+Aurora: Crypto provider installed.
+[19:48:58.965 INFO] [JS] processing 42 scripts
+[19:48:58.965 INFO] [NET] GET https://www.youtube.com/s/desktop/f2e7f510/jsbin/web-animations-next-lite.min.vflset/web-animations-next-lite.min.js (script)
+[19:48:58.966 INFO] [NET] GET https://www.youtube.com/s/desktop/f2e7f510/jsbin/webcomponents-sd.vflset/webcomponents-sd.js (script)
+[19:48:58.965 INFO] [NET] GET https://www.youtube.com/s/desktop/f2e7f510/jsbin/custom-elements-es5-adapter.vflset/custom-elements-es5-adapter.js (script)
+[19:48:58.966 INFO] [NET] GET https://www.youtube.com/s/desktop/f2e7f510/jsbin/scheduler.vflset/scheduler.js (script)
+[19:48:58.966 INFO] [NET] GET https://www.youtube.com/s/desktop/f2e7f510/jsbin/intersection-observer.min.vflset/intersection-observer.min.js (script)
+[19:48:58.966 INFO] [NET] GET https://www.youtube.com/s/desktop/f2e7f510/jsbin/www-i18n-constants-pt_PT.vflset/www-i18n-constants.js (script)
+[19:48:58.968 INFO] [NET] GET https://www.youtube.com/s/desktop/f2e7f510/jsbin/spf.vflset/spf.js (script)
+[19:48:58.968 INFO] [NET] GET https://www.youtube.com/s/desktop/f2e7f510/jsbin/network.vflset/network.js (script)
+[19:48:58.969 INFO] [NET] GET https://www.youtube.com/s/_/ytmainappweb/_/js/k=ytmainappweb.kevlar_base.en_US.Tq2agAYFB6o.es5.O/am=AAAAAAABQABACA/d=1/br=1/rs=AGKMywGiRlzhupxXTFCMrJD6z-mwWXSHLA/m=kevlar_base_module,kevlar_main_module,kevlar_base_sync_mod_chunk (script)
+[yt-life] customElements.upgrade
+[yt-life] define dom-repeat
+[yt-life] define dom-if
+[yt-life] define dom-module
+[yt-life] define array-selector
+[yt-life] define custom-style
+[yt-life] define dom-bind
+[yt-life] define dom-if
+[yt-life] define dom-repeat
+[yt-life] define iron-a11y-keys
+[yt-life] define iron-meta
+[yt-life] define iron-iconset-svg
+[yt-life] define iron-selector
+[yt-life] define fade-in-animation
+[yt-life] define fade-out-animation
+LegacyDataMixin will be applied to all legacy elements.
+Set `_legacyUndefinedCheck: true` on element class to enable.
+[yt-life] define tp-yt-app-toolbar
+[yt-life] define tp-yt-iron-a11y-announcer
+[yt-life] define tp-yt-iron-autogrow-textarea
+[yt-life] define tp-yt-iron-collapse
+[yt-life] define tp-yt-iron-overlay-backdrop
+[yt-life] define tp-yt-iron-dropdown
+[yt-life] define tp-yt-iron-icon
+[yt-life] define tp-yt-iron-input
+[yt-life] define tp-yt-iron-list
+[yt-life] define tp-yt-paper-ripple
+[yt-life] define tp-yt-paper-button
+[yt-life] upgrade custom-style connect=true
+[yt-life] upgrade custom-style connect=true
+[yt-life] define tp-yt-paper-dialog
+[yt-life] define tp-yt-paper-dialog-scrollable
+[yt-life] define tp-yt-paper-icon-button
+[yt-life] define tp-yt-paper-icon-item
+[yt-life] define tp-yt-paper-input-char-counter
+[yt-life] define tp-yt-paper-input-container
+[yt-life] define tp-yt-paper-input-error
+[yt-life] define tp-yt-paper-input
+[yt-life] define tp-yt-paper-item
+[yt-life] define tp-yt-paper-item-body
+[yt-life] define tp-yt-paper-listbox
+[yt-life] define tp-yt-paper-menu-grow-height-animation
+[yt-life] define tp-yt-paper-menu-grow-width-animation
+[yt-life] define tp-yt-paper-menu-shrink-width-animation
+[yt-life] define tp-yt-paper-menu-shrink-height-animation
+[yt-life] define tp-yt-paper-menu-button
+[yt-life] define tp-yt-paper-spinner
+[yt-life] define tp-yt-paper-spinner-lite
+[yt-life] define tp-yt-paper-tab
+[yt-life] upgrade iron-iconset-svg connect=true
+[yt-life] created iron-iconset-svg
+[yt-life] ready iron-iconset-svg
+[yt-life] connectedCallback iron-iconset-svg
+[yt-life] define tp-yt-paper-tabs
+[yt-life] define tp-yt-paper-textarea
+[yt-life] define tp-yt-paper-toggle-button
+[yt-life] define tp-yt-paper-tooltip
+[yt-life] define ps-dom-if
+[yt-life] define ps-dom-repeat
+[yt-life] define yt-image
+[yt-life] define yt-attributed-string
+[yt-life] define yt-bumper-user-edu-content-view-model
+[yt-life] define yt-countdown
+[yt-life] define yt-button-view-model
+[yt-life] define yt-button-shape
+[yt-life] define yt-creator-goal-progress-flow-view-model
+[yt-life] define yt-live-chat-item-bumper-view-model
+[yt-life] define ytd-lottie-player
+[yt-life] define yt-animated-icon
+[yt-life] define yt-icon
+[yt-life] define yt-formatted-string
+[yt-life] define yt-interaction
+[yt-life] define yt-icon-button
+[yt-life] upgrade iron-iconset-svg connect=true
+[yt-life] created iron-iconset-svg
+[yt-life] ready iron-iconset-svg
+[yt-life] connectedCallback iron-iconset-svg
+[yt-life] upgrade iron-iconset-svg connect=true
+[yt-life] created iron-iconset-svg
+[yt-life] ready iron-iconset-svg
+[yt-life] connectedCallback iron-iconset-svg
+[yt-life] upgrade iron-iconset-svg connect=true
+[yt-life] created iron-iconset-svg
+[yt-life] ready iron-iconset-svg
+[yt-life] connectedCallback iron-iconset-svg
+[yt-life] upgrade iron-iconset-svg connect=true
+[yt-life] created iron-iconset-svg
+[yt-life] ready iron-iconset-svg
+[yt-life] connectedCallback iron-iconset-svg
+[yt-life] upgrade iron-iconset-svg connect=true
+[yt-life] created iron-iconset-svg
+[yt-life] ready iron-iconset-svg
+[yt-life] connectedCallback iron-iconset-svg
+[yt-life] upgrade iron-iconset-svg connect=true
+[yt-life] created iron-iconset-svg
+[yt-life] ready iron-iconset-svg
+[yt-life] connectedCallback iron-iconset-svg
+[yt-life] upgrade iron-iconset-svg connect=true
+[yt-life] created iron-iconset-svg
+[yt-life] ready iron-iconset-svg
+[yt-life] connectedCallback iron-iconset-svg
+[yt-life] upgrade iron-iconset-svg connect=true
+[yt-life] created iron-iconset-svg
+[yt-life] ready iron-iconset-svg
+[yt-life] connectedCallback iron-iconset-svg
+[yt-life] upgrade iron-iconset-svg connect=true
+[yt-life] created iron-iconset-svg
+[yt-life] ready iron-iconset-svg
+[yt-life] connectedCallback iron-iconset-svg
+[yt-life] upgrade iron-iconset-svg connect=true
+[yt-life] created iron-iconset-svg
+[yt-life] ready iron-iconset-svg
+[yt-life] connectedCallback iron-iconset-svg
+[yt-life] upgrade iron-iconset-svg connect=true
+[yt-life] created iron-iconset-svg
+[yt-life] ready iron-iconset-svg
+[yt-life] connectedCallback iron-iconset-svg
+[yt-life] upgrade iron-iconset-svg connect=true
+[yt-life] created iron-iconset-svg
+[yt-life] ready iron-iconset-svg
+[yt-life] connectedCallback iron-iconset-svg
+[yt-life] upgrade iron-iconset-svg connect=true
+[yt-life] created iron-iconset-svg
+[yt-life] ready iron-iconset-svg
+[yt-life] connectedCallback iron-iconset-svg
+[yt-life] upgrade iron-iconset-svg connect=true
+[yt-life] created iron-iconset-svg
+[yt-life] ready iron-iconset-svg
+[yt-life] connectedCallback iron-iconset-svg
+[yt-life] upgrade iron-iconset-svg connect=true
+[yt-life] created iron-iconset-svg
+[yt-life] ready iron-iconset-svg
+[yt-life] connectedCallback iron-iconset-svg
+[yt-life] upgrade iron-iconset-svg connect=true
+[yt-life] created iron-iconset-svg
+[yt-life] ready iron-iconset-svg
+[yt-life] connectedCallback iron-iconset-svg
+[yt-life] upgrade iron-iconset-svg connect=true
+[yt-life] created iron-iconset-svg
+[yt-life] ready iron-iconset-svg
+[yt-life] connectedCallback iron-iconset-svg
+[yt-life] upgrade iron-iconset-svg connect=true
+[yt-life] created iron-iconset-svg
+[yt-life] ready iron-iconset-svg
+[yt-life] connectedCallback iron-iconset-svg
+[yt-life] upgrade iron-iconset-svg connect=true
+[yt-life] created iron-iconset-svg
+[yt-life] ready iron-iconset-svg
+[yt-life] connectedCallback iron-iconset-svg
+[yt-life] upgrade iron-iconset-svg connect=true
+[yt-life] created iron-iconset-svg
+[yt-life] ready iron-iconset-svg
+[yt-life] connectedCallback iron-iconset-svg
+[yt-life] upgrade iron-iconset-svg connect=true
+[yt-life] created iron-iconset-svg
+[yt-life] ready iron-iconset-svg
+[yt-life] connectedCallback iron-iconset-svg
+[yt-life] upgrade iron-iconset-svg connect=true
+[yt-life] created iron-iconset-svg
+[yt-life] ready iron-iconset-svg
+[yt-life] connectedCallback iron-iconset-svg
+[yt-life] define yt-button-renderer
+[yt-life] define ytd-button-renderer
+[yt-life] define yt-img-shadow
+[yt-life] define yt-toggle-button-view-model
+[yt-life] define yt-live-chat-like-button-view-model
+[yt-life] define yt-live-chat-paid-message-footer-renderer
+[yt-life] define yt-live-chat-reply-button-view-model
+[yt-life] define yt-live-chat-author-badge-renderer
+[yt-life] define yt-live-chat-author-chip
+[yt-life] define yt-live-chat-creator-heart-view-model
+[yt-life] define yt-live-chat-text-input-field-suggestion
+[yt-life] define yt-live-chat-participants-manager
+[yt-life] define yt-live-chat-text-input-field-renderer
+[yt-life] define yt-live-chat-paid-message-renderer
+[yt-life] define yt-live-chat-paid-sticker-renderer
+[yt-life] define yt-emoji-multi-person-selector
+[yt-life] define yt-emoji-picker-category-button-renderer
+[yt-life] define yt-emoji-picker-category-renderer
+[yt-life] define yt-emoji-picker-upsell-category-renderer
+[yt-life] define yt-emoji-variant-selector
+[yt-life] define yt-emoji-picker-renderer
+[yt-life] define yt-emoji-customization-panel-view-model
+[yt-life] define yt-live-chat-text-message-renderer
+[yt-life] define yt-live-chat-auto-mod-message-renderer
+[yt-life] define factoid-renderer
+[yt-life] define yt-live-chat-channel-activity-reputation-renderer
+[yt-life] define yt-live-chat-donation-announcement-renderer
+[yt-life] define yt-live-chat-empty-feed-view-model
+[yt-life] define yt-live-chat-identity-view-model
+[yt-life] define yt-live-chat-legacy-paid-message-renderer
+[yt-life] define yt-live-chat-membership-item-renderer
+[yt-life] define yt-live-chat-mode-change-message-renderer
+[yt-life] define yt-live-chat-moderation-message-renderer
+[yt-life] define yt-live-chat-placeholder-item-renderer
+[yt-life] define yt-live-chat-server-error-message
+[yt-life] define yt-live-chat-viewer-engagement-message-renderer
+[yt-life] define ytd-sponsorships-live-chat-header-renderer
+[yt-life] define ytd-sponsorships-live-chat-gift-purchase-announcement-renderer
+[yt-life] define ytd-sponsorships-live-chat-gift-redemption-announcement-renderer
+[yt-life] define yt-live-chat-item-display-list-renderer
+[yt-life] define yt-live-chat-item-display-renderer
+[yt-life] define ytw-player-with-controls
+[yt-life] define ytd-player
+[yt-life] define ytd-account-link-button-renderer
+[yt-life] define ytd-playlist-loop-button-renderer
+[yt-life] define ytd-download-button-renderer
+[yt-life] define ytd-toggle-button-renderer
+[yt-life] define yt-smartimation
+[yt-life] define ytd-segmented-like-dislike-button-renderer
+[yt-life] define yt-flexible-actions-view-model
+[yt-life] define segmented-like-dislike-button-view-model
+[yt-life] define account-link-button-view-model
+[yt-life] define ytd-menu-renderer
+[yt-life] define badge-shape
+[yt-life] define yt-badge-supported-renderer
+[yt-life] define ytd-badge-supported-renderer
+[yt-life] define ytd-display-ad-renderer
+[yt-life] define ytd-channel-name
+[yt-life] define ytd-author-comment-badge-renderer
+[yt-life] define ytd-backstage-image-renderer
+[yt-life] define ytd-backstage-poll-renderer
+[yt-life] define ytd-backstage-quiz-renderer
+[yt-life] define ytd-post-uploaded-video-renderer
+[yt-life] define ytd-sponsors-only-badge-renderer
+[yt-life] define ytd-child-video-renderer
+[yt-life] define ytd-playlist-custom-thumbnail-renderer
+[yt-life] define ytd-playlist-video-thumbnail-renderer
+[yt-life] define ytd-show-custom-thumbnail-renderer
+[yt-life] define ytd-thumbnail-overlay-bottom-panel-renderer
+[yt-life] define ytd-thumbnail-overlay-downloading-renderer
+[yt-life] define ytd-thumbnail-overlay-hover-text-renderer
+[yt-life] define ytd-thumbnail-overlay-equalizer
+[yt-life] define ytd-thumbnail-overlay-now-playing-renderer
+[yt-life] define ytd-thumbnail-overlay-playback-status-renderer
+[yt-life] define ytd-thumbnail-overlay-resume-playback-renderer
+[yt-life] define ytd-thumbnail-overlay-side-panel-renderer
+[yt-life] define ytd-thumbnail-overlay-time-status-renderer
+[yt-life] define ytd-tvfilm-show-watch-forward-overlay-renderer
+[yt-life] define yt-collections-stack
+[yt-life] define ytd-playlist-thumbnail
+[yt-life] define yt-text-view-model
+[yt-life] define ytd-video-meta-block
+[yt-life] define ytd-playlist-renderer
+[yt-life] define ytd-search-refinement-card-renderer
+[yt-life] define ytd-game-details-renderer
+[yt-life] define ytd-subscription-notification-toggle-button-renderer
+[yt-life] define ytd-subscription-notification-toggle-button-renderer-next
+[yt-life] define yt-animated-action
+[yt-life] define ytd-subscribe-button-renderer
+[yt-life] define ytd-game-card-renderer
+[yt-life] define ytd-notification-multi-action-renderer
+[yt-life] define ytd-notification-text-renderer
+[yt-life] define ytd-moving-thumbnail-renderer
+[yt-life] define ytd-thumbnail-overlay-button-renderer
+[yt-life] define ytd-thumbnail-overlay-endorsement-renderer
+[yt-life] define ytd-thumbnail-overlay-icon-renderer
+[yt-life] define ytd-thumbnail-overlay-inline-unplayable-renderer
+[yt-life] define ytd-thumbnail-overlay-loading-preview-renderer
+[yt-life] define ytd-thumbnail-overlay-pinking-renderer
+[yt-life] define ytd-thumbnail-overlay-toggle-button-renderer
+[yt-life] define yt-thumbnail-bottom-overlay-view-model
+[yt-life] define thumbnail-overlay-avatar-stack-view-model
+[yt-life] define yt-thumbnail-overlay-title-view-model
+[yt-life] define yt-thumbnail-overlay-badge-view-model
+[yt-life] define yt-page-indicator-view-model
+[yt-life] define ytd-thumbnail
+[yt-life] define ytd-grid-video-renderer
+[yt-life] define ytd-info-panel-content-renderer
+[yt-life] define yt-channel-thumbnail-with-link-renderer
+[yt-life] define ytd-rich-list-header-renderer
+[yt-life] define ytd-preview-card-renderer
+[yt-life] define ytd-compact-channel-recommendation-card-renderer
+[yt-life] define ytd-expander
+[yt-life] define ytd-media-upsell-renderer
+[yt-life] define ytd-macro-markers-list-item-renderer
+[yt-life] define ytd-title-and-button-list-header-renderer
+[yt-life] define mini-game-card-view-model
+[yt-life] define dismissed-mini-game-card-view-model
+[yt-life] define ytd-mini-game-card-view-model
+[yt-life] define yt-reload-continuation
+[yt-life] define yt-dropdown-menu
+[yt-life] define yt-sort-filter-sub-menu-renderer
+[yt-life] define place-data-view-model
+[yt-life] define yt-lockup-view-model
+[yt-life] define yt-video-attribute-view-model
+[yt-life] define ytd-horizontal-card-list-renderer
+[yt-life] define video-summary-content-view-model
+[yt-life] define ytd-expandable-metadata-renderer
+[yt-life] define yt-avatar-stack-view-model
+[yt-life] define ytd-video-renderer
+[yt-life] define ytd-post-renderer
+[yt-life] define ytd-post-multi-image-renderer
+[yt-life] define ytd-backstage-post-renderer
+[yt-life] define ytd-shared-post-renderer
+[yt-life] define ytd-reload-page-button-renderer
+[yt-life] define ytd-background-promo-renderer
+[yt-life] define ytd-compact-station-renderer
+[yt-life] define ytd-grid-channel-renderer
+[yt-life] define ytd-grid-movie-playlist-renderer
+[yt-life] define ytd-grid-playlist-renderer
+[yt-life] define ytd-grid-radio-renderer
+[yt-life] define ytd-grid-show-renderer
+[yt-life] define ytd-shopping-companion-item-renderer
+[yt-life] define ytd-vertical-product-card-renderer
+[yt-life] define ytd-grid-movie-renderer
+[yt-life] define ytd-merch-shelf-item-renderer
+[yt-life] define button-card-view-model
+[yt-life] define ytd-shopping-item-card
+[yt-life] define ytm-shorts-lockup-view-model-v2
+[yt-life] define yt-sponsorships-channel-upsell-view-model
+[yt-life] define yt-horizontal-list-renderer
+[yt-life] define yt-dynamic-sizing-formatted-string
+[yt-life] define ytd-account-item-renderer
+[yt-life] define ytd-identity-chip-renderer
+[yt-life] define ytd-ghost-grid-renderer
+[yt-life] define yt-ghost-comments
+[yt-life] define ytd-continuation-item-renderer
+[yt-life] define yt-next-continuation
+[yt-life] define yt-music-pass-small-feature-info-renderer
+[yt-life] define ytd-grid-renderer
+[yt-life] define ytd-carousel-ad-renderer
+[yt-life] define ytd-promoted-sparkles-text-search-renderer
+[yt-life] define ytd-promoted-sparkles-web-renderer
+[yt-life] define ytd-promoted-video-renderer
+[yt-life] define ytd-text-image-no-button-layout-renderer
+[yt-life] define ytd-ad-inline-playback-meta-block
+[yt-life] define ytd-video-display-full-buttoned-and-button-group-renderer
+[yt-life] define ytd-video-display-full-buttoned-renderer
+[yt-life] define compact-landscape-no-button-layout-view-model
+[yt-life] define square-image-layout-view-model
+[yt-life] define top-landscape-image-layout-view-model
+[yt-life] define text-image-no-button-layout-view-model
+[yt-life] define video-display-button-group-layout-view-model
+[yt-life] define video-display-compact-button-group-layout-view-model
+[yt-life] define video-display-compact-buttoned-layout-view-model
+[yt-life] define video-display-compact-carousel-button-group-layout-view-model
+[yt-life] define video-display-compact-layout-view-model
+[yt-life] define video-display-full-buttoned-layout-view-model
+[yt-life] define video-display-full-layout-view-model
+[yt-life] define reels-player-overlay-layout-view-model
+[yt-life] define ytd-in-feed-ad-layout-renderer
+[yt-life] define ad-badge-view-model
+[yt-life] define ad-button-view-model
+[yt-life] define ytd-video-masthead-ad-advertiser-info-renderer
+[yt-life] define ytd-video-masthead-ad-expandable-thumbnail-tile-renderer
+[yt-life] define ytd-video-masthead-ad-expandable-video-tile-renderer
+[yt-life] define ytd-video-masthead-ad-primary-video-overlay-renderer
+[yt-life] define ytd-video-masthead-ad-primary-video-renderer
+[yt-life] define ytd-video-masthead-ad-v3-renderer
+[yt-life] define ytd-page-top-ad-layout-renderer
+[yt-life] define ytd-ad-slot-renderer
+[yt-life] define ytd-compact-promoted-video-renderer
+[yt-life] define ytd-search-pyv-renderer
+[yt-life] define ytd-backstage-post-thread-renderer
+[yt-life] define ytd-backstage-prefilled-post-dialog-header-renderer
+[yt-life] define ytd-backstage-zero-state-renderer
+[yt-life] define ytd-post-filter-zero-state-renderer
+[yt-life] define ytd-post-scheduling-zero-state-renderer
+[yt-life] define ytd-post-stream-filter-renderer
+[yt-life] define ytd-channel-age-gate-renderer
+[yt-life] define ytd-channel-owner-empty-state-renderer
+[yt-life] define ytd-channel-switcher-search-box-renderer
+[yt-life] define ytd-search-box-renderer
+[yt-life] define ytd-channel-switcher-header-renderer
+[yt-life] define ytd-alert-with-button-renderer
+[yt-life] define ytd-channel-switcher-page-renderer
+[yt-life] define ytd-backstage-image-preview-renderer
+[yt-life] define ytd-backstage-multi-image-thumbnail-renderer
+[yt-life] define ytd-backstage-multi-image-reposition-renderer
+[yt-life] define ytd-backstage-image-poll-editor-renderer
+[yt-life] define yt-img-crop-picker
+[yt-life] define ytd-backstage-image-select-renderer
+[yt-life] define ytd-backstage-multi-image-select-renderer
+[yt-life] define ytd-privacy-dropdown-item-renderer
+[yt-life] define ytd-flat-dropdown-renderer
+[yt-life] define ytd-backstage-quiz-editor-renderer
+[yt-life] define ytd-emoji-suggestion
+[yt-life] define ytd-emoji-input
+[yt-life] define yt-user-mention-suggestion-renderer
+[yt-life] define yt-user-mention-suggestions-dropdown
+[yt-life] define yt-user-mention-autosuggest-input
+[yt-life] define yt-posts-creation-options-editor-view-model
+[yt-life] define ytd-commentbox
+[yt-life] define ytd-backstage-post-dialog-renderer
+[yt-life] define ytd-creator-heart-renderer
+[yt-life] define ytd-comment-action-buttons-renderer
+[yt-life] define ytd-comment-dialog-renderer
+[yt-life] define ytd-comment-engagement-bar
+[yt-life] define ytd-comment-inline-thumbnail-renderer
+[yt-life] define ytd-comment-pause-composer-renderer
+[yt-life] define ytd-comment-reply-dialog-renderer
+[yt-life] define ytd-pinned-comment-badge-renderer
+[yt-life] define ytd-sponsor-comment-badge-renderer
+[yt-life] define ytd-tri-state-button-view-model
+[yt-life] define yt-pdg-comment-chip-renderer
+[yt-life] define ytd-comment-view-model
+[yt-life] define yt-sub-thread
+[yt-life] define ytd-comment-replies-renderer
+[yt-life] define ytd-comment-simplebox-renderer
+[yt-life] define ytd-comment-thread-renderer
+[yt-life] define ytd-comments-header-renderer
+[yt-life] define ytd-destination-button-renderer
+[yt-life] define ytd-destination-shelf-renderer
+[yt-life] define ytd-rating-survey-option-renderer
+[yt-life] define ytd-rating-survey-renderer
+[yt-life] define ytd-scrollable-calendar
+[yt-life] define yt-text-input-form-field-renderer
+[yt-life] define ytd-date-period-picker-renderer
+[yt-life] define ytd-report-history-section-header-renderer
+[yt-life] define ytd-report-history-table-text-cell-renderer
+[yt-life] define ytd-report-history-table-reason-cell-renderer
+[yt-life] define ytd-report-history-table-cell-renderer
+[yt-life] define ytd-report-history-table-row-renderer
+[yt-life] define ytd-table-renderer
+[yt-life] define ytd-report-reason-history-modal-renderer
+[yt-life] define ytd-profile-column-stats-entry-renderer
+[yt-life] define ytd-profile-column-stats-renderer
+[yt-life] define ytd-profile-column-user-info-renderer
+[yt-life] define ytd-profile-column-renderer
+[yt-life] define ytd-page-introduction-renderer
+[yt-life] define ytd-report-description-renderer
+[yt-life] define ytd-video-report-renderer
+[yt-life] define ytd-message-renderer
+[yt-life] define ytd-report-history-section-renderer
+[yt-life] define ytd-handles-claiming-faq-renderer
+[yt-life] define ytd-handles-claiming-faq-section-renderer
+[yt-life] define ytd-handles-claiming-header-renderer
+[yt-life] define ytd-handles-claiming-title-images-section-renderer
+[yt-life] define ytd-handles-claiming-update-social-renderer
+[yt-life] define ytd-handles-claiming-vanity-info-renderer
+[yt-life] define ytd-handles-claiming-video-item-renderer
+[yt-life] define chip-shape
+[yt-life] define yt-chip-cloud-chip-renderer
+[yt-life] define ytd-feed-customization-form-view-model
+[yt-life] define yt-chip-content-loader-view-model
+[yt-life] define ytd-feed-filter-chip-bar-renderer
+[yt-life] define yt-nudge-form-view-model
+[yt-life] define ytd-feed-nudge-renderer
+[yt-life] define ytd-slimline-survey-renderer
+[yt-life] define ytd-endorsement-header-renderer
+[yt-life] define yt-decorated-avatar-view-model
+[yt-life] define ytd-rich-grid-media
+[yt-life] define ytd-rich-grid-slim-media
+[yt-life] define ytd-expand-on-hover-card-renderer
+[yt-life] define ytd-channel-renderer
+[yt-life] define ytd-radio-renderer
+[yt-life] define ytd-show-renderer
+[yt-life] define ytd-feed-entry-renderer
+[yt-life] define ytd-link-card-renderer
+[yt-life] define ytd-lumiere-promo-item-image-renderer
+[yt-life] define ytd-lumiere-shelf-details-renderer
+[yt-life] define teaser-card-view-model
+[yt-life] define yt-edu-card-view-model
+[yt-life] define yt-feedback-item-renderer
+[yt-life] define ytd-rich-item-renderer
+[yt-life] define ytd-rich-shelf-renderer
+[yt-life] define yt-thumbnail-view-model
+[yt-life] define yt-badge-view-model
+[yt-life] define yt-slimline-survey-view-model
+[yt-life] define ytd-statement-banner-renderer
+[yt-life] define ytd-reel-shelf-renderer
+[yt-life] define yt-channel-external-link-view-model
+[yt-life] define ytd-about-channel-renderer
+[yt-life] define ytd-channel-list-sub-menu-avatar-renderer
+[yt-life] define ytd-channel-list-sub-menu-renderer
+[yt-life] define ytd-channel-sub-menu-renderer
+[yt-life] define ytd-media-lockup-renderer
+[yt-life] define ytd-structured-description-channel-lockup-renderer
+[yt-life] define ytd-structured-description-playlist-lockup-renderer
+[yt-life] define ytd-structured-description-video-lockup-renderer
+[yt-life] define ytd-compact-infocard-renderer
+[yt-life] define ytd-compact-playlist-renderer
+[yt-life] define ytd-compact-promoted-item-renderer
+[yt-life] define ytd-compact-radio-renderer
+[yt-life] define ytd-compact-text-promo-renderer
+[yt-life] define ytd-compact-video-renderer
+[yt-life] define ytd-counterfactual-renderer
+[yt-life] define ytd-single-action-emergency-support-renderer
+[yt-life] define ytd-emergency-onebox-renderer
+[yt-life] define ytd-expanded-shelf-contents-renderer
+[yt-life] define ytd-feed-channel-filter-header-renderer
+[yt-life] define ytd-medical-panel-section-renderer
+[yt-life] define ytd-medical-panel-content-renderer
+[yt-life] define ytd-info-panel-container-renderer
+[yt-life] define ytd-item-section-header-renderer
+[yt-life] define engagement-bar-view-model
+[yt-life] define ytd-playlist-video-renderer
+[yt-life] define ytd-premium-browse-footer-renderer
+[yt-life] define ytd-recognition-shelf-renderer
+[yt-life] define yt-card-view-model
+[yt-life] define ytd-vertical-list-renderer
+[yt-life] define ytd-shelf-renderer
+[yt-life] define ytd-sort-filter-header-renderer
+[yt-life] define ytd-video-description-infocards-section-renderer
+[yt-life] define ytd-eom-settings-disclaimer-renderer
+[yt-life] define ytd-product-list-header-renderer
+[yt-life] define ytd-hashtag-tile-renderer
+[yt-life] define ytd-sponsorships-alert-renderer
+[yt-life] define ytd-compact-movie-renderer
+[yt-life] define ytd-text-inline-expander
+[yt-life] define ytd-expandable-video-description-body-renderer
+[yt-life] define upload-time-factoid-renderer
+[yt-life] define view-count-factoid-renderer
+[yt-life] define ytd-video-description-header-renderer
+[yt-life] define ytd-list-item-view-model
+[yt-life] define yt-copy-link-renderer
+[yt-life] define yt-toggle-form-field-renderer
+[yt-life] define yt-chip-cloud-renderer
+[yt-life] define yt-related-chip-cloud-renderer
+[yt-life] define yt-section-group-view-model
+[yt-life] define chip-bar-view-model
+[yt-life] define divider-view-model
+[yt-life] define grid-shelf-view-model
+[yt-life] define horizontal-shelf-view-model
+[yt-life] define yt-section-header-view-model
+[yt-life] define yt-alert-banner-view-model
+[yt-life] define yt-linear-layout-view-model
+[yt-life] define chips-shelf-view-model
+[yt-life] define yt-comment-filter-context-view-model
+[yt-life] define yt-course-perks-view-model
+[yt-life] define yt-course-progress-view-model
+[yt-life] define yt-course-ratings-view-model
+[yt-life] define yt-learning-journey-loader-view-model
+[yt-life] define learning-journey-quiz-view-model
+[yt-life] define yt-accordion-view-model
+[yt-life] define yt-learning-journey-zero-state
+[yt-life] define ytvl-live-leaderboard-item-view-model
+[yt-life] define ytvl-live-viewer-leaderboard-item-view-model
+[yt-life] define yt-qr-code-renderer
+[yt-life] define yt-video-overview-view-model
+[yt-life] define yt-official-card-view-model
+[yt-life] define ytw-search-friction-view-model
+[yt-life] define yt-sponsorships-destination-hub-header-view-model
+[yt-life] define macro-markers-panel-item-view-model
+[yt-life] define yt-video-attributes-section-view-model
+[yt-life] define fantasy-league-summary-view-model
+[yt-life] define ytw-fantasy-matchup-view-model
+[yt-life] define ytw-fantasy-weekly-matchup-summary-view-model
+[yt-life] define fantasy-win-probability-view-model
+[yt-life] define ytd-backstage-locked-post-view-model
+[yt-life] define ytd-item-section-renderer
+[yt-life] define ytd-search-filter-renderer
+[yt-life] define ytd-search-filter-group-renderer
+[yt-life] define ytd-search-sub-menu-renderer
+[yt-life] define ytd-text-header-renderer
+[yt-life] define ytd-minor-moment-header-renderer
+[yt-life] define ytd-minor-moment-setting-alert-renderer
+[yt-life] define ytd-settings-switch-renderer
+[yt-life] define ytd-minor-moment-setting-section-renderer
+[yt-life] define ytd-empty-product-details-renderer
+[yt-life] define ytd-sponsorships-loyalty-badges-renderer
+[yt-life] define ytd-sponsorships-perk-renderer
+[yt-life] define ytd-sponsorships-perks-renderer
+[yt-life] define ytd-sponsorships-expandable-perks-renderer
+[yt-life] define ytd-sponsorships-actionable-message-renderer
+[yt-life] define ytd-sponsorships-expandable-message-renderer
+[yt-life] define ytd-sponsorships-heading-renderer
+[yt-life] define ytd-sponsorships-links-renderer
+[yt-life] define ytd-sponsorships-list-tile-renderer
+[yt-life] define ytd-sponsorships-promotion-renderer
+[yt-life] define ytd-sponsorships-purchase-option-renderer
+[yt-life] define ytd-ypc-offer-promo-renderer
+[yt-life] define ytd-sponsorships-tier-renderer
+[yt-life] define ytd-sponsorships-management-renderer
+[yt-life] define ytd-open-in-native-app-view-model
+[yt-life] define ytd-empty-product-shelf-renderer
+[yt-life] define ytd-merch-shelf-renderer
+[yt-life] define ytd-backstage-items
+[yt-life] define ytd-comments
+[yt-life] define yt-themed-image-renderer
+[yt-life] define yt-header-with-back-renderer
+[yt-life] define yt-iframe-renderer
+[yt-life] define mini-app-container-view-model
+[yt-life] define yt-sponsorships-hub
+[yt-life] define yt-sponsorships-perks-list
+[yt-life] define ytw-fantasy-empty-state-view-model
+[yt-life] define timed-animation-button-renderer
+[yt-life] define ytd-video-owner-renderer
+[yt-life] define mini-app-play-page-renderer
+[yt-life] define ytd-section-list-renderer
+[yt-life] define ytd-slim-metadata-toggle-button-renderer
+[yt-life] define ytd-playlist-panel-video-renderer
+[yt-life] define ytd-playlist-panel-supported-items
+[yt-life] define ytd-playlist-panel-renderer
+[yt-life] define ytd-calendar-date-picker
+[yt-life] define ytd-date-time-picker-renderer
+[yt-life] define ytd-backstage-dismissable-attachment
+[yt-life] define ytd-backstage-video-link-attachment
+[yt-life] define ytd-poll-attachment
+[yt-life] define yt-interstitial-view-model
+[yt-life] define yt-player-error-message-renderer
+[yt-life] define yt-player-kav-renderer
+[yt-life] define yt-player-captcha-view-model
+[yt-life] define yt-player-interstitial-renderer
+[yt-life] define yt-playability-error-supported-renderers
+[yt-life] define iron-media-query
+[yt-life] define tp-yt-app-drawer
+[yt-life] define tp-yt-app-header
+[yt-life] define tp-yt-app-header-layout
+[yt-life] upgrade iron-iconset-svg connect=true
+[yt-life] created iron-iconset-svg
+[yt-life] ready iron-iconset-svg
+[yt-life] connectedCallback iron-iconset-svg
+[yt-life] define tp-yt-iron-image
+[yt-life] define tp-yt-iron-pages
+[yt-life] define tp-yt-paper-card
+[yt-life] define tp-yt-paper-checkbox
+[yt-life] upgrade iron-iconset-svg connect=true
+[yt-life] created iron-iconset-svg
+[yt-life] ready iron-iconset-svg
+[yt-life] connectedCallback iron-iconset-svg
+[yt-life] define tp-yt-paper-dropdown-menu
+[yt-life] define tp-yt-paper-dropdown-menu-light
+[yt-life] define tp-yt-paper-material
+[yt-life] define tp-yt-paper-progress
+[yt-life] define tp-yt-paper-radio-button
+[yt-life] define tp-yt-paper-radio-group
+[yt-life] define tp-yt-paper-slider
+[yt-life] define tp-yt-paper-toast
+[yt-life] define ytcr-content-research-header-view-model
+[yt-life] define yt-creator-goal-set-up-flow-view-model
+[yt-life] define yt-disableable-button-view-model
+[yt-life] define yt-emoji-fountain-view-model
+[yt-life] define yt-live-chat-banner-poll-choice
+[yt-life] define yt-live-chat-button
+[yt-life] define yt-live-chat-call-for-questions-renderer
+[yt-life] define yt-live-chat-dialog-renderer
+[yt-life] define yt-live-chat-error-message-renderer
+[yt-life] define yt-live-chat-icon-toggle-button-renderer
+[yt-life] define yt-live-chat-message-input-prompt-header-renderer
+[yt-life] define yt-live-chat-message-subtext-renderer
+[yt-life] define yt-live-chat-message-renderer
+[yt-life] define yt-live-chat-poll-editor-input
+[yt-life] define yt-live-chat-poll-editor-panel-renderer
+[yt-life] define yt-live-chat-product-picker-panel-item-view-model
+[yt-life] define yt-live-chat-product-picker-panel-view-model
+[yt-life] define yt-live-chat-product-button-renderer
+[yt-life] define yt-live-chat-product-picker-renderer
+[yt-life] define yt-live-interactivity-component-background
+[yt-life] define yt-live-chat-qna-start-panel-renderer
+[yt-life] define yt-live-chat-text-actions-error-message-renderer
+[yt-life] define yt-reaction-control-panel-button-view-model
+[yt-life] define yt-reaction-control-panel-view-model
+[yt-life] define yt-reaction-control-panel-overlay-view-model
+[yt-life] define yt-live-chat-message-input-renderer
+[yt-life] define yt-live-chat-restricted-participation-renderer
+[yt-life] define yt-live-chat-engagement-panel-input-renderer
+[yt-life] define yt-live-chat-toggle-renderer
+[yt-life] define ytd-sentiment-bar-renderer
+[yt-life] define ytd-video-view-count-renderer
+[yt-life] define ytd-video-primary-info-renderer
+[yt-life] define ytd-autotagging-metadata-renderer
+[yt-life] define ytd-autotagging-metadata-row-renderer
+[yt-life] define ytd-metadata-row-header-renderer
+[yt-life] define ytd-metadata-row-renderer
+[yt-life] define ytd-metadata-with-image-row-renderer
+[yt-life] define ytd-rich-metadata-renderer
+[yt-life] define ytd-rich-metadata-row-renderer
+[yt-life] define ytd-metadata-row-container-renderer
+[yt-life] define ytd-error-corrections-section-item-renderer
+[yt-life] define ytd-error-corrections-section-renderer
+[yt-life] define ytd-topic-link-renderer
+[yt-life] define ytd-video-description-course-section-renderer
+[yt-life] define ytd-video-description-files-section-renderer
+[yt-life] define ytd-video-description-gaming-section-renderer
+[yt-life] define ytd-info-row-renderer
+[yt-life] define ytd-video-description-music-section-renderer
+[yt-life] define ytd-video-description-transcript-section-renderer
+[yt-life] define ytd-ticket-shelf-renderer
+[yt-life] define yt-shopping-description-shelf-view-model
+[yt-life] define ytw-video-description-fantasy-section-view-model
+[yt-life] define how-this-was-made-section-view-model
+[yt-life] define yt-floating-button-view-model
+[yt-life] define yt-video-title-header-view-model
+[yt-life] define yt-video-description-youchat-section-view-model
+[yt-life] define ytd-structured-description-content-renderer
+[yt-life] define ytd-video-secondary-info-renderer
+[yt-life] define ytd-comment-history-entry-renderer
+[yt-life] define ytd-donation-shelf-renderer
+[yt-life] define ytd-donation-unavailable-renderer
+[yt-life] define ytd-survey-trigger-renderer
+[yt-life] define ytd-toggle-theme-compact-link-renderer
+[yt-life] define ytd-notification-renderer
+[yt-life] define ytd-playlist-show-metadata-renderer
+[yt-life] define ytd-purchase-item-renderer
+[yt-life] define ytd-simple-text-section-renderer
+[yt-life] define ytd-unlimited-page-feature-info-renderer
+[yt-life] define ytd-post-redemption-section-renderer
+[yt-life] define ytd-ypc-post-redemption-renderer
+[yt-life] define ytd-redeem-code-renderer
+[yt-life] define ytd-channel-about-metadata-renderer
+[yt-life] define ytd-channel-featured-content-renderer
+[yt-life] define ytd-clarification-renderer
+[yt-life] define ytd-compact-link-renderer
+[yt-life] define ytd-exploratory-results-renderer
+[yt-life] define ytd-feedback-elicitation-single-question-renderer
+[yt-life] define ytd-limited-state-message-renderer
+[yt-life] define ytd-newspaper-hero-video-renderer
+[yt-life] define ytd-newspaper-mini-video-renderer
+[yt-life] define ytd-newspaper-renderer
+[yt-life] define ytd-playlist-video-list-renderer
+[yt-life] define ytd-movie-renderer
+[yt-life] define ytd-action-basic-immersive-content-renderer
+[yt-life] define ytd-image-tile-renderer
+[yt-life] define ytd-sitelink-renderer
+[yt-life] define ytd-action-engagement-panel-content-renderer
+[yt-life] define panel-text-icon-image-tiles-button-layout-content-view-model
+[yt-life] define panel-text-icon-text-grid-cards-sub-layout-content-view-model
+[yt-life] define ytd-ads-engagement-panel-content-renderer
+[yt-life] define ytd-clip-attribution-renderer
+[yt-life] define ytd-clip-section-footer-renderer
+[yt-life] define ytd-clip-ad-state-renderer
+[yt-life] define ytd-clip-creation-text-input-renderer
+[yt-life] define yt-clip-creation-scrubber-canvas
+[yt-life] define yt-clip-creation-scrubber-view
+[yt-life] define yt-clip-creation-scrubber-renderer
+[yt-life] define yt-clip-creation-renderer
+[yt-life] define ytd-clip-section-renderer
+[yt-life] define ytd-hashtag-grid-tile-renderer
+[yt-life] define ytd-hashtag-grid-shelf-renderer
+[yt-life] define ytd-toggle-option-renderer
+[yt-life] define ytd-checkbox-survey-option-renderer
+[yt-life] define ytd-radio-button-survey-option-renderer
+[yt-life] define ytd-inline-survey-renderer
+[yt-life] define ytd-brand-video-shelf-renderer
+[yt-life] define ytd-brand-video-singleton-renderer
+[yt-life] define yt-profile-page-header-information-view-model
+[yt-life] define ytd-effect-pivot-header-view-model
+[yt-life] define ytd-source-pivot-header-renderer
+[yt-life] define ytd-default-promo-panel-renderer-inline-playback-renderer
+[yt-life] define yt-video-as-thumbnail-details
+[yt-life] define ytd-default-promo-panel-renderer
+[yt-life] define ytd-carousel-item-renderer
+[yt-life] define yt-generic-faq-question-renderer
+[yt-life] define yt-faq-section-renderer
+[yt-life] define ytd-channel-history-renderer
+[yt-life] define ytd-feature-enablement-info-renderer
+[yt-life] define ytd-ypc-coupon-renderer
+[yt-life] define ytd-flow-bottom-bar-renderer
+[yt-life] define ytd-flow-top-bar-renderer
+[yt-life] define yt-free-text-input-flow-step-renderer
+[yt-life] define ytd-free-text-input-flow-step-renderer
+[yt-life] define yt-survey-answer-card-renderer
+[yt-life] define yt-survey-flow-step-renderer
+[yt-life] define ytd-survey-flow-step-renderer
+[yt-life] define ytd-metadata-line-renderer
+[yt-life] define ytd-media-product-renderer
+[yt-life] define ytd-billboard-masthead-renderer
+[yt-life] define ytd-bullet-formatted-string
+[yt-life] define ytd-offer-detail-renderer
+[yt-life] define ytd-offer-detail-step-renderer
+[yt-life] define ytd-channel-masthead-renderer
+[yt-life] define ytd-offer-card-renderer
+[yt-life] define ytd-offer-content-renderer
+[yt-life] define ytd-offer-section-renderer
+[yt-life] define yt-card-item-actions-renderer
+[yt-life] define yt-card-item-badge-renderer
+[yt-life] define yt-card-item-text-renderer
+[yt-life] define yt-card-item-text-collection-renderer
+[yt-life] define yt-card-item-text-with-image-renderer
+[yt-life] define yt-card-item-error-renderer
+[yt-life] define yt-card-item-text-with-button-renderer
+[yt-life] define yt-card-item-renderer
+[yt-life] define ytd-offer-selection-step-renderer
+[yt-life] define ytd-confirmation-masthead-renderer
+[yt-life] define ytd-purchase-complete-detail-renderer
+[yt-life] define ytd-purchase-complete-step-renderer
+[yt-life] define ytd-ypc-transaction-error-message-renderer
+[yt-life] define yt-feature-enablement-soft-entry-renderer
+[yt-life] define yt-benefits-item-renderer
+[yt-life] define yt-benefits-section-renderer
+[yt-life] define yt-benefits-flow-step-renderer
+[yt-life] define yt-confirmation-flow-step-renderer
+[yt-life] define yt-info-flow-step-renderer
+[yt-life] define yt-info-list-flow-step-renderer
+[yt-life] define pdp-view-model
+[yt-life] define yt-flow-bottom-bar-renderer
+[yt-life] define yt-offer-summary-flow-step-renderer
+[yt-life] define yt-option-selection-flow-step-renderer
+[yt-life] define yt-form-footer-view-model
+[yt-life] define yt-contributor-zero-state-view-model
+[yt-life] define yt-lp-section-group-view-model
+[yt-life] define yt-note-user-rating-view-model
+[yt-life] define yt-note-view-model
+[yt-life] define yt-notes-wrapper-view-model
+[yt-life] define yt-structured-context-note-view-model
+[yt-life] define yt-feedback-form-view-model
+[yt-life] define yt-report-form-bottom-bar-view-model
+[yt-life] define yt-report-form-confirmation-page-view-model
+[yt-life] define yt-report-form-details-page-view-model
+[yt-life] define yt-report-form-reason-select-page-view-model
+[yt-life] define yt-report-form-sign-in-page-view-model
+[yt-life] define yt-talk-to-recs-view-model
+[yt-life] define ytfz-schedule-fanzone-view-model
+[yt-life] define yt-flow-bottom-bar-view-model
+[yt-life] define ytd-flow-step-renderer
+[yt-life] define yt-flow-root-progress-indicator-view-model
+[yt-life] define ytd-flow-root-renderer
+[yt-life] define ytd-talk-to-recs-flow-renderer
+[yt-life] define ytd-chips-shelf-with-video-shelf-ghost-card-view-model
+[yt-life] define ytd-chips-shelf-with-video-shelf-renderer
+[yt-life] define ytd-rich-section-renderer
+[yt-life] define ytd-banner-promo-renderer
+[yt-life] define yt-profile-identity-info-view-model
+[yt-life] define yt-page-header-view-model
+[yt-life] define ytd-ghost-grid-view-model
+[yt-life] define ytd-rich-grid-renderer
+[yt-life] define ytd-search-in-video-renderer
+[yt-life] define ytd-product-list-item-renderer
+[yt-life] define ytd-product-list-renderer
+[yt-life] define ytd-sponsorships-gifting-opt-in-renderer
+[yt-life] define ytd-transcript-body-renderer
+[yt-life] define ytd-transcript-footer-renderer
+[yt-life] define ytd-transcript-search-box-renderer
+[yt-life] define ytd-transcript-section-header-renderer
+[yt-life] define ytd-transcript-segment-renderer
+[yt-life] define ytd-transcript-segment-list-renderer
+[yt-life] define ytd-transcript-search-panel-renderer
+[yt-life] define ytd-transcript-renderer
+[yt-life] define ytd-ad-engagement-panel-banner-renderer
+[yt-life] define ytd-ad-hover-text-button-renderer
+[yt-life] define ytd-engagement-panel-ad-subtitle-renderer
+[yt-life] define ytd-engagement-panel-title-header-renderer
+[yt-life] define ytd-macro-markers-info-item-renderer
+[yt-life] define ytd-macro-markers-list-renderer
+[yt-life] define ytd-commerce-cart-summary-line-item-renderer
+[yt-life] define ytd-commerce-cart-checkout-button-renderer
+[yt-life] define yt-content-loading-renderer
+[yt-life] define playlist-collaboration-view-model
+[yt-life] define yt-playlist-metadata-editor-form-view-model
+[yt-life] define yt-form-header-view-model
+[yt-life] define yt-text-subform-view-model
+[yt-life] define panel-ad-header-image-lockup-view-model
+[yt-life] define yt-section-list-renderer
+[yt-life] define yt-chat-input-view-model
+[yt-life] define ytd-engagement-panel-section-list-renderer
+[yt-life] define ytd-channel-video-player-renderer
+[yt-life] define ytd-companion-legal-text-renderer
+[yt-life] define ytd-action-companion-ad-renderer
+[yt-life] define ytd-image-companion-renderer
+[yt-life] define ytd-shopping-companion-renderer
+[yt-life] define banner-image-layout-view-model
+[yt-life] define top-banner-image-text-icon-buttoned-layout-view-model
+[yt-life] define ytd-companion-slot-renderer
+[yt-life] define ytd-player-legacy-desktop-watch-ads-renderer
+[yt-life] define yt-search-query-correction
+[yt-life] define yt-did-you-mean-renderer
+[yt-life] define yt-including-results-for-renderer
+[yt-life] define yt-music-pass-feature-info-renderer
+[yt-life] define yt-no-results-found-showing-results-for-renderer
+[yt-life] define yt-results-without-quotes-renderer
+[yt-life] define yt-search-no-results-renderer
+[yt-life] define yt-showing-results-for-renderer
+[yt-life] define yt-activity-item-renderer
+[yt-life] define yt-offer-item-upsell-renderer
+[yt-life] define yt-card-item-container-renderer
+[yt-life] define yt-offer-item-expanded-renderer
+[yt-life] define yt-offer-item-renderer
+[yt-life] define yt-subscription-product-header-renderer
+[yt-life] define yt-subscription-product-renderer
+[yt-life] define yt-subscription-product-upsell-offer-renderer
+[yt-life] define yt-single-ypc-offer-renderer
+[yt-life] define yt-single-ypc-offer-list-renderer
+[yt-life] define yt-ypc-offers-list-renderer
+[yt-life] define yt-unlimited-manage-subscription-page-renderer
+[yt-life] define yt-collapsible-ypc-offer-renderer
+[yt-life] define yt-unlimited-page-header-renderer
+[yt-life] define yt-unlimited-user-notification-renderer
+[yt-life] define yt-alert-renderer
+[yt-life] define player-microformat-renderer
+[yt-life] define yt-shopping-timely-shelf-content-view-model
+[yt-life] define yt-side-rail-view-model
+[yt-life] define yt-guide-manager
+[yt-life] define yt-hotkey-manager
+[yt-life] define yt-playlist-manager
+[yt-life] define ytd-third-party-manager
+[yt-life] define ytd-refresh
+[yt-life] define ytd-interactive-tabbed-header-renderer
+[yt-life] define ytd-page-footer-renderer
+[yt-life] define ytd-inline-form-renderer
+[yt-life] define ytd-dropdown-item-renderer
+[yt-life] define ytd-navigation-dropdown-item-renderer
+[yt-life] define ytd-dropdown-renderer
+[yt-life] define ytd-dropdown-form-field-renderer
+[yt-life] define ytd-playlist-byline-renderer
+[yt-life] define ytd-playlist-sidebar-primary-info-renderer
+[yt-life] define ytd-playlist-sidebar-secondary-info-renderer
+[yt-life] define ytd-channel-legal-info-renderer
+[yt-life] define ytd-download-playlist-button-renderer
+[yt-life] define thumbnail-overlay-button-view-model
+[yt-life] define ytd-hero-playlist-thumbnail-renderer
+[yt-life] define ytd-playlist-header-renderer
+[yt-life] define ytd-playlist-sidebar-tertiary-info-renderer
+[yt-life] define ytd-playlist-sidebar-renderer
+[yt-life] define ytd-channel-banner-editor-renderer
+[yt-life] define ytd-channel-tagline-renderer
+[yt-life] define ytd-expandable-tab-renderer
+[yt-life] define ytd-channel-avatar-editor
+[yt-life] define yt-page-header-renderer
+[yt-life] define yt-image-banner-view-model
+[yt-life] define yt-tab-group-shape
+[yt-life] define ytd-tabbed-page-header
+[yt-life] define ytd-labs-edit-renderer
+[yt-life] define ytd-labs-header-renderer
+[yt-life] define ytd-labs-item-renderer
+[yt-life] define ytd-live-chat-history-new-sponsor-chip-renderer
+[yt-life] define ytd-live-chat-history-super-chat-chip-renderer
+[yt-life] define ytd-live-chat-history-entry-renderer
+[yt-life] define ytd-member-hub-profile-renderer
+[yt-life] define ytd-connected-app-renderer
+[yt-life] define ytd-channel-options-renderer
+[yt-life] define ytd-settings-checkbox-renderer
+[yt-life] define ytd-settings-email-item-renderer
+[yt-life] define ytd-settings-email-list-renderer
+[yt-life] define yt-options-renderer
+[yt-life] define yt-enrolled-contact-renderer
+[yt-life] define yt-suggested-contact-renderer
+[yt-life] define yt-contact-section-renderer
+[yt-life] define yt-form-renderer
+[yt-life] define ytd-settings-gaia-link-renderer
+[yt-life] define ytd-settings-radio-option-renderer
+[yt-life] define basic-content-view-model
+[yt-life] define ytd-settings-options-renderer
+[yt-life] define ytd-settings-sidebar-renderer
+[yt-life] define ytd-product-details-description-renderer
+[yt-life] define ytd-product-details-hero-offer-renderer
+[yt-life] define ytd-product-details-thumbnail-renderer
+[yt-life] define ytd-product-details-image-carousel-renderer
+[yt-life] define ytd-product-details-offer-renderer
+[yt-life] define ytd-product-details-offers-container-renderer
+[yt-life] define ytd-product-details-variant-option-renderer
+[yt-life] define ytd-product-details-variant-renderer
+[yt-life] define ytd-product-details-renderer
+[yt-life] define ytd-commerce-cart-header-renderer
+[yt-life] define yt-vc-balance-renderer
+[yt-life] define ytd-vc-balance-renderer
+[yt-life] define ytd-topic-channel-details-renderer
+[yt-life] define ytd-carousel-header-renderer
+[yt-life] define ytd-channel-metadata-renderer
+[yt-life] define ytd-sub-feed-option-renderer
+[yt-life] define ytd-sub-feed-selector-renderer
+[yt-life] define ytd-browse-feed-actions-renderer
+[yt-life] define ytd-mini-channel-renderer
+[yt-life] define ytd-vertical-channel-section-renderer
+[yt-life] define ytd-browse-secondary-contents-renderer
+[yt-life] define ytd-two-column-browse-results-renderer
+[yt-life] define yt-alert-with-actions-renderer
+[yt-life] define yt-personal-greeting-view-model
+[yt-life] define ytd-browse
+[yt-life] define ytd-page-manager
+[yt-life] define ytd-search-header-renderer
+[yt-life] define ytd-web-answer-renderer
+[yt-life] define ytd-page-continuation
+[yt-life] define ytd-watch-card-one-vs-one-event
+[yt-life] define ytd-watch-card-hero-one-vs-one-event-renderer
+[yt-life] define ytd-banner-and-box-hero-image-renderer
+[yt-life] define ytd-call-to-action-button-renderer
+[yt-life] define ytd-collage-hero-image-renderer
+[yt-life] define ytd-single-hero-image-renderer
+[yt-life] define ytd-watch-card-hero-video-renderer
+[yt-life] define ytd-watch-card-rich-header-renderer
+[yt-life] define ytd-watch-card-compact-video-renderer
+[yt-life] define ytd-watch-card-one-vs-one-event-compact-video-renderer
+[yt-life] define ytd-vertical-watch-card-list-renderer
+[yt-life] define ytd-watch-card-section-dropdown-renderer
+[yt-life] define ytd-watch-card-section-sequence-renderer
+[yt-life] define ytd-button-banner-view-model
+[yt-life] define ytd-universal-watch-card-renderer
+[yt-life] define overview-message-view-model
+[yt-life] define ytd-overview-answer-view-model
+[yt-life] define ytd-secondary-search-container-renderer
+[yt-life] define ytd-two-column-search-results-renderer
+[yt-life] define yt-ai-search-input-view-model
+[yt-life] define yt-floating-footer-message
+[yt-life] define ytd-search
+[yt-life] define reel-watch-break-view-model
+[yt-life] define ytd-reel-non-video-content-renderer
+[yt-life] define ytd-shopping-overlay-badge-renderer
+[yt-life] define pivot-button-view-model
+[yt-life] define reel-action-bar-view-model
+[yt-life] define yt-reel-metapanel-view-model
+[yt-life] define yt-reel-player-overlay-view-model
+[yt-life] define yt-player-overlay-interaction
+[yt-life] define yt-stickers-layer
+[yt-life] define ytd-reel-player-overlay-renderer
+[yt-life] define ytm-closed-captioning-button
+[yt-life] define volume-controls
+[yt-life] define ytd-shorts-player-controls
+[yt-life] define desktop-shorts-player-controls
+[yt-life] define ytd-shorts-player-controls-cow
+[yt-life] define ytd-reel-video-renderer
+[yt-life] define ytd-shorts
+[yt-life] define ytd-compact-tvfilm-entry-point-renderer
+[yt-life] upgrade iron-meta connect=true
+[yt-life] created iron-meta
+[yt-life] ready iron-meta
+[yt-life] createElement iron-meta
+[yt-life] define ytd-ratings
+[yt-life] define ytd-offer-review-renderer
+[yt-life] define ytd-movie-offer-module-renderer
+[yt-life] define ytd-media-masthead-renderer
+[yt-life] define course-metadata-view-model
+[yt-life] define ytd-tvfilm-offer-module-renderer
+[yt-life] define ytd-unlimited-offer-module-renderer
+[yt-life] define ytd-watch-next-secondary-results-renderer
+[yt-life] define ytd-live-chat-frame
+[yt-life] define ytd-comments-entry-point-message-renderer
+[yt-life] define ytd-comments-entry-point-teaser-renderer
+[yt-life] define ytd-comments-simplebox-renderer
+[yt-life] define ytd-comments-entry-point-header-renderer
+[yt-life] define yt-animated-rolling-number
+[yt-life] define ytd-watch-info-text
+[yt-life] define yt-video-metadata-carousel-view-model
+[yt-life] define ytd-watch-metadata
+[yt-life] define ytd-watch-fixie
+[yt-life] define ytd-watch-flexy
+[yt-life] define ytd-ghost-comments-renderer
+[yt-life] define ytd-ghost-watch-metadata-renderer
+[yt-life] define ytd-watch-grid
+[yt-life] define ytd-watch-learning-journey
+[yt-life] define ytd-menu-navigation-item-renderer
+[yt-life] define ytd-menu-service-item-download-renderer
+[yt-life] define ytd-menu-service-item-renderer
+[yt-life] define ytd-backstage-post-dialog-popup-renderer
+[yt-life] define ytd-modal-with-title-and-button-renderer
+[yt-life] define ytd-account-item-section-header-renderer
+[yt-life] define ytd-account-item-section-renderer
+[yt-life] define ytd-accounts-dialog-header-renderer
+[yt-life] define ytd-google-account-header-renderer
+[yt-life] define ytd-account-section-list-renderer
+[yt-life] define ytd-active-account-header-renderer
+[yt-life] define ytd-simple-menu-header-renderer
+[yt-life] define ytd-comment-video-thumbnail-header-renderer
+[yt-life] define ytd-abuse-type-selector-renderer
+[yt-life] define ytd-report-channel-modal-additional-context-renderer
+[yt-life] define ytd-report-channel-modal-footer-renderer
+[yt-life] define ytd-report-channel-modal-header-renderer
+[yt-life] define ytd-report-channel-modal-impersonation-renderer
+[yt-life] define ytd-selectable-video-renderer
+[yt-life] define ytd-selectable-video-list-renderer
+[yt-life] define ytd-toggle-item-renderer
+[yt-life] define yt-flow-footer-renderer
+[yt-life] define ytd-flow-footer-renderer
+[yt-life] define yt-multi-page-menu-section-renderer
+[yt-life] define yt-flow-header-renderer
+[yt-life] define yt-post-confirmation-flow-step-renderer
+[yt-life] define yt-refund-confirmation-flow-step-renderer
+[yt-life] define yt-profile-card-view-model
+[yt-life] define ytd-multi-page-menu-renderer
+[yt-life] define ytd-topbar-menu-button-renderer
+[yt-life] define ytd-ad-feedback-content
+[yt-life] define ytd-ad-feedback-renderer
+[yt-life] define ytd-ad-info-dialog-content
+[yt-life] define ytd-ad-info-dialog-renderer
+[yt-life] define ytd-enforcement-message-view-model
+[yt-life] define ytd-channel-handle-input-renderer
+[yt-life] define ytd-channel-creation-dialog-renderer
+[yt-life] define ytd-channel-handle-edit-dialog-renderer
+[yt-life] define ytd-channel-switcher-footer-renderer
+[yt-life] define ytd-identity-prompt-footer-renderer
+[yt-life] define ytd-channel-switcher-renderer
+[yt-life] define ytd-channel-transfer-stepper-renderer
+[yt-life] define ytd-channel-warm-welcome-cont-renderer
+[yt-life] define ytd-channel-warm-welcome-renderer
+[yt-life] define ytd-comment-preview-renderer
+[yt-life] define ytd-notice-renderer
+[yt-life] define ytd-preview-comment-dialog-content
+[yt-life] define ytd-preview-comment-dialog-renderer
+[yt-life] define ytd-donation-amount-picker-renderer
+[yt-life] define ytd-donation-post-transaction-content
+[yt-life] define ytd-donation-post-transaction-renderer
+[yt-life] define ytd-checkbox-survey-renderer
+[yt-life] define ytd-dismissal-reason-text-renderer
+[yt-life] define ytd-dismissal-reason-video-renderer
+[yt-life] define ytd-dismissal-follow-up-renderer
+[yt-life] define ytd-feedback-option-renderer
+[yt-life] define ytd-feedback-question-renderer
+[yt-life] define ytd-feedback-survey-renderer
+[yt-life] define ytd-single-select-answer-option-renderer
+[yt-life] define ytd-single-select-question-renderer
+[yt-life] define ytd-multi-stage-survey-renderer
+[yt-life] define ytd-single-option-survey-option-renderer
+[yt-life] define ytd-single-option-survey-renderer
+[yt-life] define ytd-survey-follow-up-renderer
+[yt-life] define yt-timestamp-input
+[yt-life] define ytd-legal-report-details-form-renderer
+[yt-life] define ytd-form-popup-content
+[yt-life] define ytd-form-popup-renderer
+[yt-life] define ytd-gaming-account-link-confirm-dialog-renderer
+[yt-life] define ytd-gaming-account-link-setting-renderer
+[yt-life] define ytd-guide-entry-renderer
+[yt-life] define ytd-guide-collapsible-entry-renderer
+[yt-life] define ytd-guide-downloads-entry-renderer
+[yt-life] define ytd-guide-collapsible-section-entry-renderer
+[yt-life] define yt-guide-avatar-row-view-model
+[yt-life] define ytd-guide-section-renderer
+[yt-life] define ytd-guide-signin-promo-renderer
+[yt-life] define ytd-guide-renderer
+[yt-life] define ytd-mini-guide-entry-renderer
+[yt-life] define ytd-mini-guide-renderer
+[yt-life] define ytd-handles-claiming-confirm-dialog-content
+[yt-life] define ytd-handles-claiming-confirm-dialog-renderer
+[yt-life] define ytd-handles-claiming-edit-dialog-content
+[yt-life] define ytd-handles-claiming-edit-dialog-renderer
+[yt-life] define ytd-handles-claiming-radio-option-renderer
+[yt-life] define ytd-handles-claiming-select-dialog-content
+[yt-life] define ytd-handles-claiming-select-dialog-renderer
+[yt-life] define yt-lockup-metadata-view-model
+[yt-life] define yt-inline-player-controls
+[yt-life] define ytd-video-preview
+[yt-life] define ytd-hotkey-dialog-section-option-renderer
+[yt-life] define ytd-hotkey-dialog-section-renderer
+[yt-life] define ytd-hotkey-dialog-content
+[yt-life] define ytd-hotkey-dialog-renderer
+[yt-life] define ytd-block-button
+[yt-life] define ytd-kids-blocklist-picker-item-renderer
+[yt-life] define ytd-kids-blocklist-picker-content
+[yt-life] define ytd-kids-blocklist-picker-renderer
+[yt-life] define ytd-menu-popup-tip-renderer
+[yt-life] define ytd-toggle-menu-service-item-renderer
+[yt-life] define ytd-menu-custom-icon-item-renderer
+[yt-life] define switch-list-item-view-model
+[yt-life] define yt-list-item-view-model
+[yt-life] define ytd-menu-popup-renderer
+[yt-life] define yt-icon-badge-shape
+[yt-life] define ytd-notification-topbar-button-renderer
+[yt-life] define yt-pdg-buy-flow-header-renderer
+[yt-life] define ytd-pdg-color-slider-renderer
+[yt-life] define ytd-comment-input
+[yt-life] define ytd-pdg-comment-preview-renderer
+[yt-life] define ytd-pdg-super-vod-selectable-item-button-renderer
+[yt-life] define yt-super-vod-buy-flow-content-renderer
+[yt-life] define ytd-desktop-image-overlay-renderer
+[yt-life] define ytd-pdg-buy-flow-renderer
+[yt-life] define ytd-add-to-playlist-create-renderer
+[yt-life] define ytd-playlist-add-to-option-renderer
+[yt-life] define ytd-menu-title-renderer
+[yt-life] define ytd-add-to-playlist-renderer
+[yt-life] define ytd-playlist-settings-editor-renderer
+[yt-life] define ytd-red-cancel-survey-renderer
+[yt-life] define ytd-search-filter-options-dialog-renderer
+[yt-life] define ytd-download-quality-selector-content
+[yt-life] define ytd-download-quality-selector-renderer
+[yt-life] define ytd-cross-account-transfer-channel-confirm-dialog-renderer
+[yt-life] define ytd-cross-account-transfer-channel-overview-renderer
+[yt-life] define ytd-cross-account-transfer-channel-tnc-dialog-renderer
+[yt-life] define ytd-transfer-channel-confirm-dialog-renderer
+[yt-life] define ytd-compact-product-list-item-renderer
+[yt-life] define ytd-compact-product-list-renderer
+[yt-life] define ytd-membership-post-cancel-renderer
+[yt-life] define ytd-sponsorship-confirm-cancel-content
+[yt-life] define ytd-sponsorship-confirm-cancel-renderer
+[yt-life] define ytd-sponsorships-celebration-content
+[yt-life] define ytd-sponsorships-celebration-renderer
+[yt-life] define ytd-sponsorships-offer-renderer
+[yt-life] define ytd-sponsorships-promotion-celebration-renderer
+[yt-life] define ytd-subscription-toggle-option-renderer
+[yt-life] define ytd-subscription-notification-options-renderer
+[yt-life] define ytd-tvfilm-offer-groups-renderer
+[yt-life] define ytd-ypc-offers-overlay-renderer
+[yt-life] define ytd-voice-search-dialog-renderer
+[yt-life] define ytd-icon-badge-topbar-button-renderer
+[yt-life] define ytd-offline-promo-content
+[yt-life] define ytd-offline-promo-renderer
+[yt-life] define ytd-consent-bump-v2-lightbox
+[yt-life] define ytd-consent-bump-v2-renderer
+[yt-life] define yt-notification-action-renderer
+[yt-life] define ytd-video-download-toast-renderer
+[yt-life] define ytd-logo
+[yt-life] define ytd-yoodle-renderer
+[yt-life] define ytd-topbar-logo-renderer
+[yt-life] define yt-searchbox
+[yt-life] define ytd-masthead
+[yt-life] upgrade ytd-masthead connect=true
+[yt-life] define ytd-network-status-banner
+[yt-life] define ytd-permission-role-bottom-bar-renderer
+[yt-life] define ytd-search-suggestion-report-dialog
+[yt-life] define yt-about-this-ad-renderer
+[yt-life] define yt-image-editor-renderer
+[yt-life] define yt-report-details-form-content
+[yt-life] define yt-report-details-form-renderer
+[yt-life] define yt-boolean-form-field-v2-renderer
+[yt-life] define yt-report-form-modal-content
+[yt-life] define yt-report-form-modal-renderer
+[yt-life] define yt-mealbar-promo-renderer
+[yt-life] define yt-tooltip-renderer
+[yt-life] define yt-start-at-renderer
+[yt-life] define yt-sharing-embed-renderer
+[yt-life] define yt-sender-id-section-renderer
+[yt-life] define yt-community-post-section-renderer
+[yt-life] define yt-share-start-time-with-context-renderer
+[yt-life] define yt-share-panel-title-v15-renderer
+[yt-life] define yt-share-panel-header-renderer
+[yt-life] upgrade iron-iconset-svg connect=true
+[yt-life] created iron-iconset-svg
+[yt-life] ready iron-iconset-svg
+[yt-life] connectedCallback iron-iconset-svg
+[yt-life] upgrade iron-iconset-svg connect=true
+[yt-life] created iron-iconset-svg
+[yt-life] ready iron-iconset-svg
+[yt-life] connectedCallback iron-iconset-svg
+[yt-life] define yt-share-target-renderer
+[yt-life] define yt-third-party-share-target-section-renderer
+[yt-life] define yt-third-party-network-section-renderer
+[yt-life] define first-party-network-section-view-model
+[yt-life] define yt-unified-share-panel-renderer
+[yt-life] define yt-unlimited-family-message-interstitial-renderer
+[yt-life] define yt-unlimited-family-profile-interstitial-renderer
+[yt-life] define yt-unplugged-pause-membership-dialog-renderer
+[yt-life] define yt-vc-offer-layout-header-renderer
+[yt-life] define yt-vc-offer-renderer
+[yt-life] define yt-vc-offer-layout-renderer
+[yt-life] define yt-ypc-offers-modal-top-bar-renderer
+[yt-life] define yt-ypc-offers-modal-renderer
+[yt-life] define yt-ypc-upgrade-dialog-renderer
+[yt-life] define yt-bubble-hint-renderer
+[yt-life] define yt-confirm-dialog-renderer
+[yt-life] define yt-fancy-dismissible-dialog-renderer
+[yt-life] define yt-loading-renderer
+[yt-life] define yt-upsell-dialog-renderer
+[yt-life] define yt-mini-app-game-info-dialog-view-model
+[yt-life] define yt-gulp-triggering-dialog-view-model
+[yt-life] define yt-dialog-view-model
+[yt-life] define yt-sheet-view-model
+[yt-life] define yt-stories-viewer-view-model
+[yt-life] define yt-info-panel-details-view-model
+[yt-life] define yt-gen-ai-feedback-form-view-model
+[yt-life] define ytd-popup-container
+[yt-life] define yt-mdx-manager
+[yt-life] define yt-create-family-dialog
+[yt-life] define yt-page-navigation-progress
+[yt-life] define yt-rive-component
+[yt-life] define snackbar-container
+[yt-life] define yt-tooltip
+[yt-life] define yt-ephemeral-actions
+[yt-life] define ytd-miniplayer
+[yt-life] define ytd-video-preview-loader
+[yt-life] define ytd-video-preview-portal
+[yt-life] define ytd-app
+[yt-life] upgrade ytd-app connect=true
+[yt-life] upgrade yt-guide-manager connect=true
+[yt-life] upgrade yt-mdx-manager connect=true
+[yt-life] upgrade yt-playlist-manager connect=true
+[yt-life] upgrade yt-hotkey-manager connect=true
+[yt-life] upgrade ytd-permission-role-bottom-bar-renderer connect=true
+[yt-life] upgrade yt-formatted-string connect=true
+[yt-life] upgrade yt-attributed-string connect=true
+[yt-life] created ytd-permission-role-bottom-bar-renderer
+[yt-life] upgrade tp-yt-app-drawer connect=true
+[yt-life] created tp-yt-app-drawer
+[yt-life] ready tp-yt-app-drawer
+[yt-life] upgrade yt-icon-button connect=false
+[yt-life] upgrade yt-interaction connect=false
+[yt-life] upgrade yt-icon connect=false
+[yt-life] created yt-icon
+[yt-life] ready yt-icon
+[yt-life] upgrade ytd-topbar-logo-renderer connect=false
+[yt-life] upgrade ytd-yoodle-renderer connect=false
+[yt-life] upgrade ytd-logo connect=false
+[yt-life] upgrade yt-icon connect=false
+[yt-life] created yt-icon
+[yt-life] ready yt-icon
+[yt-life] upgrade ytd-lottie-player connect=false
+[yt-life] upgrade ytd-logo connect=false
+[yt-life] upgrade ytd-mini-guide-renderer connect=true
+[yt-life] created ytd-mini-guide-renderer
+[yt-life] upgrade dom-if connect=true
+[yt-life] ready dom-if
+[yt-life] createElement dom-if
+[yt-life] upgrade ytd-guide-renderer connect=true
+[yt-life] createElement #document-fragment
+[yt-life] upgrade ytd-page-manager connect=true
+[yt-life] upgrade ytd-popup-container connect=true
+[yt-life] created ytd-popup-container
+[yt-life] upgrade ytd-third-party-manager connect=true
+[yt-life] upgrade snackbar-container connect=true
+[yt-life] upgrade yt-ephemeral-actions connect=true
+[yt-life] upgrade dom-if connect=true
+[yt-life] ready dom-if
+[yt-life] createElement dom-if
+[yt-life] upgrade yt-tooltip connect=true
+[yt-life] createElement #document-fragment
+[yt-life] created ytd-app
+[yt-life] ready ytd-app
+[yt-life] upgrade yt-guide-manager connect=true
+[yt-life] upgrade yt-mdx-manager connect=true
+[yt-life] upgrade yt-playlist-manager connect=true
+[yt-life] upgrade yt-hotkey-manager connect=true
+[yt-life] upgrade tp-yt-app-drawer connect=true
+[yt-life] created tp-yt-app-drawer
+[yt-life] ready tp-yt-app-drawer
+[yt-life] upgrade yt-icon-button connect=false
+[yt-life] upgrade yt-icon connect=false
+[yt-life] created yt-icon
+[yt-life] ready yt-icon
+[yt-life] upgrade ytd-topbar-logo-renderer connect=false
+[yt-life] upgrade dom-if connect=false
+[yt-life] ready dom-if
+[yt-life] upgrade ytd-mini-guide-renderer connect=true
+[yt-life] created ytd-mini-guide-renderer
+[yt-life] upgrade ytd-page-manager connect=true
+[yt-life] upgrade ytd-permission-role-bottom-bar-renderer connect=true
+[yt-life] created ytd-permission-role-bottom-bar-renderer
+[yt-life] upgrade ytd-popup-container connect=true
+[yt-life] created ytd-popup-container
+[yt-life] upgrade ytd-third-party-manager connect=true
+[yt-life] upgrade snackbar-container connect=true
+[yt-life] upgrade yt-ephemeral-actions connect=true
+[yt-life] upgrade dom-if connect=true
+[yt-life] ready dom-if
+[yt-life] upgrade yt-interaction connect=true
+[yt-life] upgrade yt-guide-manager connect=true
+[yt-life] upgrade yt-mdx-manager connect=true
+[yt-life] upgrade yt-playlist-manager connect=true
+[yt-life] upgrade yt-hotkey-manager connect=true
+[yt-life] upgrade tp-yt-app-drawer connect=true
+[yt-life] created tp-yt-app-drawer
+[yt-life] ready tp-yt-app-drawer
+[yt-life] upgrade yt-icon-button connect=false
+[yt-life] upgrade yt-icon connect=false
+[yt-life] created yt-icon
+[yt-life] ready yt-icon
+[yt-life] upgrade ytd-topbar-logo-renderer connect=false
+[yt-life] upgrade dom-if connect=false
+[yt-life] ready dom-if
+[yt-life] upgrade ytd-mini-guide-renderer connect=true
+[yt-life] created ytd-mini-guide-renderer
+[yt-life] upgrade ytd-page-manager connect=true
+[yt-life] upgrade ytd-permission-role-bottom-bar-renderer connect=true
+[yt-life] created ytd-permission-role-bottom-bar-renderer
+[yt-life] upgrade ytd-popup-container connect=true
+[yt-life] created ytd-popup-container
+[yt-life] upgrade ytd-third-party-manager connect=true
+[yt-life] upgrade snackbar-container connect=true
+[yt-life] upgrade yt-ephemeral-actions connect=true
+[yt-life] upgrade dom-if connect=true
+[yt-life] ready dom-if
+[yt-life] upgrade yt-interaction connect=true
+[yt-life] connectedCallback ytd-app
+[yt-life] upgrade ytd-miniplayer connect=true
+[yt-life] createElement ytd-miniplayer
+[yt-life] connectedCallback tp-yt-app-drawer
+[yt-life] attached ytd-mini-guide-renderer
+[yt-life] attached ytd-permission-role-bottom-bar-renderer
+[yt-life] attached ytd-popup-container
+[yt-life] suppress lifecycle snackbar-container
+[yt-life] suppress lifecycle yt-ephemeral-actions
+[yt-life] connectedCallback dom-if
+[yt-life] upgrade ytd-video-preview-loader connect=true
+[yt-life] createElement ytd-video-preview-loader
+[yt-life] upgrade yt-page-navigation-progress connect=true
+[yt-life] createElement yt-page-navigation-progress
+[yt-life] upgrade ytd-watch-flexy connect=true
+[yt-life] upgrade iron-media-query connect=true
+[yt-life] created iron-media-query
+[yt-life] ready iron-media-query
+[yt-life] upgrade iron-media-query connect=true
+[yt-life] created iron-media-query
+[yt-life] ready iron-media-query
+[yt-life] upgrade iron-media-query connect=true
+[yt-life] created iron-media-query
+[yt-life] ready iron-media-query
+[yt-life] upgrade ytd-thumbnail connect=true
+[yt-life] upgrade yt-image connect=true
+[yt-life] upgrade yt-playability-error-supported-renderers connect=true
+[yt-life] upgrade ytd-thumbnail connect=true
+[yt-life] upgrade ytd-player connect=true
+[yt-life] created ytd-player
+[yt-life] ready ytd-player
+[yt-life] upgrade ytd-watch-metadata connect=true
+[yt-life] upgrade ytd-metadata-row-container-renderer connect=true
+[yt-life] created ytd-metadata-row-container-renderer
+[yt-life] upgrade ytd-badge-supported-renderer connect=true
+[yt-life] upgrade yt-badge-supported-renderer connect=true
+[yt-life] upgrade ytd-badge-supported-renderer connect=true
+[yt-life] upgrade yt-formatted-string connect=true
+[yt-life] upgrade ytd-video-owner-renderer connect=true
+[yt-life] upgrade ps-dom-if connect=true
+[yt-life] createElement ps-dom-if
+[yt-life] upgrade yt-img-shadow connect=true
+[yt-life] createElement #document-fragment
+[yt-life] upgrade yt-attributed-string connect=true
+[yt-life] upgrade ytd-channel-name connect=true
+[yt-life] upgrade ytd-badge-supported-renderer connect=true
+[yt-life] upgrade tp-yt-paper-tooltip connect=true
+[yt-life] created tp-yt-paper-tooltip
+[yt-life] ready tp-yt-paper-tooltip
+[yt-life] upgrade yt-formatted-string connect=true
+[yt-life] upgrade yt-formatted-string connect=true
+[yt-life] created ytd-video-owner-renderer
+[yt-life] upgrade dom-if connect=true
+[yt-life] ready dom-if
+[yt-life] createElement dom-if
+[yt-life] upgrade ytd-watch-info-text connect=true
+[yt-life] upgrade ps-dom-if connect=true
+[yt-life] createElement ps-dom-if
+[yt-life] upgrade yt-formatted-string connect=true
+[yt-life] createElement #document-fragment
+[yt-life] upgrade ps-dom-if connect=true
+[yt-life] createElement ps-dom-if
+[yt-life] upgrade yt-icon connect=true
+[yt-life] created yt-icon
+[yt-life] ready yt-icon
+[yt-life] createElement #document-fragment
+[yt-life] upgrade yt-formatted-string connect=true
+[yt-life] upgrade ps-dom-if connect=true
+[yt-life] createElement ps-dom-if
+[yt-life] upgrade yt-formatted-string connect=true
+[yt-life] createElement #document-fragment
+[yt-life] upgrade yt-animated-rolling-number connect=true
+[yt-life] upgrade yt-formatted-string connect=true
+[yt-life] upgrade ps-dom-if connect=true
+[yt-life] createElement ps-dom-if
+[yt-life] upgrade yt-icon connect=true
+[yt-life] created yt-icon
+[yt-life] ready yt-icon
+[yt-life] createElement #document-fragment
+[yt-life] upgrade yt-formatted-string connect=true
+[yt-life] upgrade ps-dom-if connect=true
+[yt-life] createElement ps-dom-if
+[yt-life] upgrade yt-formatted-string connect=true
+[yt-life] createElement #document-fragment
+[yt-life] upgrade yt-animated-rolling-number connect=true
+[yt-life] upgrade yt-formatted-string connect=true
+[yt-life] upgrade yt-formatted-string connect=true
+[yt-life] upgrade ps-dom-if connect=true
+[yt-life] createElement ps-dom-if
+[yt-life] upgrade tp-yt-paper-tooltip connect=true
+[yt-life] created tp-yt-paper-tooltip
+[yt-life] ready tp-yt-paper-tooltip
+[yt-life] createElement #document-fragment
+[yt-life] created ytd-watch-info-text
+[yt-life] upgrade dom-if connect=true
+[yt-life] ready dom-if
+[yt-life] createElement dom-if
+[yt-life] upgrade ytd-merch-shelf-renderer connect=true
+[yt-life] upgrade yt-formatted-string connect=true
+[yt-life] upgrade yt-icon connect=true
+[yt-life] created yt-icon
+[yt-life] ready yt-icon
+[yt-life] upgrade dom-repeat connect=true
+[yt-life] ready dom-repeat
+[yt-life] createElement dom-repeat
+[yt-life] upgrade ytd-merch-shelf-item-renderer connect=true
+[yt-life] upgrade yt-img-shadow connect=true
+[yt-life] upgrade ps-dom-if connect=true
+[yt-life] createElement ps-dom-if
+[yt-life] createElement #document-fragment
+[yt-life] upgrade ps-dom-if connect=true
+[yt-life] createElement ps-dom-if
+[yt-life] upgrade ps-dom-if connect=true
+[yt-life] createElement ps-dom-if
+[yt-life] createElement #document-fragment
+[yt-life] upgrade ps-dom-if connect=true
+[yt-life] createElement ps-dom-if
+[yt-life] upgrade ps-dom-if connect=true
+[yt-life] createElement ps-dom-if
+[yt-life] createElement #document-fragment
+[yt-life] createElement #document-fragment
+[yt-life] upgrade yt-icon connect=true
+[yt-life] created yt-icon
+[yt-life] ready yt-icon
+[yt-life] upgrade yt-icon connect=true
+[yt-life] created yt-icon
+[yt-life] ready yt-icon
+[yt-life] upgrade yt-icon connect=true
+[yt-life] created yt-icon
+[yt-life] ready yt-icon
+[yt-life] createElement #document-fragment
+[yt-life] created ytd-merch-shelf-item-renderer
+[yt-life] createElement #document-fragment
+[yt-life] upgrade yt-icon connect=true
+[yt-life] created yt-icon
+[yt-life] ready yt-icon
+[yt-life] createElement #document-fragment
+[yt-life] upgrade dom-if connect=true
+[yt-life] ready dom-if
+[yt-life] createElement dom-if
+[yt-life] upgrade yt-shopping-description-shelf-view-model connect=true
+[yt-life] createElement #document-fragment
+[yt-life] upgrade yt-formatted-string connect=true
+[yt-life] upgrade ytd-text-inline-expander connect=true
+[yt-life] upgrade yt-attributed-string connect=true
+[yt-life] upgrade yt-formatted-string connect=true
+[yt-life] upgrade tp-yt-paper-button connect=true
+[yt-life] created tp-yt-paper-button
+[yt-life] ready tp-yt-paper-button
+[yt-life] upgrade yt-attributed-string connect=true
+[yt-life] upgrade yt-formatted-string connect=true
+[yt-life] upgrade tp-yt-paper-button connect=true
+[yt-life] created tp-yt-paper-button
+[yt-life] ready tp-yt-paper-button
+[yt-life] upgrade tp-yt-paper-button connect=true
+[yt-life] created tp-yt-paper-button
+[yt-life] ready tp-yt-paper-button
+[yt-life] upgrade ytd-structured-description-content-renderer connect=true
+[yt-life] upgrade dom-if connect=true
+[yt-life] ready dom-if
+[yt-life] createElement dom-if
+[yt-life] upgrade yt-floating-button-view-model connect=true
+[yt-life] createElement #document-fragment
+[yt-life] upgrade ytd-metadata-row-container-renderer connect=true
+[yt-life] created ytd-metadata-row-container-renderer
+[yt-life] upgrade yt-interaction connect=true
+[yt-life] createElement #document-fragment
+[yt-life] upgrade dom-if connect=true
+[yt-life] ready dom-if
+[yt-life] createElement dom-if
+[yt-life] upgrade ytd-merch-shelf-renderer connect=true
+[yt-life] createElement #document-fragment
+[yt-life] upgrade ytd-comments connect=true
+[yt-life] upgrade ytd-item-section-renderer connect=true
+[yt-life] upgrade tp-yt-paper-spinner-lite connect=true
+[yt-life] created tp-yt-paper-spinner-lite
+[yt-life] ready tp-yt-paper-spinner-lite
+[yt-life] created ytd-item-section-renderer
+[yt-life] created ytd-comments
+[yt-life] ready ytd-comments
+[yt-life] upgrade ytd-item-section-renderer connect=true
+[yt-life] created ytd-item-section-renderer
+[yt-life] upgrade ytd-item-section-renderer connect=true
+[yt-life] created ytd-item-section-renderer
+[yt-life] upgrade ytd-playlist-panel-renderer connect=true
+[yt-life] upgrade yt-formatted-string connect=true
+[yt-life] upgrade yt-formatted-string connect=true
+[yt-life] upgrade yt-formatted-string connect=true
+[yt-life] upgrade ytd-badge-supported-renderer connect=true
+[yt-life] upgrade yt-formatted-string connect=true
+[yt-life] upgrade yt-formatted-string connect=true
+[yt-life] upgrade yt-icon-button connect=true
+[yt-life] upgrade yt-icon connect=true
+[yt-life] created yt-icon
+[yt-life] ready yt-icon
+[yt-life] upgrade dom-if connect=true
+[yt-life] ready dom-if
+[yt-life] createElement dom-if
+[yt-life] upgrade ytd-live-chat-frame connect=true
+[yt-life] upgrade ps-dom-if connect=true
+[yt-life] createElement ps-dom-if
+[yt-life] upgrade ytd-message-renderer connect=true
+[yt-life] upgrade yt-formatted-string connect=true
+[yt-life] upgrade yt-formatted-string connect=true
+[yt-life] created ytd-message-renderer
+[yt-life] createElement #document-fragment
+[yt-life] upgrade ps-dom-if connect=true
+[yt-life] createElement ps-dom-if
+[yt-life] upgrade ytd-toggle-button-renderer connect=true
+[yt-life] upgrade yt-button-shape connect=true
+[yt-life] upgrade tp-yt-paper-tooltip connect=true
+[yt-life] created tp-yt-paper-tooltip
+[yt-life] ready tp-yt-paper-tooltip
+[yt-life] createElement #document-fragment
+[yt-life] upgrade ps-dom-if connect=true
+[yt-life] createElement ps-dom-if
+[yt-life] upgrade ytd-button-renderer connect=true
+[yt-life] upgrade yt-button-shape connect=true
+[yt-life] upgrade tp-yt-paper-tooltip connect=true
+[yt-life] created tp-yt-paper-tooltip
+[yt-life] ready tp-yt-paper-tooltip
+[yt-life] created ytd-button-renderer
+[yt-life] ready ytd-button-renderer
+[yt-life] upgrade yt-button-shape connect=true
+[yt-life] upgrade tp-yt-paper-tooltip connect=true
+[yt-life] created tp-yt-paper-tooltip
+[yt-life] ready tp-yt-paper-tooltip
+[yt-life] createElement #document-fragment
+[yt-life] created ytd-live-chat-frame
+[yt-life] createElement #document-fragment
+[yt-life] upgrade ytd-watch-next-secondary-results-renderer connect=true
+[yt-life] created ytd-watch-next-secondary-results-renderer
+[yt-life] ready ytd-watch-next-secondary-results-renderer
+[yt-life] createElement #document-fragment
+[yt-life] created ytd-watch-flexy
+[yt-life] ready ytd-watch-flexy
+[yt-life] upgrade iron-media-query connect=true
+[yt-life] created iron-media-query
+[yt-life] ready iron-media-query
+[yt-life] upgrade iron-media-query connect=true
+[yt-life] created iron-media-query
+[yt-life] ready iron-media-query
+[yt-life] upgrade iron-media-query connect=true
+[yt-life] created iron-media-query
+[yt-life] ready iron-media-query
+[yt-life] upgrade ytd-thumbnail connect=true
+[yt-life] upgrade ytd-thumbnail connect=true
+[yt-life] upgrade ytd-player connect=true
+[yt-life] created ytd-player
+[yt-life] ready ytd-player
+[yt-life] upgrade yt-playability-error-supported-renderers connect=true
+[yt-life] upgrade ytd-watch-metadata connect=true
+[yt-life] upgrade dom-if connect=true
+[yt-life] ready dom-if
+[yt-life] upgrade ytd-comments connect=true
+[yt-life] created ytd-comments
+[yt-life] ready ytd-comments
+[yt-life] upgrade ytd-item-section-renderer connect=false
+[yt-life] created ytd-item-section-renderer
+[yt-life] upgrade ytd-item-section-renderer connect=true
+[yt-life] created ytd-item-section-renderer
+[yt-life] upgrade ytd-item-section-renderer connect=true
+[yt-life] created ytd-item-section-renderer
+[yt-life] upgrade ytd-playlist-panel-renderer connect=true
+[yt-life] upgrade dom-if connect=true
+[yt-life] ready dom-if
+[yt-life] upgrade ytd-watch-next-secondary-results-renderer connect=true
+[yt-life] created ytd-watch-next-secondary-results-renderer
+[yt-life] ready ytd-watch-next-secondary-results-renderer
+[yt-life] upgrade yt-image connect=true
+[yt-life] upgrade yt-image connect=true
+[yt-life] upgrade yt-formatted-string connect=true
+[yt-life] upgrade yt-formatted-string connect=true
+[yt-life] upgrade yt-formatted-string connect=true
+[yt-life] upgrade ytd-badge-supported-renderer connect=true
+[yt-life] upgrade yt-formatted-string connect=true
+[yt-life] upgrade yt-formatted-string connect=true
+[yt-life] upgrade yt-icon-button connect=true
+[yt-life] upgrade yt-icon connect=true
+[yt-life] created yt-icon
+[yt-life] ready yt-icon
+[yt-life] upgrade yt-attributed-string connect=true
+[yt-life] upgrade yt-attributed-string connect=true
+[yt-life] upgrade yt-attributed-string connect=true
+[yt-life] upgrade yt-badge-supported-renderer connect=true
+[yt-life] upgrade yt-attributed-string connect=true
+[yt-life] upgrade yt-attributed-string connect=true
+[yt-life] upgrade yt-interaction connect=true
+[yt-life] createElement ytd-watch-flexy
+[yt-life] upgrade iron-media-query connect=true
+[yt-life] created iron-media-query
+[yt-life] ready iron-media-query
+[yt-life] upgrade iron-media-query connect=true
+[yt-life] created iron-media-query
+[yt-life] ready iron-media-query
+[yt-life] upgrade iron-media-query connect=true
+[yt-life] created iron-media-query
+[yt-life] ready iron-media-query
+[yt-life] upgrade ytd-thumbnail connect=true
+[yt-life] upgrade ytd-thumbnail connect=true
+[yt-life] upgrade ytd-player connect=true
+[yt-life] created ytd-player
+[yt-life] ready ytd-player
+[yt-life] upgrade yt-playability-error-supported-renderers connect=true
+[yt-life] upgrade ytd-watch-metadata connect=true
+[yt-life] upgrade dom-if connect=true
+[yt-life] ready dom-if
+[yt-life] upgrade ytd-comments connect=true
+[yt-life] created ytd-comments
+[yt-life] ready ytd-comments
+[yt-life] upgrade ytd-item-section-renderer connect=false
+[yt-life] created ytd-item-section-renderer
+[yt-life] upgrade ytd-item-section-renderer connect=true
+[yt-life] created ytd-item-section-renderer
+[yt-life] upgrade ytd-item-section-renderer connect=true
+[yt-life] created ytd-item-section-renderer
+[yt-life] upgrade ytd-playlist-panel-renderer connect=true
+[yt-life] upgrade dom-if connect=true
+[yt-life] ready dom-if
+[yt-life] upgrade ytd-watch-next-secondary-results-renderer connect=true
+[yt-life] created ytd-watch-next-secondary-results-renderer
+[yt-life] ready ytd-watch-next-secondary-results-renderer
+[yt-life] upgrade yt-image connect=true
+[yt-life] upgrade yt-image connect=true
+[yt-life] upgrade yt-formatted-string connect=true
+[yt-life] upgrade yt-formatted-string connect=true
+[yt-life] upgrade yt-formatted-string connect=true
+[yt-life] upgrade ytd-badge-supported-renderer connect=true
+[yt-life] upgrade yt-formatted-string connect=true
+[yt-life] upgrade yt-formatted-string connect=true
+[yt-life] upgrade yt-icon-button connect=true
+[yt-life] upgrade yt-icon connect=true
+[yt-life] created yt-icon
+[yt-life] ready yt-icon
+[yt-life] upgrade yt-attributed-string connect=true
+[yt-life] upgrade yt-attributed-string connect=true
+[yt-life] upgrade yt-attributed-string connect=true
+[yt-life] upgrade yt-badge-supported-renderer connect=true
+[yt-life] upgrade yt-attributed-string connect=true
+[yt-life] upgrade yt-attributed-string connect=true
+[yt-life] upgrade yt-interaction connect=true
+[yt-life] connectedCallback ytd-watch-flexy
+[yt-life] connectedCallback iron-media-query
+[yt-life] connectedCallback iron-media-query
+[yt-life] connectedCallback iron-media-query
+[yt-life] connectedCallback ytd-player
+[yt-life] connectedCallback dom-if
+[yt-life] attached ytd-item-section-renderer
+[yt-life] connectedCallback ytd-comments
+[yt-life] attached ytd-item-section-renderer
+[yt-life] connectedCallback dom-if
+[yt-life] attached ytd-watch-next-secondary-results-renderer
+[yt-life] connectedCallback yt-image
+[yt-life] connectedCallback yt-image
+[yt-life] connectedCallback yt-formatted-string
+[yt-life] connectedCallback yt-formatted-string
+[yt-life] connectedCallback yt-formatted-string
+[yt-life] connectedCallback yt-formatted-string
+[yt-life] connectedCallback yt-formatted-string
+[yt-life] connectedCallback yt-icon
+[yt-life] connectedCallback yt-attributed-string
+[yt-life] connectedCallback yt-attributed-string
+[yt-life] connectedCallback yt-attributed-string
+[yt-life] connectedCallback yt-badge-supported-renderer
+[yt-life] connectedCallback yt-attributed-string
+[yt-life] connectedCallback yt-attributed-string
+[yt-life] upgrade ytd-browse connect=true
+[yt-life] upgrade ytd-channel-legal-info-renderer connect=true
+[yt-life] upgrade yt-formatted-string connect=true
+[yt-life] upgrade tp-yt-paper-material connect=true
+[yt-life] created tp-yt-paper-material
+[yt-life] ready tp-yt-paper-material
+[yt-life] upgrade yt-icon-button connect=false
+[yt-life] upgrade yt-icon connect=false
+[yt-life] created yt-icon
+[yt-life] ready yt-icon
+[yt-life] created ytd-channel-legal-info-renderer
+[yt-life] upgrade ytd-playlist-sidebar-renderer connect=true
+[yt-life] created ytd-playlist-sidebar-renderer
+[yt-life] upgrade ytd-playlist-header-renderer connect=true
+[yt-life] upgrade iron-media-query connect=true
+[yt-life] created iron-media-query
+[yt-life] ready iron-media-query
+[yt-life] upgrade yt-img-shadow connect=true
+[yt-life] upgrade tp-yt-paper-tooltip connect=true
+[yt-life] created tp-yt-paper-tooltip
+[yt-life] ready tp-yt-paper-tooltip
+[yt-life] upgrade ytd-hero-playlist-thumbnail-renderer connect=true
+[yt-life] upgrade yt-img-shadow connect=true
+[yt-life] created ytd-hero-playlist-thumbnail-renderer
+[yt-life] upgrade yt-dynamic-sizing-formatted-string connect=true
+[yt-life] upgrade yt-formatted-string connect=true
+[yt-life] created yt-dynamic-sizing-formatted-string
+[yt-life] upgrade ytd-inline-form-renderer connect=true
+[yt-life] upgrade ps-dom-if connect=true
+[yt-life] createElement ps-dom-if
+[yt-life] createElement #document-fragment
+[yt-life] upgrade ps-dom-if connect=true
+[yt-life] createElement ps-dom-if
+[yt-life] upgrade yt-formatted-string connect=true
+[yt-life] createElement #document-fragment
+[yt-life] upgrade ytd-button-renderer connect=true
+[yt-life] created ytd-button-renderer
+[yt-life] ready ytd-button-renderer
+[yt-life] upgrade yt-button-shape connect=true
+[yt-life] upgrade tp-yt-paper-tooltip connect=true
+[yt-life] created tp-yt-paper-tooltip
+[yt-life] ready tp-yt-paper-tooltip
+[yt-life] upgrade yt-text-input-form-field-renderer connect=true
+[yt-life] upgrade ytd-button-renderer connect=true
+[yt-life] created ytd-button-renderer
+[yt-life] ready ytd-button-renderer
+[yt-life] upgrade yt-button-shape connect=true
+[yt-life] upgrade tp-yt-paper-tooltip connect=true
+[yt-life] created tp-yt-paper-tooltip
+[yt-life] ready tp-yt-paper-tooltip
+[yt-life] upgrade ytd-button-renderer connect=true
+[yt-life] created ytd-button-renderer
+[yt-life] ready ytd-button-renderer
+[yt-life] upgrade yt-button-shape connect=true
+[yt-life] upgrade tp-yt-paper-tooltip connect=true
+[yt-life] created tp-yt-paper-tooltip
+[yt-life] ready tp-yt-paper-tooltip
+[yt-life] created ytd-inline-form-renderer
+[yt-life] upgrade yt-dynamic-sizing-formatted-string connect=true
+[yt-life] created yt-dynamic-sizing-formatted-string
+[yt-life] upgrade ytd-dropdown-form-field-renderer connect=true
+[yt-life] upgrade ytd-dropdown-renderer connect=true
+[yt-life] upgrade tp-yt-paper-dropdown-menu-light connect=true
+[yt-life] upgrade tp-yt-paper-menu-button connect=true
+[yt-life] upgrade tp-yt-iron-dropdown connect=true
+[yt-life] created tp-yt-iron-dropdown
+[yt-life] ready tp-yt-iron-dropdown
+[yt-life] created tp-yt-paper-menu-button
+[yt-life] ready tp-yt-paper-menu-button
+[yt-life] upgrade tp-yt-iron-icon connect=false
+[yt-life] created tp-yt-iron-icon
+[yt-life] ready tp-yt-iron-icon
+[yt-life] upgrade tp-yt-iron-dropdown connect=true
+[yt-life] created tp-yt-iron-dropdown
+[yt-life] ready tp-yt-iron-dropdown
+[yt-life] created tp-yt-paper-dropdown-menu-light
+[yt-life] ready tp-yt-paper-dropdown-menu-light
+[yt-life] upgrade tp-yt-paper-listbox connect=false
+[yt-life] created tp-yt-paper-listbox
+[yt-life] ready tp-yt-paper-listbox
+[yt-life] upgrade tp-yt-paper-menu-button connect=true
+[yt-life] created tp-yt-paper-menu-button
+[yt-life] ready tp-yt-paper-menu-button
+[yt-life] upgrade tp-yt-iron-icon connect=false
+[yt-life] created tp-yt-iron-icon
+[yt-life] ready tp-yt-iron-icon
+[yt-life] upgrade tp-yt-iron-dropdown connect=false
+[yt-life] created tp-yt-iron-dropdown
+[yt-life] ready tp-yt-iron-dropdown
+[yt-life] upgrade tp-yt-iron-dropdown connect=true
+[yt-life] created tp-yt-iron-dropdown
+[yt-life] ready tp-yt-iron-dropdown
+[yt-life] upgrade tp-yt-iron-dropdown connect=true
+[yt-life] created tp-yt-iron-dropdown
+[yt-life] ready tp-yt-iron-dropdown
+[yt-life] upgrade yt-formatted-string connect=true
+[yt-life] upgrade yt-formatted-string connect=true
+[yt-life] upgrade yt-formatted-string connect=true
+[yt-life] upgrade ytd-badge-supported-renderer connect=true
+[yt-life] upgrade ytd-playlist-byline-renderer connect=true
+[yt-life] upgrade ps-dom-repeat connect=true
+[yt-life] createElement ps-dom-repeat
+[yt-life] upgrade yt-icon connect=true
+[yt-life] created yt-icon
+[yt-life] ready yt-icon
+[yt-life] upgrade yt-formatted-string connect=true
+[yt-life] createElement #document-fragment
+[yt-life] created ytd-playlist-byline-renderer
+[yt-life] upgrade ytd-toggle-button-renderer connect=true
+[yt-life] upgrade ytd-button-renderer connect=true
+[yt-life] created ytd-button-renderer
+[yt-life] ready ytd-button-renderer
+[yt-life] upgrade yt-button-shape connect=true
+[yt-life] upgrade tp-yt-paper-tooltip connect=true
+[yt-life] created tp-yt-paper-tooltip
+[yt-life] ready tp-yt-paper-tooltip
+[yt-life] upgrade ytd-button-renderer connect=true
+[yt-life] created ytd-button-renderer
+[yt-life] ready ytd-button-renderer
+[yt-life] upgrade yt-button-shape connect=true
+[yt-life] upgrade tp-yt-paper-tooltip connect=true
+[yt-life] created tp-yt-paper-tooltip
+[yt-life] ready tp-yt-paper-tooltip
+[yt-life] upgrade ytd-download-playlist-button-renderer connect=true
+[yt-life] upgrade ytd-button-renderer connect=true
+[yt-life] created ytd-button-renderer
+[yt-life] ready ytd-button-renderer
+[yt-life] upgrade yt-button-shape connect=true
+[yt-life] upgrade tp-yt-paper-tooltip connect=true
+[yt-life] created tp-yt-paper-tooltip
+[yt-life] ready tp-yt-paper-tooltip
+[yt-life] created ytd-download-playlist-button-renderer
+[yt-life] upgrade ytd-menu-renderer connect=true
+[yt-life] upgrade yt-icon-button connect=true
+[yt-life] upgrade yt-button-shape connect=true
+[yt-life] upgrade yt-icon connect=true
+[yt-life] created yt-icon
+[yt-life] ready yt-icon
+[yt-life] upgrade ytd-button-renderer connect=true
+[yt-life] created ytd-button-renderer
+[yt-life] ready ytd-button-renderer
+[yt-life] upgrade yt-button-shape connect=true
+[yt-life] upgrade tp-yt-paper-tooltip connect=true
+[yt-life] created tp-yt-paper-tooltip
+[yt-life] ready tp-yt-paper-tooltip
+[yt-life] upgrade ytd-button-renderer connect=true
+[yt-life] created ytd-button-renderer
+[yt-life] ready ytd-button-renderer
+[yt-life] upgrade yt-button-shape connect=true
+[yt-life] upgrade tp-yt-paper-tooltip connect=true
+[yt-life] created tp-yt-paper-tooltip
+[yt-life] ready tp-yt-paper-tooltip
+[yt-life] upgrade ytd-text-inline-expander connect=true
+[yt-life] upgrade ytd-inline-form-renderer connect=true
+[yt-life] created ytd-inline-form-renderer
+[yt-life] upgrade ytd-text-inline-expander connect=true
+[yt-life] upgrade ytd-button-renderer connect=true
+[yt-life] created ytd-button-renderer
+[yt-life] ready ytd-button-renderer
+[yt-life] upgrade yt-button-shape connect=true
+[yt-life] upgrade tp-yt-paper-tooltip connect=true
+[yt-life] created tp-yt-paper-tooltip
+[yt-life] ready tp-yt-paper-tooltip
+[yt-life] upgrade ytd-button-renderer connect=true
+[yt-life] created ytd-button-renderer
+[yt-life] ready ytd-button-renderer
+[yt-life] upgrade yt-button-shape connect=true
+[yt-life] upgrade tp-yt-paper-tooltip connect=true
+[yt-life] created tp-yt-paper-tooltip
+[yt-life] ready tp-yt-paper-tooltip
+[yt-life] upgrade ytd-settings-sidebar-renderer connect=true
+[yt-life] created ytd-settings-sidebar-renderer
+[yt-life] upgrade dom-if connect=true
+[yt-life] ready dom-if
+[yt-life] createElement dom-if
+[yt-life] upgrade ytd-two-column-browse-results-renderer connect=true
+[yt-life] upgrade yt-page-header-renderer connect=true
+[yt-life] createElement #document-fragment
+[yt-life] upgrade ytd-refresh connect=true
+[yt-life] upgrade yt-icon connect=true
+[yt-life] created yt-icon
+[yt-life] ready yt-icon
+[yt-life] upgrade tp-yt-paper-spinner-lite connect=true
+[yt-life] created tp-yt-paper-spinner-lite
+[yt-life] ready tp-yt-paper-spinner-lite
+[yt-life] created ytd-refresh
+[yt-life] created ytd-browse
+[yt-life] ready ytd-browse
+[yt-life] upgrade ytd-channel-legal-info-renderer connect=true
+[yt-life] created ytd-channel-legal-info-renderer
+[yt-life] upgrade ytd-playlist-sidebar-renderer connect=true
+[yt-life] created ytd-playlist-sidebar-renderer
+[yt-life] upgrade ytd-playlist-header-renderer connect=true
+[yt-life] upgrade ytd-settings-sidebar-renderer connect=true
+[yt-life] created ytd-settings-sidebar-renderer
+[yt-life] upgrade dom-if connect=true
+[yt-life] ready dom-if
+[yt-life] upgrade ytd-two-column-browse-results-renderer connect=true
+[yt-life] upgrade ytd-refresh connect=true
+[yt-life] created ytd-refresh
+[yt-life] createElement ytd-browse
+[yt-life] upgrade ytd-channel-legal-info-renderer connect=true
+[yt-life] created ytd-channel-legal-info-renderer
+[yt-life] upgrade ytd-playlist-sidebar-renderer connect=true
+[yt-life] created ytd-playlist-sidebar-renderer
+[yt-life] upgrade ytd-playlist-header-renderer connect=true
+[yt-life] upgrade ytd-settings-sidebar-renderer connect=true
+[yt-life] created ytd-settings-sidebar-renderer
+[yt-life] upgrade dom-if connect=true
+[yt-life] ready dom-if
+[yt-life] upgrade ytd-two-column-browse-results-renderer connect=true
+[yt-life] upgrade ytd-refresh connect=true
+[yt-life] created ytd-refresh
+[yt-life] connectedCallback ytd-browse
+[yt-life] createElement #document-fragment
+[yt-life] upgrade ytd-rich-grid-renderer connect=true
+[yt-life] createElement ytd-rich-grid-renderer
+[yt-life] createElement #document-fragment
+[yt-life] upgrade ytd-rich-grid-renderer connect=true
+[yt-life] createElement ytd-rich-grid-renderer
+[yt-life] createElement #document-fragment
+[yt-life] attached ytd-channel-legal-info-renderer
+[yt-life] attached ytd-playlist-sidebar-renderer
+[yt-life] attached ytd-settings-sidebar-renderer
+[yt-life] connectedCallback dom-if
+[yt-life] createElement #document-fragment
+[yt-life] upgrade ytd-rich-section-renderer connect=true
+[yt-life] createElement ytd-rich-section-renderer
+[yt-life] createElement #document-fragment
+[yt-life] upgrade ytd-feed-nudge-renderer connect=true
+[yt-life] upgrade yt-img-shadow connect=true
+[yt-life] upgrade yt-formatted-string connect=true
+[yt-life] upgrade yt-formatted-string connect=true
+[yt-life] createElement ytd-feed-nudge-renderer
+[yt-life] upgrade yt-img-shadow connect=true
+[yt-life] upgrade yt-formatted-string connect=true
+[yt-life] upgrade yt-formatted-string connect=true
+[yt-life] upgrade yt-attributed-string connect=true
+[yt-life] connectedCallback yt-attributed-string
+[yt-life] upgrade yt-attributed-string connect=true
+[yt-life] connectedCallback yt-attributed-string
+[yt-life] connectedCallback yt-formatted-string
+[yt-life] connectedCallback yt-formatted-string
+Resolve(1): 87ms (style: 21ms, construct: 57ms, pconstruct: 6.9ms, flush: 978us, layout: 799us, subdocs: 699ns)
+Rendering to PNG: scratch/yt-clean.png
+Resolve(2): 157ms (style: 144ms, construct: 2.0ms, pconstruct: 7.0ms, flush: 734us, layout: 3.5ms, subdocs: 771ns)
+Resolve(3): 150ms (style: 136ms, construct: 2.0ms, pconstruct: 7.0ms, flush: 762us, layout: 3.5ms, subdocs: 631ns)
+Resolve(4): 154ms (style: 140ms, construct: 2.1ms, pconstruct: 7.9ms, flush: 761us, layout: 3.5ms, subdocs: 916ns)
+Resolve(5): 152ms (style: 140ms, construct: 1.9ms, pconstruct: 6.7ms, flush: 713us, layout: 3.5ms, subdocs: 1.4us)
+Screenshot saved to scratch/yt-clean.png
+<unknown>:295807: Uncaught TypeError: Cannot set properties of undefined (setting 'cssText')

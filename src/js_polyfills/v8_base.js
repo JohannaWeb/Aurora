@@ -693,4 +693,93 @@
             return new Uint8Array(out);
         };
     };
+
+    // AbortController / AbortSignal. YouTube's kevlar_base bundle references
+    // `AbortSignal` during init (fetch + scheduler plumbing); without it the
+    // main module throws a ReferenceError before ytd-app boots. Built on the
+    // real EventTarget above so 'abort' listeners actually fire. DOMException
+    // is referenced lazily because it's a host-provided global that may not
+    // exist; we fall back to a named Error when it's missing.
+    if (typeof globalThis.AbortSignal !== 'function') {
+        function makeAbortError(message, name) {
+            message = message || 'signal is aborted without reason';
+            name = name || 'AbortError';
+            if (typeof globalThis.DOMException === 'function') {
+                return new DOMException(message, name);
+            }
+            var err = new Error(message);
+            err.name = name;
+            return err;
+        }
+
+        function fireAbort(signal, reason) {
+            if (signal.aborted) return;
+            signal.aborted = true;
+            signal.reason = reason === undefined ? makeAbortError() : reason;
+            var event;
+            try {
+                event = typeof globalThis.Event === 'function'
+                    ? new Event('abort')
+                    : { type: 'abort' };
+            } catch (e) {
+                event = { type: 'abort' };
+            }
+            if (typeof signal.onabort === 'function') {
+                try { signal.onabort.call(signal, event); } catch (e) {}
+            }
+            try { signal.dispatchEvent(event); } catch (e) {}
+        }
+
+        function AbortSignal() {
+            EventTarget.call(this);
+            this.aborted = false;
+            this.reason = undefined;
+            this.onabort = null;
+        }
+        AbortSignal.prototype = Object.create(EventTarget.prototype);
+        AbortSignal.prototype.constructor = AbortSignal;
+        AbortSignal.prototype.throwIfAborted = function() {
+            if (this.aborted) throw this.reason;
+        };
+
+        AbortSignal.abort = function(reason) {
+            var signal = new AbortSignal();
+            signal.aborted = true;
+            signal.reason = reason === undefined ? makeAbortError() : reason;
+            return signal;
+        };
+        AbortSignal.timeout = function(ms) {
+            var signal = new AbortSignal();
+            setTimeout(function() {
+                fireAbort(signal, makeAbortError('signal timed out', 'TimeoutError'));
+            }, ms);
+            return signal;
+        };
+        AbortSignal.any = function(signals) {
+            var result = new AbortSignal();
+            var list = Array.prototype.slice.call(signals || []);
+            for (var i = 0; i < list.length; i++) {
+                if (list[i] && list[i].aborted) {
+                    fireAbort(result, list[i].reason);
+                    return result;
+                }
+            }
+            list.forEach(function(s) {
+                if (s && typeof s.addEventListener === 'function') {
+                    s.addEventListener('abort', function() { fireAbort(result, s.reason); });
+                }
+            });
+            return result;
+        };
+
+        function AbortController() {
+            this.signal = new AbortSignal();
+        }
+        AbortController.prototype.abort = function(reason) {
+            fireAbort(this.signal, reason);
+        };
+
+        globalThis.AbortSignal = AbortSignal;
+        globalThis.AbortController = AbortController;
+    }
 })();

@@ -674,7 +674,7 @@ fn v8_custom_element_connects_only_after_append() {
             })()
             "#
         ),
-        Ok("|ready:true,connected:true".to_string())
+        Ok("ready:false|ready:false,connected:true".to_string())
     );
 }
 

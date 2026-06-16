@@ -1672,6 +1672,66 @@
                 return obj;
             }
 
+            // Split a computed-binding arg list on top-level commas (ignoring
+            // commas inside quotes or nested parens).
+            function splitBindingArgs(str) {
+                var args = [], depth = 0, cur = '', quote = null;
+                for (var i = 0; i < str.length; i++) {
+                    var ch = str.charAt(i);
+                    if (quote) { cur += ch; if (ch === quote) quote = null; continue; }
+                    if (ch === '"' || ch === "'") { quote = ch; cur += ch; continue; }
+                    if (ch === '(') { depth++; cur += ch; continue; }
+                    if (ch === ')') { depth--; cur += ch; continue; }
+                    if (ch === ',' && depth === 0) { args.push(cur); cur = ''; continue; }
+                    cur += ch;
+                }
+                if (cur.trim() !== '') args.push(cur);
+                return args;
+            }
+
+            // Resolve a single computed-binding argument: string/number/boolean
+            // literal, or a property path on the element.
+            function resolveBindingArg(el, arg) {
+                arg = arg.trim();
+                if (arg === '') return undefined;
+                var c = arg.charAt(0);
+                if (c === '"' || c === "'") return arg.slice(1, -1);
+                if (arg === 'true') return true;
+                if (arg === 'false') return false;
+                if (arg === 'null') return null;
+                if (arg === 'undefined') return undefined;
+                if (/^-?\d+(\.\d+)?$/.test(arg)) return Number(arg);
+                return resolveBindingPath(el, arg);
+            }
+
+            // Evaluate a binding expression: a plain path (`data.title`), a
+            // computed method call (`getSimpleString(data.title)`), with optional
+            // leading `!` negation(s).
+            function resolveBindingExpr(el, expr) {
+                expr = expr.trim();
+                var negate = false;
+                while (expr.charAt(0) === '!') { negate = !negate; expr = expr.slice(1).trim(); }
+                var val;
+                var paren = expr.indexOf('(');
+                if (paren > 0 && expr.charAt(expr.length - 1) === ')') {
+                    var method = expr.slice(0, paren).trim();
+                    var argStr = expr.slice(paren + 1, -1).trim();
+                    var fn;
+                    try { fn = el[method]; } catch (e) { fn = null; }
+                    if (typeof fn === 'function') {
+                        var args = argStr === '' ? [] : splitBindingArgs(argStr).map(function(a) {
+                            return resolveBindingArg(el, a);
+                        });
+                        try { val = fn.apply(el, args); } catch (e) { val = undefined; }
+                    } else {
+                        val = undefined;
+                    }
+                } else {
+                    val = resolveBindingPath(el, expr);
+                }
+                return negate ? !val : val;
+            }
+
             function evalParts(el, parts) {
                 var out = '';
                 for (var i = 0; i < parts.length; i++) {
@@ -1679,7 +1739,7 @@
                     if (p.literal !== undefined) {
                         out += p.literal;
                     } else {
-                        var pval = resolveBindingPath(el, p.path);
+                        var pval = resolveBindingExpr(el, p.path);
                         out += pval == null ? '' : String(pval);
                     }
                 }
@@ -1895,6 +1955,7 @@
                 }
                 maybeCallCreated(el, name);
                 installRichGridFallback(el);
+                readyUpgraded(el, name);
                 if (globalThis.__aurora_debug_youtube__ && debugProbeName(name)) {
                     trace('upgrade-stage ' + name + ' connect-start');
                 }
@@ -2130,4 +2191,35 @@
             globalThis.__aurora_init_custom_elements__ = function() { ensureCreateElementPatch(); };
             globalThis.__aurora_track_custom_element__ = function(el) { rememberPending(el); };
             globalThis.__aurora_apply_stamped_bindings__ = applyStampedBindings;
+
+            // Walk a subtree (light DOM + shadow roots) and install binding hooks
+            // on every custom element that hasn't been hooked yet. Feed renderers
+            // (ytd-rich-grid-renderer, ytd-rich-item-renderer, …) are stamped
+            // natively by Polymer's property-effects during navigation, so they
+            // never pass through tryUpgrade()/readyUpgraded() where binding hooks
+            // are normally installed; without this sweep their `[[…]]` text/attr
+            // annotations render literally. Idempotent (guarded per element).
+            globalThis.__aurora_sweep_bindings__ = function(root) {
+                root = root || (document && document.body);
+                var count = 0;
+                function walk(node, depth) {
+                    if (!node || depth > 60) return;
+                    var nt; try { nt = node.nodeType; } catch (e) { return; }
+                    if (nt === 1) {
+                        var ln; try { ln = node.localName || ''; } catch (e) { ln = ''; }
+                        if (ln.indexOf('-') >= 0 && !node.__aurora_bindings_installed__) {
+                            try { installBindingHooks(node); count++; } catch (e) {}
+                        }
+                    }
+                    var sr; try { sr = node.shadowRoot || node.__shady_shadowRoot; } catch (e) {}
+                    if (sr) {
+                        var s; try { s = sr.firstChild; } catch (e) {}
+                        while (s) { walk(s, depth + 1); try { s = s.nextSibling; } catch (e) { break; } }
+                    }
+                    var c; try { c = node.firstChild; } catch (e) {}
+                    while (c) { walk(c, depth + 1); try { c = c.nextSibling; } catch (e) { break; } }
+                }
+                walk(root, 0);
+                return count;
+            };
         })();

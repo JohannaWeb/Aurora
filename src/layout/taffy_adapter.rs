@@ -70,7 +70,48 @@ pub fn style_to_taffy_with_viewport(styles: &StyleMap, viewport: ViewportSize) -
         width: column_gap,
         height: row_gap,
     };
+    // Inset (left/right/top/bottom) drives placement of positioned boxes. Without
+    // it, every absolutely-positioned element collapses to the container origin.
+    taffy.inset = TaffyRect {
+        left: inset_value(styles.get("left"), viewport, font_size),
+        right: inset_value(styles.get("right"), viewport, font_size),
+        top: inset_value(styles.get("top"), viewport, font_size),
+        bottom: inset_value(styles.get("bottom"), viewport, font_size),
+    };
     taffy
+}
+
+fn inset_value(value: Option<&str>, viewport: ViewportSize, font_size: f32) -> LengthPercentageAuto {
+    let Some(value) = value.map(str::trim) else {
+        return LengthPercentageAuto::auto();
+    };
+    if value == "auto" {
+        return LengthPercentageAuto::auto();
+    }
+    if value == "0" {
+        return LengthPercentageAuto::length(0.0);
+    }
+    if let Some(px) = value.strip_suffix("px") {
+        if let Ok(px) = px.trim().parse::<f32>() {
+            return LengthPercentageAuto::length(px);
+        }
+    }
+    if let Some(percent) = value.strip_suffix('%') {
+        if let Ok(p) = percent.trim().parse::<f32>() {
+            return LengthPercentageAuto::percent(p / 100.0);
+        }
+    }
+    parse_length_value(value)
+        .map(|length: LengthValue| {
+            LengthPercentageAuto::length(length.to_px(
+                viewport.width,
+                font_size,
+                font_size,
+                viewport.width,
+                viewport.height,
+            ))
+        })
+        .unwrap_or_else(LengthPercentageAuto::auto)
 }
 
 fn taffy_display(display: DisplayMode) -> TaffyDisplay {

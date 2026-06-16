@@ -115,6 +115,16 @@ impl WindowInput {
         new_stylesheet.merge(Stylesheet::user_agent_stylesheet());
 
         // 4. Initialize scripts/runtime and fetch externals in parallel.
+        //
+        // Drop the previous runtime *before* creating the new one. A V8
+        // `OwnedIsolate` is entered on creation and exited on drop, so isolates
+        // must be dropped in reverse order of creation. Building the new isolate
+        // while the old one is still alive and then replacing the field would
+        // drop them oldest-first and panic ("must be dropped in the reverse
+        // order of creation"). Tearing down the old isolate first keeps exactly
+        // one live at a time.
+        self.runtime = None;
+
         let scripts = crate::runner::scripts::extract_scripts(&new_dom);
         let new_runtime = if !scripts.is_empty() {
             println!("JS: Processing {} scripts...", scripts.len());

@@ -7,7 +7,7 @@ use vello::{Renderer, RendererOptions, Scene, wgpu};
 use winit::window::Window;
 
 use super::BROWSER_CHROME_HEIGHT;
-use super::chrome::paint_browser_chrome_scene;
+use super::chrome::ChromeRenderer;
 use super::input::WindowInput;
 
 pub(super) struct AuroraApp {
@@ -19,6 +19,7 @@ pub(super) struct AuroraApp {
     pub(super) scroll_y: f64,
     pub(super) mouse_x: f64,
     pub(super) mouse_y: f64,
+    pub(super) chrome: ChromeRenderer,
 }
 
 impl AuroraApp {
@@ -32,6 +33,7 @@ impl AuroraApp {
             scroll_y: 0.0,
             mouse_x: 0.0,
             mouse_y: 0.0,
+            chrome: ChromeRenderer::default(),
         }
     }
 
@@ -90,10 +92,17 @@ impl AuroraApp {
 
         let mut scene = Scene::new();
         paint_content_layer(self, &mut scene, width, height);
-        paint_browser_chrome_scene(
+        let url = self
+            .input
+            .base_url
+            .clone()
+            .unwrap_or_else(|| "aurora://local".to_string());
+        self.chrome.paint(
             &mut scene,
             width,
-            self.input.base_url.as_deref().unwrap_or("aurora://local"),
+            &url,
+            &self.input.dom,
+            &self.input.identity,
         );
 
         let surface = self.surface.as_ref().unwrap();

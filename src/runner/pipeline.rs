@@ -178,6 +178,8 @@ fn run_scripts(
     pump_ready_work(runtime.as_mut());
     drive_polymer_page_manager_navigation(runtime.as_mut());
     pump_ready_work(runtime.as_mut());
+    apply_polymer_bindings(runtime.as_mut());
+    pump_ready_work(runtime.as_mut());
     if env::var("AURORA_DEBUG_YOUTUBE").is_ok() {
         run_youtube_initial_navigation_probe(runtime.as_mut());
         pump_ready_work(runtime.as_mut());
@@ -308,6 +310,29 @@ fn pump_ready_work(runtime: &mut dyn crate::js_engine::JsRuntime) {
 
 /// Diagnostic dump of the rich-grid content subtree's layout/style state, to
 /// distinguish "real content with no layout box" from "no content stamped".
+/// After the page-manager attaches the active page and its data-bound renderers
+/// are stamped, sweep the rendered tree to install binding hooks on renderers
+/// that Polymer stamped natively (bypassing our upgrade pipeline). Without this,
+/// their `[[…]]` text/attribute annotations render as literal template text.
+fn apply_polymer_bindings(runtime: &mut dyn crate::js_engine::JsRuntime) {
+    let _ = runtime.execute(
+        r#"
+        (function() {
+            try {
+                if (typeof globalThis.__aurora_sweep_bindings__ === 'function') {
+                    var n = globalThis.__aurora_sweep_bindings__(document.body);
+                    if (globalThis.__aurora_debug_youtube__) {
+                        console.log('[yt-bind] sweep installed hooks on ' + n + ' element(s)');
+                    }
+                }
+            } catch (e) {
+                if (globalThis.__aurora_debug_youtube__) console.log('[yt-bind] sweep error ' + e);
+            }
+        })();
+        "#,
+    );
+}
+
 fn dump_render_diagnostics(runtime: &mut dyn crate::js_engine::JsRuntime) {
     let _ = runtime.execute(
         r#"
