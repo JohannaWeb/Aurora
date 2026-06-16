@@ -16,27 +16,41 @@ pub(crate) enum EngineKind {
 }
 
 impl EngineKind {
-    /// Engine selection via `AURORA_JS_ENGINE` (`spidermonkey`/`sm`, `boa`,
-    /// `v8`). Unset or unrecognized values fall back to whichever of
-    /// SpiderMonkey/V8 is compiled in (they're mutually exclusive features).
+    /// `v8`). Unset or unrecognized values fall back to whichever engine is
+    /// compiled in (see [`EngineKind::default_compiled`]).
     pub(crate) fn from_env() -> Self {
         match std::env::var("AURORA_JS_ENGINE").as_deref() {
             Ok("boa") => Self::Boa,
             Ok("v8") => Self::V8,
-            #[cfg(feature = "engine-spidermonkey")]
-            Ok("spidermonkey" | "sm") => Self::SpiderMonkey,
-            _ => Self::default_engine(),
+            Ok("spidermonkey") | Ok("sm") => Self::SpiderMonkey,
+            _ => Self::default_compiled(),
         }
     }
 
-    #[cfg(feature = "engine-spidermonkey")]
-    fn default_engine() -> Self {
-        Self::SpiderMonkey
-    }
-
-    #[cfg(not(feature = "engine-spidermonkey"))]
-    fn default_engine() -> Self {
-        Self::V8
+    /// The engine to use when none is explicitly requested: the one actually
+    /// compiled in. Engines are mutually exclusive features, so at most one
+    /// branch below is live in any given build.
+    pub(crate) fn default_compiled() -> Self {
+        #[cfg(feature = "v8")]
+        {
+            Self::V8
+        }
+        #[cfg(all(not(feature = "v8"), feature = "engine-sm"))]
+        {
+            Self::SpiderMonkey
+        }
+        #[cfg(all(not(feature = "v8"), not(feature = "engine-sm"), feature = "engine-boa"))]
+        {
+            Self::Boa
+        }
+        #[cfg(all(
+            not(feature = "v8"),
+            not(feature = "engine-sm"),
+            not(feature = "engine-boa")
+        ))]
+        {
+            Self::SpiderMonkey
+        }
     }
 }
 
@@ -49,13 +63,15 @@ pub(crate) fn create_runtime(
 ) -> Result<Box<dyn JsRuntime>, String> {
     match kind {
         EngineKind::SpiderMonkey => {
-            #[cfg(feature = "engine-spidermonkey")]
+            #[cfg(feature = "engine-sm")]
             {
                 Ok(Box::new(crate::js_sm::SmRuntime::new(dom.clone())))
             }
-            #[cfg(not(feature = "engine-spidermonkey"))]
+            #[cfg(not(feature = "engine-sm"))]
             {
-                Err("SpiderMonkey backend not compiled in (build with --features engine-spidermonkey)".to_string())
+                let _ = dom;
+                Err("SpiderMonkey backend not compiled in (build with --features engine-sm)"
+                    .to_string())
             }
         }
         EngineKind::Boa => {

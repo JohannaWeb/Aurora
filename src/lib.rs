@@ -1,8 +1,15 @@
-//! Aurora browser engine — library interface for integration tests.
+//! Aurora browser engine.
+//!
+//! The public embedding API lives in [`api`] and is re-exported at the crate
+//! root: [`Browser`], [`Page`], [`Capabilities`], [`Error`]. Everything else is
+//! internal engine machinery, exposed as `pub(crate)` for the binary and tests.
 
-#[cfg(all(feature = "engine-spidermonkey", feature = "v8"))]
+pub mod api;
+pub use api::{Browser, BrowserBuilder, Capabilities, Error, Page};
+
+#[cfg(all(feature = "engine-sm", feature = "v8"))]
 compile_error!(
-    "features `engine-spidermonkey` and `v8` are mutually exclusive: SpiderMonkey (mozjs) \
+    "features `engine-sm` and `v8` are mutually exclusive: SpiderMonkey (mozjs) \
      and V8 cannot be statically linked into the same binary (duplicate v8::internal/diplomat_free \
      symbols). Build with `--no-default-features --features v8` to use V8."
 );
@@ -21,7 +28,7 @@ pub(crate) mod identity;
 #[cfg(feature = "engine-boa")]
 pub(crate) mod js_boa;
 pub(crate) mod js_engine;
-#[cfg(feature = "engine-spidermonkey")]
+#[cfg(feature = "engine-sm")]
 pub(crate) mod js_sm;
 #[cfg(feature = "v8")]
 pub(crate) mod js_v8;

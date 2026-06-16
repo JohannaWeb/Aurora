@@ -4,6 +4,29 @@ A **from‑scratch Rust browser engine** with GPU‑accelerated rendering, HTTPS
 
 Aurora is not Servo, Chromium, WebKit, or a wrapper around an existing browser. It is an experimental browser engine written in Rust as part of the broader Bastion sovereign stack.
 
+## What the crate does
+
+`aurora-engine` (imported as `aurora`) takes HTML/CSS — and runs the JavaScript on the page — lays it out, and renders it to pixels on the GPU. You can use it headlessly to turn a document into a PNG, or as the engine behind a windowed browser.
+
+Its headline differentiator is **capability gating**: you grant a `Browser` instance only the powers a page should have (currently network egress and workspace read), so untrusted content can be run fully sandboxed.
+
+The public embedding API is a small facade re-exported from the crate root — `Browser`, `BrowserBuilder`, `Capabilities`, `Page`, `Error` — while the engine internals (DOM, CSS, layout, style, rendering, and the JS engines) stay private.
+
+```rust
+use aurora::{Browser, Capabilities};
+
+// A browser that cannot reach the network.
+let browser = Browser::builder()
+    .capabilities(Capabilities::sandboxed())
+    .build();
+
+let page = browser.load_html("<h1>Hello, Aurora</h1>");
+let png = page.render_png(800, 600).unwrap();
+std::fs::write("hello.png", png).unwrap();
+```
+
+Under the hood: GPU rasterisation via **Vello + wgpu**, DOM/layout via the **blitz** crates and **taffy**, CSS via **stylo/cssparser/selectors**, text via **parley/rustybuzz**, HTTPS fetching via **reqwest/rustls**, and an embedded JavaScript runtime. JS engines are mutually-exclusive features; the default is **V8** (`v8`), with SpiderMonkey (`engine-sm`) and Boa (`engine-boa`) as alternatives.
+
 ## Rendering Test
 
 <img width="1437" height="1066" alt="image" src="https://github.com/user-attachments/assets/5d23b17a-3cd4-4aa8-84f9-711e49e8ad69" />
@@ -25,13 +48,14 @@ Aurora is built on a layered stack of focused crates:
 | **Rendering** | `anyrender_vello` | GPU rasterisation via Vello + WGPU |
 | **Windowing** | `winit` | Window, input events, resize |
 | **Text** | `parley` | Text layout and shaping |
-| **JavaScript** | SpiderMonkey (`js_sm`) | Primary JS engine with live DOM/BOM bridge |
+| **JavaScript** | V8 (`js_v8`, default) | Default JS engine with live DOM/BOM bridge |
+| **JavaScript** | SpiderMonkey (`js_sm`, `engine-sm` feature) | Alternative engine with live DOM/BOM bridge |
 | **JavaScript** | Boa (`js_boa`, `engine-boa` feature) | Alternative engine, used for specific tests |
 | **Networking** | Aurora fetch | `http://`, `https://`, and capability‑gated `file://` |
 
 ## JavaScript Runtime
 
-Aurora embeds **SpiderMonkey** as its default JavaScript engine and exposes a live DOM/BOM bridge.
+Aurora embeds **V8** as its default JavaScript engine (SpiderMonkey and Boa are selectable alternatives) and exposes a live DOM/BOM bridge.
 
 Each JavaScript node object carries a `__node_id` that points back into a Rust-side `NodeRegistry`. Methods recover the underlying Rust `NodePtr` from the registry on each call, so mutations from the parser, renderer, or JavaScript bridge remain visible through the same JS handle.
 
@@ -50,7 +74,7 @@ The bridge prioritises compatibility survival over full correctness — timers, 
 3. **Painting** — `blitz-paint` traverses the layout tree and emits vector commands to a `VelloScenePainter`.
 4. **Rasterisation** — `anyrender_vello` compiles the scene and executes GPU compute work through Vello + WGPU.
 5. **Presentation** — the final texture is presented to the window surface.
-6. **JS Bridge** — SpiderMonkey can inspect and mutate the DOM through the live DOM/BOM bridge.
+6. **JS Bridge** — the embedded JS engine (V8 by default) can inspect and mutate the DOM through the live DOM/BOM bridge.
 
 ## Networking
 

@@ -940,7 +940,7 @@ mod tests {
     use crate::html::Parser;
 
     #[test]
-    #[cfg(feature = "engine-spidermonkey")]
+    #[cfg(feature = "engine-sm")]
     fn hydrated_blitz_doc_reflects_dom_mutations_before_first_paint() {
         let html = "<html><body><div id='root'>before</div></body></html>";
         let dom = Parser::new(html).parse_document();
