@@ -131,7 +131,7 @@ impl LayoutDocument {
             taffy_style.size.height = Dimension::auto();
             taffy_style.align_self = Some(AlignSelf::FlexStart);
             let ctx = TextContext {
-                text: text.clone(),
+                text: text.content.clone(),
                 font_size,
                 line_height,
             };
@@ -303,7 +303,9 @@ fn determine_kind(styled_node: &crate::style::StyledNode) -> LayoutKind {
                 }
             }
         }
-        Node::Text(text) => LayoutKind::Text { text: text.clone() },
+        Node::Text(text) => LayoutKind::Text {
+            text: text.content.clone(),
+        },
         Node::Document { .. } => LayoutKind::Viewport,
     }
 }

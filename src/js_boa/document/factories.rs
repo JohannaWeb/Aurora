@@ -45,8 +45,7 @@ pub(in crate::js_boa) fn add_document_factory_methods(
         NativeFunction::from_copy_closure_with_captures(
             |_this, args, cap: &DocCapture, ctx| {
                 let text = js_string_of(args.get(0).unwrap_or(&JsValue::undefined()));
-                let node = Node::Text(text);
-                let node = Rc::new(RefCell::new(node));
+                let node = Node::text(text);
                 Ok(create_js_node(node, &cap.registry, &cap.document, ctx))
             },
             doc_cap.clone(),

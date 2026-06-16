@@ -278,13 +278,13 @@ fn node_key(node: &NodePtr) -> usize {
 
 fn append_or_merge_text(children: &mut Vec<NodePtr>, child: NodePtr) {
     let text = match &*child.borrow() {
-        Node::Text(text) => Some(text.clone()),
+        Node::Text(text) => Some(text.content.clone()),
         _ => None,
     };
 
     if let (Some(text), Some(last)) = (text, children.last()) {
         if let Node::Text(last_text) = &mut *last.borrow_mut() {
-            last_text.push_str(&text);
+            last_text.content.push_str(&text);
             return;
         }
     }
@@ -309,7 +309,7 @@ fn prune_whitespace_text(node: &NodePtr, preserve_text_whitespace: bool) {
     };
 
     children.retain(|child| {
-        preserve_children || !matches!(&*child.borrow(), Node::Text(text) if text.trim().is_empty())
+        preserve_children || !matches!(&*child.borrow(), Node::Text(text) if text.content.trim().is_empty())
     });
 
     for child in children {

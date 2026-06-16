@@ -12,6 +12,8 @@ mod registry;
 mod runtime;
 #[cfg(test)]
 mod runtime_tests;
+#[cfg(test)]
+mod css_tests;
 mod selectors;
 mod style_class;
 mod tree;

@@ -528,22 +528,53 @@
     // StyleSheetList and CSSStyleSheet wiring.
     (function() {
         var list = new globalThis.StyleSheetList();
-        var synced = false;
+        var sheetsMap = new WeakMap();
+
+        function getOrCreateSheet(node) {
+            var sheet = sheetsMap.get(node);
+            if (!sheet) {
+                sheet = new globalThis.CSSStyleSheet();
+                sheet.ownerNode = node;
+                if (node.localName === 'link') sheet.href = node.getAttribute('href');
+                sheetsMap.set(node, sheet);
+            }
+            return sheet;
+        }
+
         function sync() {
-            if (synced || !document.querySelectorAll) return;
-            synced = true;
+            if (!document.querySelectorAll) return;
             var nodes = document.querySelectorAll('style, link[rel="stylesheet"]');
+            // Reset the list length and contents.
+            for (var j = 0; j < list.length; j++) delete list[j];
+            list.length = 0;
+
             for (var i = 0; i < nodes.length; i++) {
-                var sheet = new globalThis.CSSStyleSheet();
-                sheet.ownerNode = nodes[i];
-                if (nodes[i].localName === 'link') sheet.href = nodes[i].getAttribute('href');
-                list[list.length++] = sheet;
+                var node = nodes[i];
+                var sheet = getOrCreateSheet(node);
+                list[i] = sheet;
+                list.length++;
             }
         }
+
         Object.defineProperty(document, 'styleSheets', {
             get: function() { sync(); return list; },
             configurable: true
         });
+
+        // Add .sheet property to <style> and <link> elements.
+        try {
+            Object.defineProperty(globalThis.HTMLStyleElement.prototype, 'sheet', {
+                get: function() { return getOrCreateSheet(this); },
+                configurable: true
+            });
+            Object.defineProperty(globalThis.HTMLLinkElement.prototype, 'sheet', {
+                get: function() {
+                    if (this.rel !== 'stylesheet') return null;
+                    return getOrCreateSheet(this);
+                },
+                configurable: true
+            });
+        } catch (e) {}
     })();
 
     document.fonts = {

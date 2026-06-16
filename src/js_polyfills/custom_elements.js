@@ -351,12 +351,137 @@
                 return tpl;
             }
 
+            // ── ShadyCSS-lite ────────────────────────────────────────────────
+            // Aurora flattens shadow DOM into light DOM (attachShadow proxies the
+            // host's own subtree) and paints via blitz/Stylo from a serialized
+            // light-DOM HTML string. A component's <style> lives inside its
+            // <dom-module><template>, which is inert and never serialized — and
+            // even when reached, its shadow-scoped selectors (:host, ::slotted)
+            // match nothing in the flattened tree, so components stamp but render
+            // unstyled (collapsed layout boxes).
+            //
+            // This shim hoists each dom-module's <style> into <head> (light DOM,
+            // so it serializes and paints) and rewrites the shadow-scoped
+            // selectors to target the flattened tree, scoping rules by the
+            // component's tag name so they don't leak across components.
+            var shimmedStyleScopes = Object.create(null);
+
+            // Split `str` on top-level `sep`, ignoring it inside (), [], "", ''.
+            function splitTopLevel(str, sep) {
+                var out = [], depth = 0, quote = null, start = 0;
+                for (var i = 0; i < str.length; i++) {
+                    var c = str[i];
+                    if (quote) { if (c === quote && str[i - 1] !== '\\') quote = null; continue; }
+                    if (c === '"' || c === "'") { quote = c; continue; }
+                    if (c === '(' || c === '[') depth++;
+                    else if (c === ')' || c === ']') depth--;
+                    else if (c === sep && depth === 0) { out.push(str.slice(start, i)); start = i + 1; }
+                }
+                out.push(str.slice(start));
+                return out;
+            }
+
+            // Rewrite one complex selector for the flattened (no-shadow) tree.
+            function rewriteScopedSelector(sel, tag) {
+                sel = sel.trim();
+                if (!sel) return sel;
+                // :host-context(x) y  ->  x tag y   (approx: ancestor context)
+                var ctx = sel.match(/^:host-context\(([^)]*)\)\s*([\s\S]*)$/);
+                if (ctx) {
+                    var rest = ctx[2].trim();
+                    return (ctx[1].trim() + ' ' + tag + (rest ? ' ' + rest : '')).trim();
+                }
+                if (sel.indexOf(':host') !== -1) {
+                    // :host(x) -> tagx ; :host -> tag  (combinators preserved)
+                    return sel.replace(/:host\(([^)]*)\)/g, tag + '$1').replace(/:host/g, tag);
+                }
+                if (sel.indexOf('::slotted') !== -1) {
+                    // flattened: slotted light children are plain descendants
+                    return sel.replace(/::slotted\(([^)]*)\)/g, tag + ' $1');
+                }
+                // Component-internal rule: scope as a descendant of the host tag.
+                return tag + ' ' + sel;
+            }
+
+            function rewriteSelectorList(list, tag) {
+                return splitTopLevel(list, ',').map(function(s) {
+                    return rewriteScopedSelector(s, tag);
+                }).join(', ');
+            }
+
+            // Walk top-level rules, rewriting selector preludes. Recurses into
+            // @media/@supports; leaves @keyframes/@font-face/@import untouched.
+            function scopeCss(css, tag) {
+                var out = '', i = 0, n = css.length, prelude = '';
+                while (i < n) {
+                    var c = css[i];
+                    if (c === '{') {
+                        var depth = 1, j = i + 1;
+                        while (j < n && depth > 0) {
+                            if (css[j] === '{') depth++;
+                            else if (css[j] === '}') depth--;
+                            j++;
+                        }
+                        var body = css.slice(i + 1, j - 1);
+                        var pre = prelude.trim();
+                        if (pre.charAt(0) === '@') {
+                            var low = pre.toLowerCase();
+                            if (low.indexOf('@media') === 0 || low.indexOf('@supports') === 0) {
+                                out += pre + '{' + scopeCss(body, tag) + '}';
+                            } else {
+                                out += pre + '{' + body + '}';
+                            }
+                        } else if (pre) {
+                            out += rewriteSelectorList(pre, tag) + '{' + body + '}';
+                        } else {
+                            out += '{' + body + '}';
+                        }
+                        prelude = '';
+                        i = j;
+                    } else {
+                        prelude += c;
+                        i++;
+                    }
+                }
+                return out + prelude; // keep any trailing @import/;-rule verbatim
+            }
+
+            function shimDomModuleStyles(id, tpl) {
+                if (!id || shimmedStyleScopes[id]) return;
+                var content = tpl && tpl.content;
+                if (!content || typeof content.querySelectorAll !== 'function') return;
+                var styles;
+                try { styles = content.querySelectorAll('style'); } catch (e) { return; }
+                if (!styles || !styles.length) return;
+                shimmedStyleScopes[id] = true;
+                var head = document.head || document.documentElement;
+                if (!head) return;
+                for (var s = 0; s < styles.length; s++) {
+                    var cssText = '';
+                    try { cssText = styles[s].textContent || ''; } catch (e) {}
+                    // strip comments first so braces/quotes inside them can't
+                    // unbalance the rule scanner
+                    cssText = cssText.replace(/\/\*[\s\S]*?\*\//g, '');
+                    if (!cssText.trim()) continue;
+                    var scoped;
+                    try { scoped = scopeCss(cssText, id); } catch (e) { scoped = null; }
+                    if (!scoped) continue;
+                    try {
+                        var out = document.createElement('style');
+                        out.setAttribute('data-style-scope', id);
+                        out.textContent = scoped;
+                        head.appendChild(out);
+                    } catch (e) {}
+                }
+            }
+
             function registerDomModule(el) {
                 var id = getElementId(el);
                 if (!id) return null;
                 var tpl = findTemplateForDomModule(el);
                 if (!tpl) return null;
                 domModules[id] = tpl;
+                try { shimDomModuleStyles(id, tpl); } catch (e) {}
                 if (globalThis.__aurora_debug_youtube__ && debugProbeName(id)) {
                     trace('dom-module registered ' + id +
                         ' template=' + (!!tpl) +

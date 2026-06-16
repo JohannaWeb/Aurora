@@ -25,7 +25,7 @@ impl Node {
                 }
                 Ok(())
             }
-            Node::Text(text) => writeln!(f, "{indent}\"{text}\""),
+            Node::Text(text) => writeln!(f, "{indent}\"{}\"", text.content),
         }
     }
 }

@@ -45,7 +45,7 @@ fn serialize_node(node: &NodePtr, out: &mut String) {
             }
         }
         Node::Text(text) => {
-            out.push_str(&html_escape(text));
+            out.push_str(&html_escape(&text.content));
         }
         Node::Document { children, .. } => {
             for child in children {

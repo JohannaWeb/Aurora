@@ -108,7 +108,7 @@ fn build_taffy_tree(
         taffy_style.size.height = Dimension::auto();
         taffy_style.align_self = Some(AlignSelf::FlexStart);
         let ctx = TextContext {
-            text: text.clone(),
+            text: text.content.clone(),
             font_size,
             line_height,
         };
@@ -264,7 +264,9 @@ fn determine_layout_kind(styled_node: &StyledNode) -> LayoutKind {
                 }
             }
         }
-        Node::Text(text) => LayoutKind::Text { text: text.clone() },
+        Node::Text(text) => LayoutKind::Text {
+            text: text.content.clone(),
+        },
         Node::Document { .. } => LayoutKind::Viewport,
     }
 }

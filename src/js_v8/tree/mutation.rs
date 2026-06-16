@@ -14,7 +14,7 @@ fn take_document_fragment_children(node: &NodePtr) -> Option<Vec<NodePtr>> {
 pub(crate) fn collect_text(node: &NodePtr) -> String {
     let b = node.borrow();
     match &*b {
-        Node::Text(t) => t.clone(),
+        Node::Text(t) => t.content.clone(),
         Node::Element(el) => el
             .children
             .iter()
@@ -194,7 +194,7 @@ pub(crate) fn clone_node(node: &NodePtr, deep: bool) -> NodePtr {
     let cloned = {
         let b = node.borrow();
         match &*b {
-            Node::Text(t) => Node::text(t.clone()),
+            Node::Text(t) => Node::text(t.content.clone()),
             Node::Element(el) => {
                 let children = if deep {
                     el.children.iter().map(|c| clone_node(c, true)).collect()

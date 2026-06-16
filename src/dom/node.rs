@@ -24,26 +24,31 @@ impl PartialEq for ParentLink {
 }
 impl Eq for ParentLink {}
 
-/// Set `child`'s parent back-pointer to `parent` (no-op for non-element children).
+/// Set `child`'s parent back-pointer to `parent` (no-op for non-element/text children).
 pub fn set_parent(child: &NodePtr, parent: &NodePtr) {
-    if let Node::Element(el) = &mut *child.borrow_mut() {
-        el.parent = ParentLink(Rc::downgrade(parent));
+    match &mut *child.borrow_mut() {
+        Node::Element(el) => el.parent = ParentLink(Rc::downgrade(parent)),
+        Node::Text(text) => text.parent = ParentLink(Rc::downgrade(parent)),
+        _ => {}
     }
 }
 
 /// Clear `child`'s parent back-pointer (e.g. when detaching it from the tree).
 pub fn clear_parent(child: &NodePtr) {
-    if let Node::Element(el) = &mut *child.borrow_mut() {
-        el.parent = ParentLink(Weak::new());
+    match &mut *child.borrow_mut() {
+        Node::Element(el) => el.parent = ParentLink(Weak::new()),
+        Node::Text(text) => text.parent = ParentLink(Weak::new()),
+        _ => {}
     }
 }
 
-/// Read `node`'s stored parent, if it is an element with a live parent pointer.
+/// Read `node`'s stored parent, if it is an element/text with a live parent pointer.
 pub fn parent_ptr(node: &NodePtr) -> Option<NodePtr> {
-    if let Node::Element(el) = &*node.borrow() {
-        return el.parent.0.upgrade();
+    match &*node.borrow() {
+        Node::Element(el) => el.parent.0.upgrade(),
+        Node::Text(text) => text.parent.0.upgrade(),
+        _ => None,
     }
-    None
 }
 
 /// Point every (element) child of `node` at `node`.
@@ -97,8 +102,16 @@ pub enum Node {
     },
     /// Element node with tag name, attributes, and children.
     Element(ElementNode),
-    /// Text node containing raw string content.
-    Text(String),
+    /// Text node containing raw string content and a parent pointer.
+    Text(TextNode),
+}
+
+/// HTML text node.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TextNode {
+    pub content: String,
+    /// Back-pointer to the parent node.
+    pub parent: ParentLink,
 }
 
 /// HTML element node.
@@ -156,6 +169,9 @@ impl Node {
 
     /// Create a text node containing a string.
     pub fn text(value: impl Into<String>) -> NodePtr {
-        Rc::new(RefCell::new(Self::Text(value.into())))
+        Rc::new(RefCell::new(Self::Text(TextNode {
+            content: value.into(),
+            parent: ParentLink::default(),
+        })))
     }
 }
