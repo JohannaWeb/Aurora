@@ -24,8 +24,9 @@ pub struct WindowInput {
     pub media: MediaCache,
     pub runtime: Option<Box<dyn JsRuntime>>,
     // The live window renderer uses Blitz DOM + Blitz Paint.
-    pub blitz_doc: Option<BlitzDocument>,
+    pub blitz_doc: Option<Rc<RefCell<BlitzDocument>>>,
     pub(crate) needs_reflow: bool,
+    pub(crate) blitz_snapshot_dirty: bool,
 }
 
 impl WindowInput {
@@ -45,52 +46,89 @@ impl WindowInput {
 
         *self.viewport.borrow_mut() = viewport;
 
-        let style_tree = StyleTree::from_dom(&self.dom, &self.stylesheet.borrow());
-        *self.layout.borrow_mut() =
-            LayoutTree::from_style_tree_with_viewport(&style_tree, content_viewport);
+        let content_w = content_viewport.width as u32;
+        let content_h = content_viewport.height as u32;
+        if let Some(blitz_doc) = self.blitz_doc.as_ref() {
+            blitz_doc.borrow_mut().set_viewport(content_w, content_h);
+        }
+        self.sync_blitz_snapshot(content_w, content_h);
 
-        let layout_borrow = self.layout.borrow();
-        crate::load_missing_images(
-            layout_borrow.root(),
-            self.base_url.as_deref(),
-            &self.identity,
-            &mut self.images,
-        );
-        crate::load_missing_svgs(
-            layout_borrow.root(),
-            self.base_url.as_deref(),
-            &self.identity,
-            &mut self.svgs,
-        );
-        self.media.load_missing(
-            layout_borrow.root(),
-            self.base_url.as_deref(),
-            &self.identity,
-        );
+        let sync_legacy_layout = self.blitz_doc.is_none()
+            || matches!(
+                std::env::var("AURORA_LEGACY_LAYOUT_SYNC").as_deref(),
+                Ok("1") | Ok("true") | Ok("TRUE") | Ok("yes") | Ok("YES")
+            );
+        if sync_legacy_layout {
+            let style_tree = StyleTree::from_dom(&self.dom, &self.stylesheet.borrow());
+            *self.layout.borrow_mut() =
+                LayoutTree::from_style_tree_with_viewport(&style_tree, content_viewport);
 
-        if self.blitz_doc.is_some() {
-            // Keep the current renderer path in sync with the same content viewport.
-            let content_w = content_viewport.width as u32;
-            let content_h = content_viewport.height as u32;
-
-            // Re-serialize the mutated legacy DOM to HTML, then reload it into blitz_doc.
-            // This ensures JS mutations are rendered in the blitz-dom / blitz-paint path.
-            let html = crate::dom::serialize_outer_html(&self.dom);
-            self.blitz_doc = BlitzDocument::try_from_html(
-                &html,
+            let layout_borrow = self.layout.borrow();
+            crate::load_missing_images(
+                layout_borrow.root(),
                 self.base_url.as_deref(),
                 &self.identity,
-                content_w,
-                content_h,
+                &mut self.images,
+            );
+            crate::load_missing_svgs(
+                layout_borrow.root(),
+                self.base_url.as_deref(),
+                &self.identity,
+                &mut self.svgs,
+            );
+            self.media.load_missing(
+                layout_borrow.root(),
+                self.base_url.as_deref(),
+                &self.identity,
             );
         }
         self.needs_reflow = false;
+    }
+
+    pub(crate) fn mark_blitz_snapshot_dirty(&mut self) {
+        self.blitz_snapshot_dirty = true;
+    }
+
+    fn sync_blitz_snapshot(&mut self, content_w: u32, content_h: u32) {
+        if !self.blitz_snapshot_dirty {
+            return;
+        }
+
+        match BlitzDocument::try_from_dom(
+            &self.dom,
+            self.base_url.as_deref(),
+            &self.identity,
+            content_w,
+            content_h,
+        ) {
+            Some(next_doc) => {
+                let handle = match self.blitz_doc.as_ref() {
+                    Some(existing) => {
+                        *existing.borrow_mut() = next_doc;
+                        existing.clone()
+                    }
+                    None => {
+                        let handle = Rc::new(RefCell::new(next_doc));
+                        self.blitz_doc = Some(handle.clone());
+                        handle
+                    }
+                };
+                if let Some(runtime) = self.runtime.as_mut() {
+                    runtime.set_render_document(Some(handle));
+                }
+                self.blitz_snapshot_dirty = false;
+            }
+            None => {
+                log::warn!("Blitz snapshot rebuild failed; keeping previous renderer snapshot");
+            }
+        }
     }
 
     /// Marks the document as needing a reflow. This should be called by the JS bridge
     /// after any DOM or style mutation that affects the visual state.
     pub fn mark_dirty(&mut self) {
         self.needs_reflow = true;
+        self.mark_blitz_snapshot_dirty();
     }
 
     /// Navigates to a new URL by fetching HTML, parsing the DOM, extracting styles,
@@ -109,10 +147,22 @@ impl WindowInput {
 
         // 2. Parse DOM
         let new_dom = crate::html::Parser::new(&html).parse_document();
+        crate::dom::reparent_subtree(&new_dom);
 
         // 3. Extract and compile Stylesheet
         let mut new_stylesheet = Stylesheet::from_dom(&new_dom, Some(url), &self.identity);
         new_stylesheet.merge(Stylesheet::user_agent_stylesheet());
+        let viewport = *self.viewport.borrow();
+        let content_w = viewport.width as u32;
+        let content_h = (viewport.height - crate::window::BROWSER_CHROME_HEIGHT).max(1.0) as u32;
+        let new_blitz_doc = BlitzDocument::try_from_dom(
+            &new_dom,
+            Some(url),
+            &self.identity,
+            content_w,
+            content_h,
+        )
+        .map(|doc| Rc::new(RefCell::new(doc)));
 
         // 4. Initialize scripts/runtime and fetch externals in parallel.
         //
@@ -155,14 +205,8 @@ impl WindowInput {
                 crate::js_engine::EngineKind::from_env(),
                 &new_dom,
             )
-            .unwrap_or_else(|e| {
-                log::warn!("[JS] {e}; falling back to SpiderMonkey");
-                crate::js_engine::create_runtime(
-                    crate::js_engine::EngineKind::SpiderMonkey,
-                    &new_dom,
-                )
-                .expect("SpiderMonkey backend is always available")
-            });
+            .expect("V8 backend is required for JavaScript execution");
+            rt.set_render_document(new_blitz_doc.clone());
             for (script, content) in scripts.iter().zip(fetched.into_iter()) {
                 let Some(content) = content else { continue };
                 rt.set_current_script(Some(&script.node));
@@ -181,6 +225,7 @@ impl WindowInput {
         self.base_url = Some(url.to_string());
         *self.stylesheet.borrow_mut() = new_stylesheet;
         self.runtime = new_runtime;
+        self.blitz_doc = new_blitz_doc;
 
         // Clear caches
         self.images.clear();
@@ -188,7 +233,9 @@ impl WindowInput {
         self.media = crate::media::MediaCache::default();
 
         // 6. Reset viewport & trigger full reflow
-        let viewport = *self.viewport.borrow();
+        if self.blitz_doc.is_none() {
+            self.mark_blitz_snapshot_dirty();
+        }
 
         // Re-bind runtime shared state if runtime exists
         if let Some(runtime) = self.runtime.as_mut() {
@@ -197,6 +244,7 @@ impl WindowInput {
                 self.stylesheet.clone(),
                 self.viewport.clone(),
             );
+            runtime.set_render_document(self.blitz_doc.clone());
             runtime.clear_dirty_bits();
         }
 

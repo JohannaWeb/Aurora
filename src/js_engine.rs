@@ -6,84 +6,41 @@ use crate::css::Stylesheet;
 use crate::dom::NodePtr;
 use crate::layout::{LayoutTree, ViewportSize};
 
-/// Which JS engine backend to construct. SpiderMonkey is the main engine;
-/// Boa and V8 are optional backends behind the `engine-boa` / `v8` features.
+/// Which JS engine backend to construct.
+///
+/// Aurora now ships a single JavaScript backend: V8. This enum stays as a small
+/// seam so call sites do not need to name the concrete runtime directly.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum EngineKind {
-    SpiderMonkey,
-    Boa,
     V8,
 }
 
 impl EngineKind {
-    /// `v8`). Unset or unrecognized values fall back to whichever engine is
-    /// compiled in (see [`EngineKind::default_compiled`]).
+    /// Unset, unsupported, or legacy engine names all fall back to V8.
     pub(crate) fn from_env() -> Self {
         match std::env::var("AURORA_JS_ENGINE").as_deref() {
-            Ok("boa") => Self::Boa,
             Ok("v8") => Self::V8,
-            Ok("spidermonkey") | Ok("sm") => Self::SpiderMonkey,
+            Ok(other) => {
+                log::warn!("[JS] unsupported AURORA_JS_ENGINE={other:?}; using v8");
+                Self::V8
+            }
             _ => Self::default_compiled(),
         }
     }
 
-    /// The engine to use when none is explicitly requested: the one actually
-    /// compiled in. Engines are mutually exclusive features, so at most one
-    /// branch below is live in any given build.
+    /// The engine to use when none is explicitly requested.
     pub(crate) fn default_compiled() -> Self {
-        #[cfg(feature = "v8")]
-        {
-            Self::V8
-        }
-        #[cfg(all(not(feature = "v8"), feature = "engine-sm"))]
-        {
-            Self::SpiderMonkey
-        }
-        #[cfg(all(not(feature = "v8"), not(feature = "engine-sm"), feature = "engine-boa"))]
-        {
-            Self::Boa
-        }
-        #[cfg(all(
-            not(feature = "v8"),
-            not(feature = "engine-sm"),
-            not(feature = "engine-boa")
-        ))]
-        {
-            Self::SpiderMonkey
-        }
+        Self::V8
     }
 }
 
 /// Dependency-injection seam: every place that needs a JS runtime asks this
-/// factory instead of naming a concrete engine type. Engines compiled out via
-/// features return `Err` so callers can fall back rather than fail to build.
+/// factory instead of naming the concrete runtime type.
 pub(crate) fn create_runtime(
     kind: EngineKind,
     dom: &NodePtr,
 ) -> Result<Box<dyn JsRuntime>, String> {
     match kind {
-        EngineKind::SpiderMonkey => {
-            #[cfg(feature = "engine-sm")]
-            {
-                Ok(Box::new(crate::js_sm::SmRuntime::new(dom.clone())))
-            }
-            #[cfg(not(feature = "engine-sm"))]
-            {
-                let _ = dom;
-                Err("SpiderMonkey backend not compiled in (build with --features engine-sm)"
-                    .to_string())
-            }
-        }
-        EngineKind::Boa => {
-            #[cfg(feature = "engine-boa")]
-            {
-                Ok(Box::new(crate::js_boa::BoaRuntime::new(dom.clone())))
-            }
-            #[cfg(not(feature = "engine-boa"))]
-            {
-                Err("Boa backend not compiled in (build with --features engine-boa)".to_string())
-            }
-        }
         EngineKind::V8 => {
             #[cfg(feature = "v8")]
             {
@@ -97,7 +54,7 @@ pub(crate) fn create_runtime(
     }
 }
 
-/// Common interface implemented by every JS engine backend (SpiderMonkey, Boa, …).
+/// Common interface implemented by the JavaScript backend.
 ///
 /// All methods take `&mut self` so the trait is object-safe and can be stored as
 /// `Box<dyn JsRuntime>` without any generic parameters leaking into callers.
@@ -111,6 +68,12 @@ pub(crate) trait JsRuntime {
         stylesheet: Rc<RefCell<Stylesheet>>,
         viewport: Rc<RefCell<ViewportSize>>,
     );
+
+    fn set_render_document(
+        &mut self,
+        _render_document: Option<Rc<RefCell<crate::blitz_document::BlitzDocument>>>,
+    ) {
+    }
 
     fn clear_dirty_bits(&mut self);
     fn has_dirty_bits(&self) -> bool;

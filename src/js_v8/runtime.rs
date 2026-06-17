@@ -14,8 +14,7 @@ use super::selectors::query;
 use super::tree::mutation;
 
 // V8 allows exactly one platform per process, initialized before the first
-// isolate and never torn down (same constraint family as SpiderMonkey's
-// JSEngine, but V8 tolerates living forever).
+// isolate and never torn down. V8 tolerates the platform living for the process.
 static V8_INIT: Once = Once::new();
 
 fn ensure_platform() {
@@ -520,8 +519,7 @@ impl V8Runtime {
                     log::warn!(target: "aurora::js", "[JS] bootstrap networking failed: {e}");
                 }
 
-                // Shared engine-agnostic polyfills (same files js_sm runs) plus
-                // V8-specific base/post shims. Order matters: v8_base defines
+                // V8-specific base/post shims plus shared polyfills. Order matters: v8_base defines
                 // HTMLElement/queueMicrotask that event_constructors and
                 // custom_elements build on; v8_post wires document-dependent
                 // pieces and primes the custom-element registry.
@@ -1156,7 +1154,7 @@ fn storage_key(
     }
 }
 
-// Base64 utilities copied from js_boa/utils.rs
+// Base64 utilities shared with the JS environment.
 fn base64_encode(input: &[u8]) -> String {
     const CHARS: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::with_capacity((input.len() + 2) / 3 * 4);
@@ -1272,6 +1270,13 @@ impl crate::js_engine::JsRuntime for V8Runtime {
     ) {
         self.registry
             .set_shared_state(layout_tree, stylesheet, viewport, self.document.clone());
+    }
+
+    fn set_render_document(
+        &mut self,
+        render_document: Option<Rc<RefCell<crate::blitz_document::BlitzDocument>>>,
+    ) {
+        self.registry.set_render_document(render_document);
     }
 
     fn clear_dirty_bits(&mut self) {

@@ -35,7 +35,7 @@
 
     // Document factory and convenience shims over the native bridge.
     document.createElementNS = function(ns, tag) { return document.createElement(tag); };
-    // Mirrors js_sm: comments become text nodes (no Comment node type in the DOM core).
+    // Comments become text nodes (no Comment node type in the DOM core).
     document.createComment = function(text) { return document.createTextNode(text); };
     document.createDocumentFragment = function() { return document.createElement('#document-fragment'); };
     document.importNode = function(node, deep) {

@@ -44,11 +44,22 @@ impl AuroraApp {
     pub(super) fn run_frame_tasks(&mut self) -> bool {
         let now = Instant::now();
         let mut needs_reflow = self.input.needs_reflow;
+        let mut runtime_dirtied_blitz = false;
 
         if let Some(runtime) = self.input.runtime.as_mut() {
-            needs_reflow |= runtime.tick(now);
-            needs_reflow |= runtime.drain_animation_frame_callbacks(now);
-            needs_reflow |= runtime.take_needs_reflow();
+            let runtime_needs_reflow =
+                runtime.tick(now) | runtime.drain_animation_frame_callbacks(now);
+            if runtime_needs_reflow {
+                runtime_dirtied_blitz = true;
+                needs_reflow = true;
+            }
+            if runtime.take_needs_reflow() {
+                runtime_dirtied_blitz = true;
+                needs_reflow = true;
+            }
+        }
+        if runtime_dirtied_blitz && self.input.blitz_doc.is_none() {
+            self.input.mark_blitz_snapshot_dirty();
         }
 
         let needs_redraw = self.input.media.update();
@@ -185,9 +196,13 @@ fn paint_content_layer(app: &mut AuroraApp, scene: &mut Scene, width: u32, heigh
         &vello::kurbo::Rect::new(-2.0, content_top, width as f64 + 2.0, height as f64),
     );
     let mut content_scene = Scene::new();
-    if let Some(blitz_doc) = &mut app.input.blitz_doc {
-        if !blitz_doc.paint_to_scene(&mut content_scene, width, content_height) {
-            app.input.blitz_doc = None;
+    if let Some(blitz_doc) = app.input.blitz_doc.as_ref().cloned() {
+        if !blitz_doc
+            .borrow_mut()
+            .paint_to_scene(&mut content_scene, width, content_height)
+        {
+            app.input.mark_blitz_snapshot_dirty();
+            app.input.needs_reflow = true;
             content_scene = Scene::new();
         }
     }

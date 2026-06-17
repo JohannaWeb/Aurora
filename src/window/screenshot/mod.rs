@@ -61,9 +61,14 @@ fn flush_ready_frame_tasks(input: &mut WindowInput, width: u32, height: u32) {
                 return;
             };
             let now = Instant::now();
-            runtime.tick(now) | runtime.drain_animation_frame_callbacks(Instant::now())
+            runtime.tick(now)
+                | runtime.drain_animation_frame_callbacks(Instant::now())
+                | runtime.take_needs_reflow()
         };
         if needs_reflow {
+            if input.blitz_doc.is_none() {
+                input.mark_blitz_snapshot_dirty();
+            }
             input.reflow(width, height);
         }
         match input.runtime.as_ref() {

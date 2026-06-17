@@ -1,7 +1,6 @@
-// V8-only environment shims, run before the shared polyfills
+// V8 environment shims, run before the shared polyfills
 // (event_constructors.js / custom_elements.js need HTMLElement,
-// queueMicrotask, etc. to exist). The SpiderMonkey engine installs
-// equivalents natively in js_sm/globals/browser_api.rs.
+// queueMicrotask, etc. to exist).
 (function() {
     if (typeof globalThis.queueMicrotask !== 'function') {
         globalThis.queueMicrotask = function(fn) { Promise.resolve().then(fn); };

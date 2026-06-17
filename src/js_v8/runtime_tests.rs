@@ -1356,40 +1356,21 @@ fn v8_supports_document_structure_and_screen() {
 
 #[test]
 fn engines_hot_swap_behind_the_js_runtime_trait() {
-    // The same driver code must work against any backend picked at runtime —
-    // this is the dependency-injection seam the runner uses (EngineKind comes
-    // from AURORA_JS_ENGINE there; here we iterate explicitly).
-    let kinds = [EngineKind::SpiderMonkey, EngineKind::V8];
+    let dom = blank_dom();
+    let mut runtime: Box<dyn JsRuntime> = create_runtime(EngineKind::V8, &dom).unwrap();
 
-    for kind in kinds {
-        let dom = blank_dom();
-        let Ok(mut runtime): Result<Box<dyn JsRuntime>, _> = create_runtime(kind, &dom) else {
-            continue;
-        };
-
-        runtime
-            .execute("globalThis.answer = 6 * 7;")
-            .unwrap_or_else(|e| panic!("{kind:?} failed to execute: {e}"));
-        // Observable through the trait alone: a wrong value would throw and
-        // surface as Err from execute.
-        runtime
-            .execute("if (globalThis.answer !== 42) throw new Error('engine state lost');")
-            .unwrap_or_else(|e| panic!("{kind:?} lost state across execute calls: {e}"));
-        assert!(
-            runtime.execute("syntax error here").is_err(),
-            "{kind:?} should surface compile errors"
-        );
-    }
-}
-
-#[test]
-fn compiled_out_engines_return_err_not_panic() {
-    #[cfg(not(feature = "engine-boa"))]
-    {
-        let dom = blank_dom();
-        let err = create_runtime(EngineKind::Boa, &dom).err();
-        assert!(err.is_some_and(|e| e.contains("engine-boa")));
-    }
+    runtime
+        .execute("globalThis.answer = 6 * 7;")
+        .unwrap_or_else(|e| panic!("V8 failed to execute: {e}"));
+    // Observable through the trait alone: a wrong value would throw and surface
+    // as Err from execute.
+    runtime
+        .execute("if (globalThis.answer !== 42) throw new Error('engine state lost');")
+        .unwrap_or_else(|e| panic!("V8 lost state across execute calls: {e}"));
+    assert!(
+        runtime.execute("syntax error here").is_err(),
+        "V8 should surface compile errors"
+    );
 }
 
 #[test]
@@ -1397,15 +1378,28 @@ fn v8_text_node_move_detaches_from_previous_parent() {
     let html = "<html><body><div id='p1'>hello</div><div id='p2'></div></body></html>";
     let mut runtime = V8Runtime::new(Parser::new(html).parse_document());
 
-    runtime.execute(r#"
+    runtime
+        .execute(
+            r#"
         const p1 = document.getElementById('p1');
         const p2 = document.getElementById('p2');
         const text = p1.firstChild;
         p2.appendChild(text);
-    "#).unwrap();
+    "#,
+        )
+        .unwrap();
 
     // The text node should no longer be a child of p1
-    assert_eq!(runtime.eval_to_string("document.getElementById('p1').childNodes.length"), Ok("0".to_string()));
-    assert_eq!(runtime.eval_to_string("document.getElementById('p2').childNodes.length"), Ok("1".to_string()));
-    assert_eq!(runtime.eval_to_string("document.getElementById('p2').firstChild.textContent"), Ok("hello".to_string()));
+    assert_eq!(
+        runtime.eval_to_string("document.getElementById('p1').childNodes.length"),
+        Ok("0".to_string())
+    );
+    assert_eq!(
+        runtime.eval_to_string("document.getElementById('p2').childNodes.length"),
+        Ok("1".to_string())
+    );
+    assert_eq!(
+        runtime.eval_to_string("document.getElementById('p2').firstChild.textContent"),
+        Ok("hello".to_string())
+    );
 }

@@ -126,7 +126,12 @@ impl AuroraApp {
     fn scroll_by(&mut self, amount: f32) {
         let viewport = *self.input.viewport.borrow();
         let content_height = (viewport.height - super::BROWSER_CHROME_HEIGHT).max(1.0);
-        let doc_height = self.input.layout.borrow().root().rect().height;
+        let doc_height = self
+            .input
+            .blitz_doc
+            .as_ref()
+            .map(|doc| doc.borrow().document_height())
+            .unwrap_or_else(|| self.input.layout.borrow().root().rect().height);
         let max_scroll = (doc_height - content_height).max(0.0);
         self.scroll_y = (self.scroll_y + amount as f64).clamp(0.0, max_scroll as f64);
         self.request_redraw();
@@ -169,7 +174,7 @@ impl AuroraApp {
             .input
             .blitz_doc
             .as_ref()
-            .and_then(|doc| doc.hit_test_anchor(content_x, content_y))
+            .and_then(|doc| doc.borrow().hit_test_anchor(content_x, content_y))
         {
             let full_url = match &self.input.base_url {
                 Some(base) => crate::fetch::resolve_relative_url(base, &href).unwrap_or(href),
@@ -181,11 +186,18 @@ impl AuroraApp {
             return;
         }
 
-        // JS event dispatch: legacy LayoutTree hit test for DOM node identity.
-        let hit_node = {
-            let layout = self.input.layout.borrow();
-            layout.hit_test(content_x, content_y)
-        };
+        // JS event dispatch follows the Blitz hit test first so events target
+        // the node that was actually rendered. The legacy LayoutTree remains a
+        // compatibility fallback for documents without a live Blitz renderer.
+        let hit_node = self
+            .input
+            .blitz_doc
+            .as_ref()
+            .and_then(|doc| doc.borrow().hit_test_dom_node(content_x, content_y))
+            .or_else(|| {
+                let layout = self.input.layout.borrow();
+                layout.hit_test(content_x, content_y)
+            });
         if let Some(node) = hit_node {
             if let Some(runtime) = self.input.runtime.as_mut() {
                 if runtime.dispatch_event(&node, "click") {
