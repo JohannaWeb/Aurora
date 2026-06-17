@@ -56,14 +56,25 @@ pub(crate) fn run_browser(cli: CliOptions, identity: Identity) {
     // Build the live renderer snapshot from the post-script DOM, not the
     // original HTML source, so bootstrap mutations (custom elements, template
     // stamping, connectedCallback writes, etc.) are visible on the first paint.
-    let blitz_doc =
+    let mut blitz_doc =
         build_hydrated_blitz_doc(&dom, base_url.as_deref(), &identity, content_w, content_h);
     if env::var("AURORA_DEBUG_RENDER").is_ok() {
-        match &blitz_doc {
-            Some(blitz_doc) => eprintln!(
-                "[render] hydrated first paint: {}",
-                blitz_doc.debug_summary()
-            ),
+        match &mut blitz_doc {
+            Some(blitz_doc) => {
+                eprintln!("[render] hydrated first paint: {}", blitz_doc.debug_summary());
+                // TEMP: exercise the same paint the live window does, to see if
+                // it panics (→ white page) or produces an empty scene.
+                let mut scene = vello::Scene::new();
+                let ok = blitz_doc.paint_to_scene(&mut scene, content_w, content_h);
+                let enc = scene.encoding();
+                eprintln!(
+                    "[render] paint_to_scene ok={ok} encoding: paths={} draw_tags={} path_data={}",
+                    enc.n_paths,
+                    enc.draw_tags.len(),
+                    enc.path_data.len()
+                );
+                eprintln!("[render] layout sizes: {}", blitz_doc.debug_layout_sizes());
+            }
             None => eprintln!("[render] Blitz renderer disabled for initial document"),
         }
     }

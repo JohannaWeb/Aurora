@@ -121,6 +121,49 @@ impl BlitzDocument {
         .is_some()
     }
 
+    /// TEMP: walk the tree printing each element's tag, computed size, position
+    /// and display, to find where YouTube's height collapses to ~0.
+    pub fn debug_layout_sizes(&self) -> String {
+        let mut out = String::new();
+        self.dump_node(self.inner.root_element().id, 0, &mut out);
+        out
+    }
+
+    fn dump_node(&self, node_id: usize, depth: usize, out: &mut String) {
+        if depth > 7 {
+            return;
+        }
+        let Some(node) = self.inner.get_node(node_id) else {
+            return;
+        };
+        if let Some(el) = node.data.downcast_element() {
+            let s = node.final_layout.size;
+            let loc = node.final_layout.location;
+            let disp = node
+                .primary_styles()
+                .map(|st| format!("{:?}", st.clone_display()))
+                .unwrap_or_else(|| "?".into());
+            // Only print element rows that are interesting (skip deep tiny text wrappers).
+            out.push_str(&format!(
+                "\n{:indent$}{} {}x{} @({:.0},{:.0}) {}",
+                "",
+                el.name.local,
+                s.width as i32,
+                s.height as i32,
+                loc.x,
+                loc.y,
+                disp,
+                indent = depth * 2
+            ));
+            // Stop descending once we are clearly inside a collapsed subtree but
+            // still show the first couple of children for context.
+            let limit = if depth < 6 { 400 } else { 3 };
+            for &cid in node.children.iter().take(limit) {
+                self.dump_node(cid, depth + 1, out);
+            }
+        }
+    }
+
     pub fn debug_summary(&self) -> String {
         let root = self.inner.root_element();
         let mut counts = NodeCounts::default();

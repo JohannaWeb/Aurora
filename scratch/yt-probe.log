@@ -1,16 +1,16 @@
-[19:41:31.635 INFO] Aurora logging started → logs/aurora_20260616_194131.log
-[19:41:31.636 INFO] Aurora: Starting up...
+[06:18:39.072 INFO] Aurora logging started → logs/aurora_20260617_061839.log
+[06:18:39.072 INFO] Aurora: Starting up...
 Aurora: Crypto provider installed.
-[19:41:32.073 INFO] [JS] processing 42 scripts
-[19:41:32.074 INFO] [NET] GET https://www.youtube.com/s/desktop/f2e7f510/jsbin/custom-elements-es5-adapter.vflset/custom-elements-es5-adapter.js (script)
-[19:41:32.074 INFO] [NET] GET https://www.youtube.com/s/desktop/f2e7f510/jsbin/web-animations-next-lite.min.vflset/web-animations-next-lite.min.js (script)
-[19:41:32.074 INFO] [NET] GET https://www.youtube.com/s/desktop/f2e7f510/jsbin/webcomponents-sd.vflset/webcomponents-sd.js (script)
-[19:41:32.075 INFO] [NET] GET https://www.youtube.com/s/desktop/f2e7f510/jsbin/intersection-observer.min.vflset/intersection-observer.min.js (script)
-[19:41:32.075 INFO] [NET] GET https://www.youtube.com/s/desktop/f2e7f510/jsbin/www-i18n-constants-pt_PT.vflset/www-i18n-constants.js (script)
-[19:41:32.076 INFO] [NET] GET https://www.youtube.com/s/desktop/f2e7f510/jsbin/spf.vflset/spf.js (script)
-[19:41:32.076 INFO] [NET] GET https://www.youtube.com/s/desktop/f2e7f510/jsbin/network.vflset/network.js (script)
-[19:41:32.079 INFO] [NET] GET https://www.youtube.com/s/desktop/f2e7f510/jsbin/scheduler.vflset/scheduler.js (script)
-[19:41:32.080 INFO] [NET] GET https://www.youtube.com/s/_/ytmainappweb/_/js/k=ytmainappweb.kevlar_base.en_US.Tq2agAYFB6o.es5.O/am=AAAAgAAAQABACA/d=1/br=1/rs=AGKMywEHX7dJT-VZ1kFXFoCa2dDhCDEl8Q/m=kevlar_base_module,kevlar_main_module,kevlar_base_sync_mod_chunk (script)
+[06:18:39.381 INFO] [JS] processing 42 scripts
+[06:18:39.382 INFO] [NET] GET https://www.youtube.com/s/desktop/f2e7f510/jsbin/web-animations-next-lite.min.vflset/web-animations-next-lite.min.js (script)
+[06:18:39.382 INFO] [NET] GET https://www.youtube.com/s/desktop/f2e7f510/jsbin/custom-elements-es5-adapter.vflset/custom-elements-es5-adapter.js (script)
+[06:18:39.382 INFO] [NET] GET https://www.youtube.com/s/desktop/f2e7f510/jsbin/intersection-observer.min.vflset/intersection-observer.min.js (script)
+[06:18:39.382 INFO] [NET] GET https://www.youtube.com/s/desktop/f2e7f510/jsbin/webcomponents-sd.vflset/webcomponents-sd.js (script)
+[06:18:39.382 INFO] [NET] GET https://www.youtube.com/s/desktop/f2e7f510/jsbin/scheduler.vflset/scheduler.js (script)
+[06:18:39.383 INFO] [NET] GET https://www.youtube.com/s/desktop/f2e7f510/jsbin/www-i18n-constants-pt_PT.vflset/www-i18n-constants.js (script)
+[06:18:39.383 INFO] [NET] GET https://www.youtube.com/s/desktop/f2e7f510/jsbin/spf.vflset/spf.js (script)
+[06:18:39.385 INFO] [NET] GET https://www.youtube.com/s/desktop/f2e7f510/jsbin/network.vflset/network.js (script)
+[06:18:39.386 INFO] [NET] GET https://www.youtube.com/s/_/ytmainappweb/_/js/k=ytmainappweb.kevlar_base.en_US.Tq2agAYFB6o.es5.O/am=AAAAAAABQABACA/d=1/br=1/rs=AGKMywGiRlzhupxXTFCMrJD6z-mwWXSHLA/m=kevlar_base_module,kevlar_main_module,kevlar_base_sync_mod_chunk (script)
 [yt-life] customElements.upgrade
 [yt-life] define dom-repeat
 [yt-life] define dom-if
@@ -2385,5 +2385,5 @@ TypeError: Cannot set properties of undefined (setting 'cssText')
 [yt-render] contents=DIV display= kids=1 w=0 h=0 text=""
 [yt-render] contents child 0 = YTD-RICH-SECTION-RENDERER display= kids=1 w=1200 h=800 text=""
 [yt-render] styleSheets=13
-Resolve(1): 105ms (style: 19ms, construct: 59ms, pconstruct: 24ms, flush: 1.2ms, layout: 2.6ms, subdocs: 826ns)
+Resolve(1): 106ms (style: 17ms, construct: 69ms, pconstruct: 16ms, flush: 1.2ms, layout: 2.6ms, subdocs: 851ns)
 Headless mode: skipping window
