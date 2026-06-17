@@ -130,7 +130,7 @@ impl BlitzDocument {
     }
 
     fn dump_node(&self, node_id: usize, depth: usize, out: &mut String) {
-        if depth > 7 {
+        if depth > 18 {
             return;
         }
         let Some(node) = self.inner.get_node(node_id) else {
