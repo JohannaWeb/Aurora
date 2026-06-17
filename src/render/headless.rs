@@ -1,6 +1,9 @@
 //! Headless rendering pipeline using ImageBackend.
 //! Used by visual regression tests — no GPU, no display required.
 
+use anyrender::ImageRenderer;
+use anyrender_vello::VelloImageRenderer;
+use crate::blitz_document::BlitzDocument;
 use crate::css::Stylesheet;
 use crate::html::Parser;
 use crate::identity::{Capability, Identity, IdentityKind};
@@ -8,6 +11,7 @@ use crate::layout::{LayoutTree, ViewportSize};
 use crate::render::ImageBackend;
 use crate::style::StyleTree;
 use image::RgbaImage;
+use std::panic::{AssertUnwindSafe, catch_unwind};
 
 /// Fetch a URL and render it to an RGBA image using the software backend.
 pub fn render_url_to_image(url: &str, width: u32, height: u32) -> RgbaImage {
@@ -50,6 +54,10 @@ fn render_to_image_with_base(
 
     let dom = Parser::new(html).parse_document();
 
+    if let Some(image) = render_blitz_to_image(&dom, base_url, identity, width, height) {
+        return image;
+    }
+
     let mut stylesheet = Stylesheet::from_dom(&dom, base_url, identity);
     stylesheet.merge(Stylesheet::user_agent_stylesheet());
     let style_tree = StyleTree::from_dom(&dom, &stylesheet);
@@ -61,6 +69,29 @@ fn render_to_image_with_base(
     paint_layout_box(layout.root(), &mut backend, &images, 1.0);
 
     backend.image
+}
+
+fn render_blitz_to_image(
+    dom: &crate::dom::NodePtr,
+    base_url: Option<&str>,
+    identity: &Identity,
+    width: u32,
+    height: u32,
+) -> Option<RgbaImage> {
+    catch_unwind(AssertUnwindSafe(|| {
+        let mut doc = BlitzDocument::try_from_dom(dom, base_url, identity, width, height)?;
+        let mut renderer = VelloImageRenderer::new(width, height);
+        let mut pixels = Vec::new();
+        renderer.render_to_vec(
+            |painter| {
+                doc.paint_with(painter, width, height);
+            },
+            &mut pixels,
+        );
+        RgbaImage::from_vec(width, height, pixels)
+    }))
+    .ok()
+    .flatten()
 }
 
 fn paint_layout_box(

@@ -39,12 +39,16 @@ impl EngineKind {
 pub(crate) fn create_runtime(
     kind: EngineKind,
     dom: &NodePtr,
+    render_document: Option<Rc<RefCell<crate::blitz_document::BlitzDocument>>>,
 ) -> Result<Box<dyn JsRuntime>, String> {
     match kind {
         EngineKind::V8 => {
             #[cfg(feature = "v8")]
             {
-                Ok(Box::new(crate::js_v8::V8Runtime::new(dom.clone())))
+                Ok(Box::new(crate::js_v8::V8Runtime::with_render_document(
+                    dom.clone(),
+                    render_document,
+                )))
             }
             #[cfg(not(feature = "v8"))]
             {

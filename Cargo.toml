@@ -81,6 +81,7 @@ blitz-html = "0.3.0-alpha.4"
 blitz-paint = "0.3.0-alpha.4"
 blitz-traits = "=0.3.0-alpha.4"
 anyrender_vello = "0.10.1"
+anyrender = "0.10.0"
 v8 = { version = "150.0.0", optional = true }
 dioxus = { version = "0.7.9", default-features = false, features = ["macro", "signals", "hooks", "html"] }
 dioxus-ssr = "0.7.9"

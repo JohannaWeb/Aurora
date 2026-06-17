@@ -121,6 +121,70 @@ impl NodeRegistry {
         *self.render_document.borrow_mut() = render_document;
     }
 
+    pub(super) fn has_render_document(&self) -> bool {
+        self.render_document.borrow().is_some()
+    }
+
+    pub(super) fn blitz_node_id(&self, node: &NodePtr) -> Option<usize> {
+        self.render_document
+            .borrow()
+            .as_ref()
+            .and_then(|doc| doc.borrow().blitz_node_id_for_dom(node))
+    }
+
+    pub(super) fn dom_node_for_blitz_id(&self, node_id: usize) -> Option<NodePtr> {
+        self.render_document
+            .borrow()
+            .as_ref()
+            .and_then(|doc| doc.borrow().dom_node_for_blitz_id(node_id))
+    }
+
+    pub(super) fn query_selector_dom(&self, selector: &str, start: &NodePtr) -> Option<NodePtr> {
+        self.render_document
+            .borrow()
+            .as_ref()
+            .and_then(|doc| doc.borrow().query_selector_dom(selector, start))
+    }
+
+    pub(super) fn query_selector_all_dom(
+        &self,
+        selector: &str,
+        start: &NodePtr,
+    ) -> Option<Vec<NodePtr>> {
+        self.render_document
+            .borrow()
+            .as_ref()
+            .and_then(|doc| doc.borrow().query_selector_all_dom(selector, start))
+    }
+
+    pub(super) fn get_element_by_id_dom(&self, id: &str) -> Option<NodePtr> {
+        self.render_document
+            .borrow()
+            .as_ref()
+            .and_then(|doc| doc.borrow().get_element_by_id_dom(id))
+    }
+
+    pub(super) fn collect_by_tag_dom(&self, tag: &str, start: &NodePtr) -> Option<Vec<NodePtr>> {
+        self.render_document
+            .borrow()
+            .as_ref()
+            .and_then(|doc| doc.borrow().collect_by_tag_dom(tag, start))
+    }
+
+    pub(super) fn selector_matches_dom(&self, node: &NodePtr, selector: &str) -> Option<bool> {
+        self.render_document
+            .borrow()
+            .as_ref()
+            .and_then(|doc| doc.borrow().selector_matches_dom(node, selector))
+    }
+
+    pub(super) fn closest_dom(&self, node: &NodePtr, selector: &str) -> Option<Option<NodePtr>> {
+        self.render_document
+            .borrow()
+            .as_ref()
+            .and_then(|doc| doc.borrow().closest_dom(node, selector))
+    }
+
     pub(super) fn sync_append_child_to_render_document(&self, parent: &NodePtr, child: &NodePtr) {
         if let Some(render_document) = self.render_document.borrow().as_ref().cloned() {
             render_document.borrow_mut().sync_append_child(parent, child);
@@ -196,11 +260,12 @@ impl NodeRegistry {
         &self,
         host: &NodePtr,
         shadow_root: &NodePtr,
+        mode: &str,
     ) {
         if let Some(render_document) = self.render_document.borrow().as_ref().cloned() {
             render_document
                 .borrow_mut()
-                .sync_attach_shadow_root(host, shadow_root);
+                .sync_attach_shadow_root(host, shadow_root, mode);
         }
     }
 

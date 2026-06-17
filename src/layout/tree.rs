@@ -1,6 +1,7 @@
+use crate::css::{EdgeSizes, Margin, StyleMap};
 use crate::style::StyleTree;
 
-use super::LayoutBox;
+use super::{LayoutBox, LayoutKind, Rect};
 use super::constants::{DEFAULT_VIEWPORT_HEIGHT, DEFAULT_VIEWPORT_WIDTH};
 use super::engine::layout_root_from_style_tree;
 
@@ -37,6 +38,26 @@ impl LayoutTree {
     pub fn from_style_tree_with_viewport(style_tree: &StyleTree, viewport: ViewportSize) -> Self {
         let root = layout_root_from_style_tree(style_tree, viewport);
         Self { root }
+    }
+
+    pub fn placeholder(viewport: ViewportSize) -> Self {
+        Self {
+            root: LayoutBox {
+                node: None,
+                kind: LayoutKind::Viewport,
+                rect: Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    width: viewport.width,
+                    height: viewport.height,
+                },
+                styles: StyleMap::default(),
+                margin: Margin::zero(),
+                border: EdgeSizes::zero(),
+                padding: EdgeSizes::zero(),
+                children: Vec::new(),
+            },
+        }
     }
 
     #[cfg(feature = "taffy-document")]

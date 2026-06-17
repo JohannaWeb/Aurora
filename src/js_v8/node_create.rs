@@ -8,6 +8,7 @@ use v8;
 
 pub(super) struct NodeData {
     pub node: NodePtr,
+    pub blitz_node_id: Option<usize>,
     pub registry: Rc<NodeRegistry>,
     pub document: NodePtr,
 }
@@ -34,9 +35,17 @@ pub(super) fn create_js_node<'s>(
         v8_str(scope, "nodeName").into(),
         v8_str(scope, &node_name(&node)).into(),
     );
+    let blitz_node_id = registry.blitz_node_id(&node);
+    if let Some(blitz_id) = blitz_node_id {
+        template.set(
+            v8_str(scope, "__aurora_blitz_node_id").into(),
+            v8::Integer::new(scope, blitz_id as i32).into(),
+        );
+    }
 
     let node_data = Box::into_raw(Box::new(NodeData {
         node: node.clone(),
+        blitz_node_id,
         registry: registry.clone(),
         document: document.clone(),
     })) as *mut _;
@@ -334,8 +343,9 @@ pub(super) fn create_js_node<'s>(
         node_external,
     );
 
-    // Shadow DOM — the returned "root" proxies the host node itself (no real
-    // shadow tree separation).
+    // Shadow DOM — attachShadow creates a distinct ShadowRoot fragment. Blitz
+    // currently paints it through a native shadow container while JS keeps the
+    // root separate from the host's light children.
     install_method(
         scope,
         template,
@@ -616,11 +626,17 @@ fn node_from_js(
     let obj = val.to_object(scope).unwrap();
     let key = v8_str(scope, "__aurora_node_id");
     let id_val = obj.get(scope, key.into())?;
-    if !id_val.is_int32() {
+    if id_val.is_int32() {
+        let id = id_val.int32_value(scope).unwrap() as u32;
+        return registry.lookup(id);
+    }
+    let blitz_key = v8_str(scope, "__aurora_blitz_node_id");
+    let blitz_id_val = obj.get(scope, blitz_key.into())?;
+    if !blitz_id_val.is_int32() {
         return None;
     }
-    let id = id_val.int32_value(scope).unwrap() as u32;
-    registry.lookup(id)
+    let blitz_id = blitz_id_val.int32_value(scope).unwrap() as usize;
+    registry.dom_node_for_blitz_id(blitz_id)
 }
 
 fn is_document_fragment(node: &NodePtr) -> bool {
@@ -652,7 +668,15 @@ fn query_selector(
     let external = v8::Local::<v8::External>::try_from(data).unwrap();
     let node_data = unsafe { &*(external.value() as *const NodeData) };
 
-    if let Some(found) = query::query_first(&node_data.document, &selector, &node_data.node) {
+    let found = if node_data.registry.has_render_document() {
+        node_data
+            .registry
+            .query_selector_all_dom(&selector, &node_data.node)
+            .and_then(|nodes| nodes.into_iter().next())
+    } else {
+        query::query_first(&node_data.document, &selector, &node_data.node)
+    };
+    if let Some(found) = found {
         let js_node = create_js_node(scope, found, &node_data.registry, &node_data.document);
         retval.set(js_node.into());
     } else {
@@ -670,7 +694,14 @@ fn query_selector_all(
     let external = v8::Local::<v8::External>::try_from(data).unwrap();
     let node_data = unsafe { &*(external.value() as *const NodeData) };
 
-    let found = query::query_all(&node_data.document, &selector, &node_data.node);
+    let found = if node_data.registry.has_render_document() {
+        node_data
+            .registry
+            .query_selector_all_dom(&selector, &node_data.node)
+            .unwrap_or_default()
+    } else {
+        query::query_all(&node_data.document, &selector, &node_data.node)
+    };
     let array = v8::Array::new(scope, found.len() as i32);
     for (i, node) in found.into_iter().enumerate() {
         let js_node = create_js_node(scope, node, &node_data.registry, &node_data.document);
@@ -689,8 +720,16 @@ fn get_elements_by_tag_name(
     let external = v8::Local::<v8::External>::try_from(data).unwrap();
     let node_data = unsafe { &*(external.value() as *const NodeData) };
 
-    let mut out = Vec::new();
-    query::collect_by_tag(&node_data.node, &tag, &mut out);
+    let out = if node_data.registry.has_render_document() {
+        node_data
+            .registry
+            .collect_by_tag_dom(&tag, &node_data.node)
+            .unwrap_or_default()
+    } else {
+        let mut out = Vec::new();
+        query::collect_by_tag(&node_data.node, &tag, &mut out);
+        out
+    };
 
     let array = v8::Array::new(scope, out.len() as i32);
     for (i, node) in out.into_iter().enumerate() {
@@ -710,7 +749,14 @@ fn matches(
     let external = v8::Local::<v8::External>::try_from(data).unwrap();
     let node_data = unsafe { &*(external.value() as *const NodeData) };
 
-    let matched = query::selector_matches(&node_data.node, &selector, &node_data.document);
+    let matched = if node_data.registry.has_render_document() {
+        node_data
+            .registry
+            .selector_matches_dom(&node_data.node, &selector)
+            .unwrap_or(false)
+    } else {
+        query::selector_matches(&node_data.node, &selector, &node_data.document)
+    };
     retval.set(v8::Boolean::new(scope, matched).into());
 }
 
@@ -723,6 +769,20 @@ fn closest(
     let data = args.data();
     let external = v8::Local::<v8::External>::try_from(data).unwrap();
     let node_data = unsafe { &*(external.value() as *const NodeData) };
+
+    if node_data.registry.has_render_document() {
+        let found = node_data
+            .registry
+            .closest_dom(&node_data.node, &selector)
+            .flatten();
+        if let Some(found) = found {
+            let js_node = create_js_node(scope, found, &node_data.registry, &node_data.document);
+            retval.set(js_node.into());
+        } else {
+            retval.set(v8::null(scope).into());
+        }
+        return;
+    }
 
     let mut current = Some(node_data.node.clone());
     while let Some(n) = current {
@@ -2120,7 +2180,14 @@ fn get_elements_by_class_name(
     );
     let external = v8::Local::<v8::External>::try_from(args.data()).unwrap();
     let node_data = unsafe { &*(external.value() as *const NodeData) };
-    let found = query::query_all(&node_data.document, &selector, &node_data.node);
+    let found = if node_data.registry.has_render_document() {
+        node_data
+            .registry
+            .query_selector_all_dom(&selector, &node_data.node)
+            .unwrap_or_default()
+    } else {
+        query::query_all(&node_data.document, &selector, &node_data.node)
+    };
     let array = nodes_to_array(scope, found, node_data);
     retval.set(array.into());
 }
@@ -2205,7 +2272,7 @@ fn attach_shadow(
     };
     node_data
         .registry
-        .sync_shadow_root_to_render_document(&node_data.node, &shadow_root);
+        .sync_shadow_root_to_render_document(&node_data.node, &shadow_root, &mode);
 
     let shadow_id = node_data.registry.register(shadow_root.clone());
     let sr = create_js_node(
@@ -2248,8 +2315,10 @@ fn attach_shadow(
     // Upgraded elements inherit ShadyDOM's getter-only `__shady_shadowRoot`
     // accessor via the patched constructor-stub prototypes, which makes plain
     // [[Set]] a silent no-op. Define own data properties to bypass it.
-    let shadow_root_key = v8_str(scope, "shadowRoot");
-    host.create_data_property(scope, shadow_root_key.into(), sr.into());
+    if mode == "open" {
+        let shadow_root_key = v8_str(scope, "shadowRoot");
+        host.create_data_property(scope, shadow_root_key.into(), sr.into());
+    }
     let shady_shadow_root_key = v8_str(scope, "__shady_shadowRoot");
     host.create_data_property(scope, shady_shadow_root_key.into(), sr.into());
 

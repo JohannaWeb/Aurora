@@ -43,11 +43,29 @@ pub(crate) fn run_browser(cli: CliOptions, identity: Identity) {
 
     let mut stylesheet = Stylesheet::from_dom(&dom, base_url.as_deref(), &identity);
     stylesheet.merge(Stylesheet::user_agent_stylesheet());
-    let style_tree = StyleTree::from_dom(&dom, &stylesheet);
-    let layout = LayoutTree::from_style_tree_with_viewport(&style_tree, content_viewport);
-    let image_cache = load_images(layout.root(), base_url.as_deref(), &identity);
-    let svg_cache = load_svgs(layout.root(), base_url.as_deref(), &identity);
-    let media_cache = crate::MediaCache::load(layout.root(), base_url.as_deref(), &identity);
+    let sync_legacy_layout = blitz_doc.is_none()
+        || cli.debug_style
+        || cli.debug_layout
+        || matches!(
+            env::var("AURORA_LEGACY_LAYOUT_SYNC").as_deref(),
+            Ok("1") | Ok("true") | Ok("TRUE") | Ok("yes") | Ok("YES")
+        );
+    let (style_tree, layout, image_cache, svg_cache, media_cache) = if sync_legacy_layout {
+        let style_tree = StyleTree::from_dom(&dom, &stylesheet);
+        let layout = LayoutTree::from_style_tree_with_viewport(&style_tree, content_viewport);
+        let image_cache = load_images(layout.root(), base_url.as_deref(), &identity);
+        let svg_cache = load_svgs(layout.root(), base_url.as_deref(), &identity);
+        let media_cache = crate::MediaCache::load(layout.root(), base_url.as_deref(), &identity);
+        (Some(style_tree), layout, image_cache, svg_cache, media_cache)
+    } else {
+        (
+            None,
+            LayoutTree::placeholder(content_viewport),
+            crate::ImageCache::default(),
+            crate::SvgCache::default(),
+            crate::MediaCache::default(),
+        )
+    };
 
     let stylesheet_rc = Rc::new(RefCell::new(stylesheet));
     let viewport_rc = Rc::new(RefCell::new(viewport));
@@ -61,7 +79,7 @@ pub(crate) fn run_browser(cli: CliOptions, identity: Identity) {
         runtime.clear_dirty_bits();
     }
 
-    print_debug_output(&cli, &dom, &style_tree, &layout_rc.borrow());
+    print_debug_output(&cli, &dom, style_tree.as_ref(), &layout_rc.borrow());
     let _ = crate::font::get_glyph_metrics('A');
 
     if env::var("AURORA_DEBUG_RENDER").is_ok() {
@@ -163,9 +181,12 @@ fn run_scripts(
     };
 
     let mut runtime: Box<dyn crate::js_engine::JsRuntime> =
-        crate::js_engine::create_runtime(crate::js_engine::EngineKind::from_env(), dom)
+        crate::js_engine::create_runtime(
+            crate::js_engine::EngineKind::from_env(),
+            dom,
+            render_document,
+        )
             .expect("V8 backend is required for JavaScript execution");
-    runtime.set_render_document(render_document);
     if let Some(url) = base_url {
         // `{url:?}` produces a quoted, escaped string literal valid in JS.
         let _ = runtime.execute(&format!(
@@ -335,14 +356,16 @@ pub fn fetch_script(
 fn print_debug_output(
     cli: &CliOptions,
     dom: &crate::dom::NodePtr,
-    style_tree: &StyleTree,
+    style_tree: Option<&StyleTree>,
     layout: &LayoutTree,
 ) {
     if cli.debug_dom {
         println!("{}", dom.borrow());
     }
     if cli.debug_style {
-        println!("{style_tree}");
+        if let Some(style_tree) = style_tree {
+            println!("{style_tree}");
+        }
     }
     if cli.debug_layout {
         println!("{layout}");

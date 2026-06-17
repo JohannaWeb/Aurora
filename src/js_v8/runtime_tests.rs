@@ -1357,7 +1357,7 @@ fn v8_supports_document_structure_and_screen() {
 #[test]
 fn engines_hot_swap_behind_the_js_runtime_trait() {
     let dom = blank_dom();
-    let mut runtime: Box<dyn JsRuntime> = create_runtime(EngineKind::V8, &dom).unwrap();
+    let mut runtime: Box<dyn JsRuntime> = create_runtime(EngineKind::V8, &dom, None).unwrap();
 
     runtime
         .execute("globalThis.answer = 6 * 7;")

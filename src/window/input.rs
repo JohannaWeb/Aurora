@@ -204,9 +204,9 @@ impl WindowInput {
             let mut rt: Box<dyn JsRuntime> = crate::js_engine::create_runtime(
                 crate::js_engine::EngineKind::from_env(),
                 &new_dom,
+                new_blitz_doc.clone(),
             )
             .expect("V8 backend is required for JavaScript execution");
-            rt.set_render_document(new_blitz_doc.clone());
             for (script, content) in scripts.iter().zip(fetched.into_iter()) {
                 let Some(content) = content else { continue };
                 rt.set_current_script(Some(&script.node));

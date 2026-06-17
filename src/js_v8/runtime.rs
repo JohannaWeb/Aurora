@@ -40,6 +40,13 @@ struct DocumentData {
 
 impl V8Runtime {
     pub(crate) fn new(document: NodePtr) -> Self {
+        Self::with_render_document(document, None)
+    }
+
+    pub(crate) fn with_render_document(
+        document: NodePtr,
+        render_document: Option<Rc<RefCell<crate::blitz_document::BlitzDocument>>>,
+    ) -> Self {
         ensure_platform();
         // Establish the parent back-pointer invariant for the initial tree so
         // connectivity/ancestor queries are O(depth); the parent pointer is then
@@ -51,6 +58,7 @@ impl V8Runtime {
         // Make the document reachable from the registry (used by e.g.
         // MutationObserver record construction, which only has the registry).
         *registry.document.borrow_mut() = Some(document.clone());
+        registry.set_render_document(render_document);
 
         let context = {
             v8::scope!(let scope, &mut isolate);
@@ -146,22 +154,31 @@ impl V8Runtime {
             global.set(scope, v8_str(scope, "document").into(), document_obj.into());
 
             // Set document structure fields
-            let mut bodies = Vec::new();
-            query::collect_by_tag(&document, "body", &mut bodies);
+            let bodies = registry.collect_by_tag_dom("body", &document).unwrap_or_else(|| {
+                let mut bodies = Vec::new();
+                query::collect_by_tag(&document, "body", &mut bodies);
+                bodies
+            });
             if let Some(body_node) = bodies.first() {
                 let js_body = create_js_node(scope, body_node.clone(), &registry, &document);
                 document_obj.set(scope, v8_str(scope, "body").into(), js_body.into());
             }
 
-            let mut heads = Vec::new();
-            query::collect_by_tag(&document, "head", &mut heads);
+            let heads = registry.collect_by_tag_dom("head", &document).unwrap_or_else(|| {
+                let mut heads = Vec::new();
+                query::collect_by_tag(&document, "head", &mut heads);
+                heads
+            });
             if let Some(head_node) = heads.first() {
                 let js_head = create_js_node(scope, head_node.clone(), &registry, &document);
                 document_obj.set(scope, v8_str(scope, "head").into(), js_head.into());
             }
 
-            let mut htmls = Vec::new();
-            query::collect_by_tag(&document, "html", &mut htmls);
+            let htmls = registry.collect_by_tag_dom("html", &document).unwrap_or_else(|| {
+                let mut htmls = Vec::new();
+                query::collect_by_tag(&document, "html", &mut htmls);
+                htmls
+            });
             if let Some(html_node) = htmls.first() {
                 let js_html = create_js_node(scope, html_node.clone(), &registry, &document);
                 document_obj.set(
@@ -181,8 +198,11 @@ impl V8Runtime {
             document_obj.set(scope, v8_str(scope, "defaultView").into(), global.into());
 
             // document.title
-            let mut titles = Vec::new();
-            query::collect_by_tag(&document, "title", &mut titles);
+            let titles = registry.collect_by_tag_dom("title", &document).unwrap_or_else(|| {
+                let mut titles = Vec::new();
+                query::collect_by_tag(&document, "title", &mut titles);
+                titles
+            });
             if let Some(title_node) = titles.first() {
                 let text = mutation::collect_text(title_node);
                 document_obj.set(
@@ -839,7 +859,12 @@ fn get_element_by_id(
     let doc_data_ptr = external.value() as *const DocumentData;
     let doc_data = unsafe { &*doc_data_ptr };
 
-    if let Some(node) = query::find_by_id(&doc_data.document, &id) {
+    let node = if doc_data.registry.has_render_document() {
+        doc_data.registry.get_element_by_id_dom(&id)
+    } else {
+        query::find_by_id(&doc_data.document, &id)
+    };
+    if let Some(node) = node {
         let js_node = create_js_node(scope, node, &doc_data.registry, &doc_data.document);
         retval.set(js_node.into());
     } else {
@@ -858,8 +883,16 @@ fn get_elements_by_tag_name(
     let doc_data_ptr = external.value() as *const DocumentData;
     let doc_data = unsafe { &*doc_data_ptr };
 
-    let mut out = Vec::new();
-    query::collect_by_tag(&doc_data.document, &tag, &mut out);
+    let out = if doc_data.registry.has_render_document() {
+        doc_data
+            .registry
+            .collect_by_tag_dom(&tag, &doc_data.document)
+            .unwrap_or_default()
+    } else {
+        let mut out = Vec::new();
+        query::collect_by_tag(&doc_data.document, &tag, &mut out);
+        out
+    };
 
     let array = v8::Array::new(scope, out.len() as i32);
     for (i, node) in out.into_iter().enumerate() {
@@ -880,7 +913,15 @@ fn query_selector(
     let doc_data_ptr = external.value() as *const DocumentData;
     let doc_data = unsafe { &*doc_data_ptr };
 
-    if let Some(node) = query::query_first(&doc_data.document, &selector, &doc_data.document) {
+    let node = if doc_data.registry.has_render_document() {
+        doc_data
+            .registry
+            .query_selector_all_dom(&selector, &doc_data.document)
+            .and_then(|nodes| nodes.into_iter().next())
+    } else {
+        query::query_first(&doc_data.document, &selector, &doc_data.document)
+    };
+    if let Some(node) = node {
         let js_node = create_js_node(scope, node, &doc_data.registry, &doc_data.document);
         retval.set(js_node.into());
     } else {
@@ -899,7 +940,14 @@ fn query_selector_all(
     let doc_data_ptr = external.value() as *const DocumentData;
     let doc_data = unsafe { &*doc_data_ptr };
 
-    let found = query::query_all(&doc_data.document, &selector, &doc_data.document);
+    let found = if doc_data.registry.has_render_document() {
+        doc_data
+            .registry
+            .query_selector_all_dom(&selector, &doc_data.document)
+            .unwrap_or_default()
+    } else {
+        query::query_all(&doc_data.document, &selector, &doc_data.document)
+    };
     let array = v8::Array::new(scope, found.len() as i32);
     for (i, node) in found.into_iter().enumerate() {
         let js_node = create_js_node(scope, node, &doc_data.registry, &doc_data.document);

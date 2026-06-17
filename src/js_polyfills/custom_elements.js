@@ -352,13 +352,11 @@
             }
 
             // ── ShadyCSS-lite ────────────────────────────────────────────────
-            // Aurora flattens shadow DOM into light DOM (attachShadow proxies the
-            // host's own subtree) and paints via blitz/Stylo from a serialized
-            // light-DOM HTML string. A component's <style> lives inside its
-            // <dom-module><template>, which is inert and never serialized — and
-            // even when reached, its shadow-scoped selectors (:host, ::slotted)
-            // match nothing in the flattened tree, so components stamp but render
-            // unstyled (collapsed layout boxes).
+            // Aurora represents shadow DOM in Blitz with synthetic marker nodes
+            // rather than native shadow-tree styling. A component's <style> may
+            // live inside <dom-module><template>, and its shadow-scoped selectors
+            // (:host, ::slotted) do not match the synthetic render tree directly,
+            // so components can stamp but render unstyled (collapsed layout boxes).
             //
             // This shim hoists each dom-module's <style> into <head> (light DOM,
             // so it serializes and paints) and rewrites the shadow-scoped
