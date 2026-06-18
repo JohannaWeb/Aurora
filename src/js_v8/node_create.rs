@@ -2,7 +2,7 @@ use super::registry::NodeRegistry;
 use super::selectors::query;
 use super::style_class::{classlist, style};
 use super::tree::{mutation, navigation};
-use crate::dom::{Node, NodePtr};
+use crate::dom::{Node, NodePtr, ShadowTreeBackend};
 use std::rc::Rc;
 use v8;
 
@@ -301,6 +301,16 @@ pub(super) fn create_js_node<'s>(
         template,
         "getClientRects",
         get_client_rects,
+        node_external,
+    );
+    // Native bridge to Blitz/Stylo layout (Phase 8.2). v8_post.js's metric
+    // getters call this so `offsetWidth`/`clientWidth`/etc. report the real
+    // rendered box size, falling back to their heuristic only when unlaid out.
+    install_method(
+        scope,
+        template,
+        "__aurora_metric__",
+        get_layout_metric,
         node_external,
     );
     install_method(scope, template, "getRootNode", get_root_node, node_external);
@@ -811,17 +821,12 @@ fn append_child(
         } else {
             Vec::new()
         };
-        let target_id = node_data.registry.register(node_data.node.clone());
-        let child_id = node_data.registry.register(child.clone());
-        node_data
-            .registry
-            .sync_append_child_to_render_document(&node_data.node, &child);
-        mutation::append_child_ptr(&node_data.node, &child);
-        super::mutation_observer::queue_childlist(
+        let _mutation_result = mutation::apply_dom_mutation(
             &node_data.registry,
-            target_id,
-            vec![child_id],
-            vec![],
+            mutation::DomMutation::AppendChild {
+                parent: &node_data.node,
+                child: &child,
+            },
         );
         if fragment_children.is_empty() {
             if let Ok(child_obj) = v8::Local::<v8::Object>::try_from(args.get(0)) {
@@ -852,19 +857,13 @@ fn remove_child(
     let node_data = unsafe { &*(external.value() as *const NodeData) };
 
     if let Some(child) = node_from_js(scope, args.get(0), &node_data.registry) {
-        let target_id = node_data.registry.register(node_data.node.clone());
-        let child_id = node_data.registry.register(child.clone());
-        node_data
-            .registry
-            .sync_remove_child_from_render_document(&child);
-        mutation::remove_child_ptr(&node_data.node, &child);
-        super::mutation_observer::queue_childlist(
+        let _mutation_result = mutation::apply_dom_mutation(
             &node_data.registry,
-            target_id,
-            vec![],
-            vec![child_id],
+            mutation::DomMutation::RemoveChild {
+                parent: &node_data.node,
+                child: &child,
+            },
         );
-        node_data.registry.mark_layout_dirty(&node_data.node);
         retval.set(args.get(0));
     } else {
         retval.set(v8::null(scope).into());
@@ -889,17 +888,13 @@ fn insert_before(
         } else {
             Vec::new()
         };
-        let target_id = node_data.registry.register(node_data.node.clone());
-        let new_id = node_data.registry.register(new_c.clone());
-        node_data
-            .registry
-            .sync_insert_before_to_render_document(&node_data.node, &new_c, ref_child.as_ref());
-        mutation::insert_before_ptr(&node_data.node, &new_c, ref_child.as_ref());
-        super::mutation_observer::queue_childlist(
+        let _mutation_result = mutation::apply_dom_mutation(
             &node_data.registry,
-            target_id,
-            vec![new_id],
-            vec![],
+            mutation::DomMutation::InsertBefore {
+                parent: &node_data.node,
+                new_child: &new_c,
+                ref_child: ref_child.as_ref(),
+            },
         );
         if fragment_children.is_empty() {
             if let Ok(new_obj) = v8::Local::<v8::Object>::try_from(args.get(0)) {
@@ -938,18 +933,13 @@ fn replace_child(
         } else {
             Vec::new()
         };
-        let target_id = node_data.registry.register(node_data.node.clone());
-        let new_id = node_data.registry.register(new_c.clone());
-        let old_id = node_data.registry.register(old_c.clone());
-        node_data
-            .registry
-            .sync_replace_child_in_render_document(&node_data.node, &new_c, &old_c);
-        mutation::replace_child_ptr(&node_data.node, &new_c, &old_c);
-        super::mutation_observer::queue_childlist(
+        let _mutation_result = mutation::apply_dom_mutation(
             &node_data.registry,
-            target_id,
-            vec![new_id],
-            vec![old_id],
+            mutation::DomMutation::ReplaceChild {
+                parent: &node_data.node,
+                new_child: &new_c,
+                old_child: &old_c,
+            },
         );
         if fragment_children.is_empty() {
             if let Ok(new_obj) = v8::Local::<v8::Object>::try_from(args.get(0)) {
@@ -980,19 +970,13 @@ fn remove_node(
     let node_data = unsafe { &*(external.value() as *const NodeData) };
 
     if let Some(parent) = find_parent_for_node(node_data) {
-        let parent_id = node_data.registry.register(parent.clone());
-        let child_id = node_data.registry.register(node_data.node.clone());
-        node_data
-            .registry
-            .sync_remove_child_from_render_document(&node_data.node);
-        mutation::remove_child_ptr(&parent, &node_data.node);
-        super::mutation_observer::queue_childlist(
+        let _mutation_result = mutation::apply_dom_mutation(
             &node_data.registry,
-            parent_id,
-            vec![],
-            vec![child_id],
+            mutation::DomMutation::RemoveChild {
+                parent: &parent,
+                child: &node_data.node,
+            },
         );
-        node_data.registry.mark_layout_dirty(&parent);
     }
 }
 
@@ -1120,19 +1104,14 @@ fn set_attribute(
     let external = v8::Local::<v8::External>::try_from(data).unwrap();
     let node_data = unsafe { &*(external.value() as *const NodeData) };
 
-    let mut changed = false;
-    if let Node::Element(el) = &mut *node_data.node.borrow_mut() {
-        el.attributes.insert(name.clone(), value.clone());
-        node_data.registry.mark_style_dirty(&node_data.node);
-        changed = true;
-    }
-    if changed {
-        node_data
-            .registry
-            .sync_attribute_to_render_document(&node_data.node, &name, &value);
-        let target_id = node_data.registry.register(node_data.node.clone());
-        super::mutation_observer::queue_attribute(&node_data.registry, target_id, &name);
-    }
+    let _mutation_result = mutation::apply_dom_mutation(
+        &node_data.registry,
+        mutation::DomMutation::SetAttribute {
+            node: &node_data.node,
+            name: &name,
+            value: &value,
+        },
+    );
 }
 
 fn remove_attribute(
@@ -1145,19 +1124,13 @@ fn remove_attribute(
     let external = v8::Local::<v8::External>::try_from(data).unwrap();
     let node_data = unsafe { &*(external.value() as *const NodeData) };
 
-    let mut changed = false;
-    if let Node::Element(el) = &mut *node_data.node.borrow_mut() {
-        el.attributes.remove(&name);
-        node_data.registry.mark_style_dirty(&node_data.node);
-        changed = true;
-    }
-    if changed {
-        node_data
-            .registry
-            .sync_remove_attribute_from_render_document(&node_data.node, &name);
-        let target_id = node_data.registry.register(node_data.node.clone());
-        super::mutation_observer::queue_attribute(&node_data.registry, target_id, &name);
-    }
+    let _mutation_result = mutation::apply_dom_mutation(
+        &node_data.registry,
+        mutation::DomMutation::RemoveAttribute {
+            node: &node_data.node,
+            name: &name,
+        },
+    );
 }
 
 fn has_attribute(
@@ -1363,18 +1336,18 @@ fn named_node_map_set_named_item(
 
     let external = v8::Local::<v8::External>::try_from(args.data()).unwrap();
     let node_data = unsafe { &*(external.value() as *const NodeData) };
-    let old = {
-        let mut node = node_data.node.borrow_mut();
-        if let Node::Element(el) = &mut *node {
-            el.attributes.insert(name.clone(), value.clone())
-        } else {
-            None
-        }
+    let old = match &*node_data.node.borrow() {
+        Node::Element(el) => el.attributes.get(&name).cloned(),
+        _ => None,
     };
-    node_data.registry.mark_style_dirty(&node_data.node);
-    node_data
-        .registry
-        .sync_attribute_to_render_document(&node_data.node, &name, &value);
+    let _mutation_result = mutation::apply_dom_mutation(
+        &node_data.registry,
+        mutation::DomMutation::SetAttribute {
+            node: &node_data.node,
+            name: &name,
+            value: &value,
+        },
+    );
     match old {
         Some(old) => retval.set(build_attr_object(scope, &name, &old).into()),
         None => retval.set(v8::null(scope).into()),
@@ -1389,19 +1362,18 @@ fn named_node_map_remove_named_item(
     let name = args.get(0).to_rust_string_lossy(scope);
     let external = v8::Local::<v8::External>::try_from(args.data()).unwrap();
     let node_data = unsafe { &*(external.value() as *const NodeData) };
-    let old = {
-        let mut node = node_data.node.borrow_mut();
-        if let Node::Element(el) = &mut *node {
-            el.attributes.remove(&name)
-        } else {
-            None
-        }
+    let old = match &*node_data.node.borrow() {
+        Node::Element(el) => el.attributes.get(&name).cloned(),
+        _ => None,
     };
     if old.is_some() {
-        node_data.registry.mark_style_dirty(&node_data.node);
-        node_data
-            .registry
-            .sync_remove_attribute_from_render_document(&node_data.node, &name);
+        let _mutation_result = mutation::apply_dom_mutation(
+            &node_data.registry,
+            mutation::DomMutation::RemoveAttribute {
+                node: &node_data.node,
+                name: &name,
+            },
+        );
     }
     match old {
         Some(old) => retval.set(build_attr_object(scope, &name, &old).into()),
@@ -1435,24 +1407,24 @@ fn set_attr_value(
     let external = v8::Local::<v8::External>::try_from(args.data()).unwrap();
     let node_data = unsafe { &*(external.value() as *const NodeData) };
     let value = value.to_rust_string_lossy(scope);
-    let mut new_attr_value = None;
-    if let Node::Element(el) = &mut *node_data.node.borrow_mut() {
-        if value.is_empty() {
-            el.attributes.remove(attr_name);
-        } else {
-            el.attributes.insert(attr_name.to_string(), value.clone());
-            new_attr_value = Some(value);
-        }
-        node_data.registry.mark_style_dirty(&node_data.node);
-    }
-    match new_attr_value {
-        Some(value) => node_data
-            .registry
-            .sync_attribute_to_render_document(&node_data.node, attr_name, &value),
-        None => node_data
-            .registry
-            .sync_remove_attribute_from_render_document(&node_data.node, attr_name),
-    }
+    let _mutation_result = if value.is_empty() {
+        mutation::apply_dom_mutation(
+            &node_data.registry,
+            mutation::DomMutation::RemoveAttribute {
+                node: &node_data.node,
+                name: attr_name,
+            },
+        )
+    } else {
+        mutation::apply_dom_mutation(
+            &node_data.registry,
+            mutation::DomMutation::SetAttribute {
+                node: &node_data.node,
+                name: attr_name,
+                value: &value,
+            },
+        )
+    };
 }
 
 fn get_id(
@@ -1655,21 +1627,13 @@ fn set_text_content(
     let node_data = unsafe { &*(external.value() as *const NodeData) };
 
     let text = value.to_rust_string_lossy(scope);
-    if matches!(&*node_data.node.borrow(), Node::Text(_)) {
-        mutation::set_text_content(&node_data.node, &text);
-        node_data
-            .registry
-            .sync_text_to_render_document(&node_data.node, &text);
-    } else {
-        node_data
-            .registry
-            .sync_clear_children_in_render_document(&node_data.node);
-        mutation::set_text_content(&node_data.node, &text);
-        crate::dom::reparent_subtree(&node_data.node);
-        node_data
-            .registry
-            .sync_children_to_render_document(&node_data.node);
-    }
+    let _mutation_result = mutation::apply_dom_mutation(
+        &node_data.registry,
+        mutation::DomMutation::SetTextContent {
+            node: &node_data.node,
+            text,
+        },
+    );
     node_data.registry.mark_layout_dirty(&node_data.node);
 }
 
@@ -1717,22 +1681,13 @@ fn set_inner_html(
     let html = value.to_rust_string_lossy(scope);
     let new_children = parsed_html_nodes(&html);
     let target = inner_html_target(&node_data.node);
-    node_data
-        .registry
-        .sync_clear_children_in_render_document(&target);
-    let replaced = if let Node::Element(el) = &mut *target.borrow_mut() {
-        el.children = new_children;
-        true
-    } else {
-        false
-    };
-    if replaced {
-        // Link the freshly parsed subtree (and its descendants) back to `target`.
-        crate::dom::reparent_subtree(&target);
-        node_data
-            .registry
-            .sync_children_to_render_document(&target);
-    }
+    let _mutation_result = mutation::apply_dom_mutation(
+        &node_data.registry,
+        mutation::DomMutation::ReplaceChildren {
+            node: &target,
+            children: new_children,
+        },
+    );
     node_data.registry.mark_layout_dirty(&node_data.node);
 }
 
@@ -1902,27 +1857,88 @@ fn node_remove_event_listener(
         .remove_event_listener(scope, node_id, &event_type, callback);
 }
 
+/// Build a DOMRect-shaped object from the node's Blitz/Stylo layout (Phase 8.2).
+/// Falls back to an all-zero rect when the node isn't laid out (no render
+/// document, or a collapsed/unmapped box), matching the previous stub behavior.
+fn bounding_rect_object<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    node_data: &NodeData,
+) -> v8::Local<'s, v8::Object> {
+    let m = node_data
+        .registry
+        .layout_metrics(&node_data.node)
+        .unwrap_or_default();
+    let obj = v8::Object::new(scope);
+    for (key, value) in [
+        ("x", m.x),
+        ("y", m.y),
+        ("left", m.x),
+        ("top", m.y),
+        ("right", m.x + m.width),
+        ("bottom", m.y + m.height),
+        ("width", m.width),
+        ("height", m.height),
+    ] {
+        let v = v8::Number::new(scope, value as f64);
+        obj.set(scope, v8_str(scope, key).into(), v.into());
+    }
+    obj
+}
+
 fn get_bounding_client_rect(
     scope: &mut v8::PinScope<'_, '_>,
-    _args: v8::FunctionCallbackArguments,
+    args: v8::FunctionCallbackArguments,
     mut retval: v8::ReturnValue,
 ) {
-    let obj = v8::Object::new(scope);
-    let zero = v8::Number::new(scope, 0.0);
-    for key in [
-        "top", "left", "right", "bottom", "width", "height", "x", "y",
-    ] {
-        obj.set(scope, v8_str(scope, key).into(), zero.into());
-    }
+    let external = v8::Local::<v8::External>::try_from(args.data()).unwrap();
+    let node_data = unsafe { &*(external.value() as *const NodeData) };
+    let obj = bounding_rect_object(scope, node_data);
     retval.set(obj.into());
 }
 
 fn get_client_rects(
     scope: &mut v8::PinScope<'_, '_>,
-    _args: v8::FunctionCallbackArguments,
+    args: v8::FunctionCallbackArguments,
     mut retval: v8::ReturnValue,
 ) {
-    retval.set(v8::Array::new(scope, 0).into());
+    let external = v8::Local::<v8::External>::try_from(args.data()).unwrap();
+    let node_data = unsafe { &*(external.value() as *const NodeData) };
+    let metrics = node_data.registry.layout_metrics(&node_data.node);
+    // A laid-out box exposes its single border-box rect; an unlaid-out node has
+    // no client rects.
+    match metrics {
+        Some(m) if m.width > 0.0 || m.height > 0.0 => {
+            let rect = bounding_rect_object(scope, node_data);
+            let array = v8::Array::new(scope, 1);
+            array.set_index(scope, 0, rect.into());
+            retval.set(array.into());
+        }
+        _ => retval.set(v8::Array::new(scope, 0).into()),
+    }
+}
+
+/// Native bridge used by v8_post.js metric getters: returns the requested box
+/// metric from Blitz/Stylo layout, or 0 when the node is not laid out (so the
+/// JS fallback heuristic can take over).
+fn get_layout_metric(
+    scope: &mut v8::PinScope<'_, '_>,
+    args: v8::FunctionCallbackArguments,
+    mut retval: v8::ReturnValue,
+) {
+    let external = v8::Local::<v8::External>::try_from(args.data()).unwrap();
+    let node_data = unsafe { &*(external.value() as *const NodeData) };
+    let name = args.get(0).to_rust_string_lossy(scope);
+    let value = match node_data.registry.layout_metrics(&node_data.node) {
+        Some(m) => match name.as_str() {
+            "offsetWidth" | "clientWidth" | "scrollWidth" => m.width,
+            "offsetHeight" | "clientHeight" | "scrollHeight" => m.height,
+            "offsetLeft" | "x" | "left" => m.x,
+            "offsetTop" | "y" | "top" => m.y,
+            _ => 0.0,
+        },
+        None => 0.0,
+    };
+    retval.set(v8::Number::new(scope, value as f64).into());
 }
 
 fn get_root_node(
@@ -1947,7 +1963,30 @@ fn append_children(
         } else {
             Node::text(arg.to_rust_string_lossy(scope))
         };
-        mutation::append_child_ptr(&node_data.node, &child);
+        let fragment_children = if is_document_fragment(&child) {
+            child_nodes_of(&child)
+        } else {
+            Vec::new()
+        };
+        let _mutation_result = mutation::apply_dom_mutation(
+            &node_data.registry,
+            mutation::DomMutation::AppendChild {
+                parent: &node_data.node,
+                child: &child,
+            },
+        );
+        if fragment_children.is_empty() {
+            if let Ok(child_obj) = v8::Local::<v8::Object>::try_from(arg) {
+                call_global_hook(scope, "__aurora_track_custom_element__", child_obj);
+            }
+        } else {
+            track_fragment_children(
+                scope,
+                &node_data.registry,
+                &node_data.document,
+                &fragment_children,
+            );
+        }
     }
     node_data.registry.mark_layout_dirty(&node_data.node);
 }
@@ -1960,12 +1999,7 @@ fn replace_children(
     let external = v8::Local::<v8::External>::try_from(args.data()).unwrap();
     let node_data = unsafe { &*(external.value() as *const NodeData) };
 
-    match &mut *node_data.node.borrow_mut() {
-        Node::Element(el) => el.children.clear(),
-        Node::Document { children, .. } => children.clear(),
-        _ => return,
-    }
-
+    let mut children = Vec::new();
     for i in 0..args.length() {
         let arg = args.get(i);
         let child = if let Some(node) = node_from_js(scope, arg, &node_data.registry) {
@@ -1973,8 +2007,15 @@ fn replace_children(
         } else {
             Node::text(arg.to_rust_string_lossy(scope))
         };
-        mutation::append_child_ptr(&node_data.node, &child);
+        children.push(child);
     }
+    let _mutation_result = mutation::apply_dom_mutation(
+        &node_data.registry,
+        mutation::DomMutation::ReplaceChildren {
+            node: &node_data.node,
+            children,
+        },
+    );
     node_data.registry.mark_layout_dirty(&node_data.node);
 }
 
@@ -1992,7 +2033,13 @@ fn prepend_children(
         } else {
             Node::text(arg.to_rust_string_lossy(scope))
         };
-        mutation::prepend_child_ptr(&node_data.node, &child);
+        let _mutation_result = mutation::apply_dom_mutation(
+            &node_data.registry,
+            mutation::DomMutation::PrependChild {
+                parent: &node_data.node,
+                child: &child,
+            },
+        );
     }
     node_data.registry.mark_layout_dirty(&node_data.node);
 }
@@ -2007,7 +2054,13 @@ fn replace_with(
     let parent = find_parent_for_node(node_data);
     insert_relative_to_self(scope, args, false);
     if let Some(parent) = parent {
-        mutation::remove_child_ptr(&parent, &node_data.node);
+        let _mutation_result = mutation::apply_dom_mutation(
+            &node_data.registry,
+            mutation::DomMutation::RemoveChild {
+                parent: &parent,
+                child: &node_data.node,
+            },
+        );
         node_data.registry.mark_layout_dirty(&parent);
     }
 }
@@ -2034,7 +2087,14 @@ fn insert_relative_to_self(
         } else {
             Node::text(arg.to_rust_string_lossy(scope))
         };
-        mutation::insert_before_ptr(&parent, &child, reference.as_ref());
+        let _mutation_result = mutation::apply_dom_mutation(
+            &node_data.registry,
+            mutation::DomMutation::InsertBefore {
+                parent: &parent,
+                new_child: &child,
+                ref_child: reference.as_ref(),
+            },
+        );
     }
     node_data.registry.mark_layout_dirty(&parent);
 }
@@ -2080,21 +2140,40 @@ fn insert_nodes_at_position(
                 return false;
             };
             for node in nodes {
-                mutation::insert_before_ptr(&parent, &node, Some(&node_data.node));
+                let _mutation_result = mutation::apply_dom_mutation(
+                    &node_data.registry,
+                    mutation::DomMutation::InsertBefore {
+                        parent: &parent,
+                        new_child: &node,
+                        ref_child: Some(&node_data.node),
+                    },
+                );
             }
             node_data.registry.mark_layout_dirty(&parent);
             true
         }
         "afterbegin" => {
             for node in nodes.into_iter().rev() {
-                mutation::prepend_child_ptr(&node_data.node, &node);
+                let _mutation_result = mutation::apply_dom_mutation(
+                    &node_data.registry,
+                    mutation::DomMutation::PrependChild {
+                        parent: &node_data.node,
+                        child: &node,
+                    },
+                );
             }
             node_data.registry.mark_layout_dirty(&node_data.node);
             true
         }
         "beforeend" => {
             for node in nodes {
-                mutation::append_child_ptr(&node_data.node, &node);
+                let _mutation_result = mutation::apply_dom_mutation(
+                    &node_data.registry,
+                    mutation::DomMutation::AppendChild {
+                        parent: &node_data.node,
+                        child: &node,
+                    },
+                );
             }
             node_data.registry.mark_layout_dirty(&node_data.node);
             true
@@ -2105,7 +2184,14 @@ fn insert_nodes_at_position(
             };
             let reference = sibling_for_node(node_data, 1, false);
             for node in nodes {
-                mutation::insert_before_ptr(&parent, &node, reference.as_ref());
+                let _mutation_result = mutation::apply_dom_mutation(
+                    &node_data.registry,
+                    mutation::DomMutation::InsertBefore {
+                        parent: &parent,
+                        new_child: &node,
+                        ref_child: reference.as_ref(),
+                    },
+                );
             }
             node_data.registry.mark_layout_dirty(&parent);
             true
@@ -2260,27 +2346,18 @@ fn attach_shadow(
         "open".to_string()
     };
 
-    let shadow_root = {
-        let mut host = node_data.node.borrow_mut();
-        match &mut *host {
-            Node::Element(el) => el
-                .shadow_root
-                .get_or_insert_with(|| Node::document_fragment(Vec::new()))
-                .clone(),
-            _ => Node::document_fragment(Vec::new()),
-        }
-    };
-    node_data
-        .registry
-        .sync_shadow_root_to_render_document(&node_data.node, &shadow_root, &mode);
+    let shadow_root = crate::dom::SyntheticShadowTreeBackend.attach_shadow(&node_data.node, &mode);
+    let _mutation_result = mutation::apply_dom_mutation(
+        &node_data.registry,
+        mutation::DomMutation::AttachShadow {
+            host: &node_data.node,
+            shadow_root: &shadow_root,
+            mode: &mode,
+        },
+    );
 
     let shadow_id = node_data.registry.register(shadow_root.clone());
-    let sr = create_js_node(
-        scope,
-        shadow_root,
-        &node_data.registry,
-        &node_data.document,
-    );
+    let sr = create_js_node(scope, shadow_root, &node_data.registry, &node_data.document);
     sr.set(
         scope,
         v8_str(scope, "__aurora_node_id").into(),

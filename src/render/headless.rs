@@ -1,8 +1,6 @@
 //! Headless rendering pipeline using ImageBackend.
 //! Used by visual regression tests — no GPU, no display required.
 
-use anyrender::ImageRenderer;
-use anyrender_vello::VelloImageRenderer;
 use crate::blitz_document::BlitzDocument;
 use crate::css::Stylesheet;
 use crate::html::Parser;
@@ -10,6 +8,8 @@ use crate::identity::{Capability, Identity, IdentityKind};
 use crate::layout::{LayoutTree, ViewportSize};
 use crate::render::ImageBackend;
 use crate::style::StyleTree;
+use anyrender::ImageRenderer;
+use anyrender_vello::VelloImageRenderer;
 use image::RgbaImage;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
@@ -84,7 +84,7 @@ fn render_blitz_to_image(
         let mut pixels = Vec::new();
         renderer.render_to_vec(
             |painter| {
-                doc.paint_with(painter, width, height);
+                let _paint_result = doc.paint_with(painter, width, height);
             },
             &mut pixels,
         );

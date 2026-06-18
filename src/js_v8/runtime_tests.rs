@@ -1,9 +1,23 @@
 use super::V8Runtime;
+use crate::blitz_document::BlitzDocument;
+use crate::identity::{Capability, Identity, IdentityKind};
 use crate::html::Parser;
 use crate::js_engine::{EngineKind, JsRuntime, create_runtime};
+use crate::window::SnapshotRebuildReason;
+use std::cell::RefCell;
+use std::rc::Rc;
 
 fn blank_dom() -> crate::dom::NodePtr {
     Parser::new("<html><body></body></html>").parse_document()
+}
+
+fn test_identity() -> Identity {
+    Identity::new(
+        "did:aurora:test",
+        "Aurora Test",
+        IdentityKind::Agent,
+        [Capability::ReadWorkspace, Capability::NetworkAccess],
+    )
 }
 
 #[test]
@@ -1401,5 +1415,374 @@ fn v8_text_node_move_detaches_from_previous_parent() {
     assert_eq!(
         runtime.eval_to_string("document.getElementById('p2').firstChild.textContent"),
         Ok("hello".to_string())
+    );
+}
+
+#[test]
+fn v8_failed_render_sync_does_not_deliver_observer_records() {
+    let dom = blank_dom();
+    let identity = test_identity();
+    let render_doc = BlitzDocument::try_from_dom(&dom, None, &identity, 800, 600)
+        .expect("render document should build");
+    let mut runtime =
+        V8Runtime::with_render_document(dom, Some(Rc::new(RefCell::new(render_doc))));
+
+    runtime
+        .execute(
+            r#"
+            globalThis.hits = 0;
+            const t = document.createElement('div');
+            const mo = new MutationObserver((recs) => { globalThis.hits += recs.length; });
+            mo.observe(t, { attributes: true });
+            t.setAttribute('data-x', '1');
+            "#,
+        )
+        .unwrap();
+
+    assert!(!runtime.deliver_mutation_records());
+    assert_eq!(runtime.eval_to_string("globalThis.hits"), Ok("0".to_string()));
+    assert_eq!(
+        runtime.take_snapshot_rebuild_reason(),
+        Some(SnapshotRebuildReason::SyncOperationFailed)
+    );
+}
+
+// ─── Task 4.2: core Shadow DOM semantics ────────────────────────────────────
+
+fn runtime_with_render_doc(dom: crate::dom::NodePtr) -> V8Runtime {
+    let identity = test_identity();
+    let render_doc = BlitzDocument::try_from_dom(&dom, None, &identity, 800, 600)
+        .expect("render document should build");
+    V8Runtime::with_render_document(dom, Some(Rc::new(RefCell::new(render_doc))))
+}
+
+#[test]
+fn v8_set_text_content_on_text_node_syncs_without_reborrow_panic() {
+    // Regression: the SetTextContent dispatcher held `node.borrow_mut()` across
+    // the render-sync call. `sync_text_node` re-borrows the node via `parent_ptr`
+    // / `is_shadow_root_node`, which aborted the process with "RefCell already
+    // mutably borrowed". YouTube hit this immediately because Polymer rewrites
+    // `textContent` on text nodes during hydration. Requires a render document so
+    // the sync path actually runs.
+    let dom = Parser::new("<html><body><div id='t'>before</div></body></html>").parse_document();
+    let mut runtime = runtime_with_render_doc(dom);
+    assert_eq!(
+        runtime.eval_to_string(
+            r#"(() => {
+                const t = document.getElementById('t');
+                const textNode = t.firstChild;
+                textNode.textContent = 'after';
+                return t.textContent;
+            })()"#
+        ),
+        Ok("after".to_string())
+    );
+}
+
+#[test]
+fn v8_layout_accessors_read_blitz_layout() {
+    // Phase 8.2: getBoundingClientRect and the native metric bridge report the
+    // real Blitz/Stylo border-box size, not the old 0 stub.
+    let dom = Parser::new(
+        "<html><body><div id='box' style='width:200px;height:50px'></div></body></html>",
+    )
+    .parse_document();
+    let mut runtime = runtime_with_render_doc(dom);
+    assert_eq!(
+        runtime.eval_to_string(
+            r#"(() => {
+                const el = document.getElementById('box');
+                const r = el.getBoundingClientRect();
+                return [
+                    r.width, r.height,
+                    el.__aurora_metric__('offsetWidth'),
+                    el.__aurora_metric__('clientHeight'),
+                ].join('|');
+            })()"#
+        ),
+        Ok("200|50|200|50".to_string())
+    );
+}
+
+#[test]
+fn v8_element_from_point_hits_blitz_layout() {
+    // Phase 8.2 follow-up: document.elementFromPoint hit-tests the real Blitz
+    // layout instead of the old `return null` stub.
+    let dom = Parser::new(
+        "<html><body><div id='box' style='position:absolute;left:0;top:0;width:200px;height:100px'></div></body></html>",
+    )
+    .parse_document();
+    let mut runtime = runtime_with_render_doc(dom);
+    assert_eq!(
+        runtime.eval_to_string(
+            r#"(() => {
+                const hit = document.elementFromPoint(20, 20);
+                return hit ? (hit.id || hit.tagName) : 'null';
+            })()"#
+        ),
+        Ok("box".to_string())
+    );
+}
+
+#[test]
+fn v8_element_from_point_returns_null_without_render_document() {
+    let dom = Parser::new("<html><body><div id='box'></div></body></html>").parse_document();
+    let mut runtime = V8Runtime::new(dom);
+    assert_eq!(
+        runtime.eval_to_string("String(document.elementFromPoint(10, 10))"),
+        Ok("null".to_string())
+    );
+}
+
+#[test]
+fn v8_layout_accessors_zero_without_render_document() {
+    // No render document attached → no Blitz layout → metrics report 0 (the JS
+    // heuristic fallback then takes over in v8_post.js, not exercised here).
+    let dom = Parser::new("<html><body><div id='box'></div></body></html>").parse_document();
+    let mut runtime = V8Runtime::new(dom);
+    assert_eq!(
+        runtime.eval_to_string(
+            r#"(() => {
+                const el = document.getElementById('box');
+                const r = el.getBoundingClientRect();
+                return [r.width, r.height, el.__aurora_metric__('offsetWidth')].join('|');
+            })()"#
+        ),
+        Ok("0|0|0".to_string())
+    );
+}
+
+#[test]
+fn v8_attach_shadow_creates_distinct_shadow_root() {
+    let mut runtime = V8Runtime::new(blank_dom());
+    assert_eq!(
+        runtime.eval_to_string(
+            r#"(() => {
+                const host = document.createElement('div');
+                document.body.appendChild(host);
+                const root = host.attachShadow({ mode: 'open' });
+                return [
+                    root !== host,                 // distinct object
+                    host.shadowRoot === root,      // host points back at root
+                    root.host === host,            // root points back at host
+                    root.nodeType === 11,          // DocumentFragment node type
+                    root.mode === 'open',
+                ].join('|');
+            })()"#
+        ),
+        Ok("true|true|true|true|true".to_string())
+    );
+}
+
+#[test]
+fn v8_shadow_children_are_not_light_dom_children() {
+    // A node appended to the shadow root must not appear among the host's light
+    // DOM children, and must appear among the shadow root's children.
+    let mut runtime = V8Runtime::new(blank_dom());
+    assert_eq!(
+        runtime.eval_to_string(
+            r#"(() => {
+                const host = document.createElement('div');
+                document.body.appendChild(host);
+                const light = document.createElement('p');
+                host.appendChild(light);
+                const root = host.attachShadow({ mode: 'open' });
+                const shadow = document.createElement('span');
+                root.appendChild(shadow);
+                return [
+                    host.childNodes.length,                                // light only
+                    Array.prototype.indexOf.call(host.childNodes, shadow), // -1: not light
+                    Array.prototype.indexOf.call(host.childNodes, light),  // 0: is light
+                    root.childNodes.length,                                // shadow only
+                    root.childNodes[0] === shadow,
+                ].join('|');
+            })()"#
+        ),
+        Ok("1|-1|0|1|true".to_string())
+    );
+}
+
+#[test]
+fn v8_query_selector_respects_shadow_boundary() {
+    // With a render document attached, selector queries go through Blitz and
+    // honor shadow boundaries: a document/host query sees only light-DOM matches,
+    // and a shadow-root query sees only its own shadow matches.
+    let mut runtime = runtime_with_render_doc(blank_dom());
+    assert_eq!(
+        runtime.eval_to_string(
+            r#"(() => {
+                const host = document.createElement('div');
+                document.body.appendChild(host);
+                const light = document.createElement('p');
+                light.className = 'target';
+                host.appendChild(light);
+                const root = host.attachShadow({ mode: 'open' });
+                const shadow = document.createElement('p');
+                shadow.className = 'target';
+                root.appendChild(shadow);
+                return [
+                    document.querySelectorAll('.target').length, // light only
+                    host.querySelectorAll('.target').length,     // light only
+                    root.querySelectorAll('.target').length,     // shadow only
+                ].join('|');
+            })()"#
+        ),
+        Ok("1|1|1".to_string())
+    );
+}
+
+#[test]
+fn v8_shadycss_lite_rewrites_host_and_slotted_selectors() {
+    // ShadyCSS-lite rewrites shadow-scoped selectors to target the flattened
+    // (synthetic, no-native-shadow) render tree, scoped by the component tag.
+    let mut runtime = V8Runtime::new(blank_dom());
+    // The CSS fixtures below contain no single quotes, so they embed directly.
+    let mut scope_css = |css: &str| {
+        runtime.eval_to_string(&format!(
+            "globalThis.__aurora_shadycss__.scopeCss('{css}', 'x-foo')"
+        ))
+    };
+
+    // :host -> tag ; :host(sel) -> tagsel
+    assert_eq!(
+        scope_css(":host { color: red; }"),
+        Ok("x-foo{ color: red; }".to_string())
+    );
+    assert_eq!(
+        scope_css(":host(.dark) { background: black; }"),
+        Ok("x-foo.dark{ background: black; }".to_string())
+    );
+    // ::slotted(sel) -> tag sel (flattened: slotted children are descendants)
+    assert_eq!(
+        scope_css("::slotted(.a) { color: blue; }"),
+        Ok("x-foo .a{ color: blue; }".to_string())
+    );
+    // Component-internal selectors are scoped as descendants of the host tag.
+    assert_eq!(
+        scope_css(".inner { color: green; }"),
+        Ok("x-foo .inner{ color: green; }".to_string())
+    );
+    // Global selectors that define resets/variables must not be scoped (the
+    // selector is preserved verbatim; only surrounding whitespace is trimmed).
+    assert_eq!(
+        scope_css(":root { --x: 1; }"),
+        Ok(":root{ --x: 1; }".to_string())
+    );
+}
+
+// ─── Task 5.1 / 5.2: ShadyCSS instrumentation + warning ──────────────────────
+
+#[test]
+fn v8_shadycss_diagnostics_are_gated_behind_debug_flag() {
+    // Without the debug flag, no diagnostics are recorded; with it on, selector
+    // rewrites and at-rule passthroughs are captured on the diagnostics buffer.
+    let mut runtime = V8Runtime::new(blank_dom());
+
+    // Gated off by default.
+    assert_eq!(
+        runtime.eval_to_string(
+            r#"(() => {
+                const sc = globalThis.__aurora_shadycss__;
+                sc.diagnostics.length = 0;
+                sc.scopeCss(':host { color: red; } @keyframes spin { from {} }', 'x-comp');
+                return String(sc.diagnostics.length);
+            })()"#
+        ),
+        Ok("0".to_string())
+    );
+
+    // Enabled: selector rewrite + at-rule passthrough are recorded.
+    assert_eq!(
+        runtime.eval_to_string(
+            r#"(() => {
+                const sc = globalThis.__aurora_shadycss__;
+                globalThis.__aurora_debug_shadycss__ = true;
+                sc.diagnostics.length = 0;
+                sc.scopeCss(':host { color: red; } @keyframes spin { from {} }', 'x-comp');
+                const kinds = sc.diagnostics.map(d => d.kind).sort().join(',');
+                const sel = sc.diagnostics.find(d => d.kind === 'selector');
+                return kinds + '|' + (sel ? sel.from + '=>' + sel.to + '@' + sel.component : 'no-sel');
+            })()"#
+        ),
+        Ok("at-rule-passthrough,selector|:host=>x-comp@x-comp".to_string())
+    );
+}
+
+#[test]
+fn v8_shadycss_emits_once_per_page_warning() {
+    // The synthetic-rewriting warning fires once per page regardless of how many
+    // times the rewriter runs.
+    let mut runtime = V8Runtime::new(blank_dom());
+    assert_eq!(
+        runtime.eval_to_string(
+            r#"(() => {
+                const sc = globalThis.__aurora_shadycss__;
+                const before = sc.warningCount;
+                sc.scopeCss(':host { color: red; }', 'x-a');
+                sc.scopeCss('.inner { color: blue; }', 'x-b');
+                sc.scopeCss(':host(.x) { color: green; }', 'x-c');
+                return before + '|' + sc.warningCount;
+            })()"#
+        ),
+        Ok("0|1".to_string())
+    );
+}
+
+#[test]
+#[ignore = "slot distribution is unsupported: synthetic shadow flattens light \
+            children into the host instead of distributing them to <slot> \
+            outlets. Tracked for native shadow semantics (Phase 4 follow-up)."]
+fn v8_shadow_slot_distribution_assigns_light_children_to_slots() {
+    let mut runtime = V8Runtime::new(blank_dom());
+    // Intended native behavior: light children are distributed to matching
+    // <slot>s and exposed via slot.assignedNodes(). Synthetic shadow has no slot
+    // outlets, so this documents the gap rather than current behavior.
+    assert_eq!(
+        runtime.eval_to_string(
+            r#"(() => {
+                const host = document.createElement('div');
+                document.body.appendChild(host);
+                const light = document.createElement('span');
+                host.appendChild(light);
+                const root = host.attachShadow({ mode: 'open' });
+                const slot = document.createElement('slot');
+                root.appendChild(slot);
+                const assigned = typeof slot.assignedNodes === 'function'
+                    ? slot.assignedNodes()
+                    : [];
+                return String(assigned.length === 1 && assigned[0] === light);
+            })()"#
+        ),
+        Ok("true".to_string())
+    );
+}
+
+#[test]
+#[ignore = "composed-path shadow semantics are unsupported: composedPath() does \
+            not yet model the shadow-root boundary between a shadow child and \
+            its host. Tracked for native shadow semantics (Phase 4 follow-up)."]
+fn v8_composed_path_includes_shadow_root_between_child_and_host() {
+    let mut runtime = V8Runtime::new(blank_dom());
+    // Intended native behavior: a composed event dispatched inside a shadow tree
+    // exposes the shadow root in its composedPath between the target and the host.
+    assert_eq!(
+        runtime.eval_to_string(
+            r#"(() => {
+                const host = document.createElement('div');
+                document.body.appendChild(host);
+                const root = host.attachShadow({ mode: 'open' });
+                const child = document.createElement('span');
+                root.appendChild(child);
+                let sawRoot = false, sawHost = false;
+                host.addEventListener('ping', (event) => {
+                    const path = event.composedPath();
+                    sawRoot = path.indexOf(root) !== -1;
+                    sawHost = path.indexOf(host) !== -1;
+                });
+                child.dispatchEvent(new CustomEvent('ping', { bubbles: true, composed: true }));
+                return sawRoot + '|' + sawHost;
+            })()"#
+        ),
+        Ok("true|true".to_string())
     );
 }

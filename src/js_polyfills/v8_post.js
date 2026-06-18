@@ -283,7 +283,16 @@
                         configurable: true,
                         enumerable: true,
                         get: function() {
-                            return value || fallback();
+                            // Phase 8.2: prefer the real Blitz/Stylo rendered box
+                            // size; fall back to any set value, then the heuristic
+                            // (used only for unlaid-out / collapsed elements).
+                            var native = 0;
+                            try {
+                                if (typeof el.__aurora_metric__ === 'function') {
+                                    native = Number(el.__aurora_metric__(name) || 0);
+                                }
+                            } catch (e) {}
+                            return native || value || fallback();
                         },
                         set: function(next) {
                             value = Number(next || 0);
@@ -520,7 +529,11 @@
     document.execCommand = function() { return false; };
     document.hasFocus = function() { return false; };
     document.getSelection = function() { return null; };
-    document.elementFromPoint = function() { return null; };
+    // `document.elementFromPoint` is provided natively (hit-tests Blitz layout).
+    // Only install a null stub if the native binding is missing.
+    if (typeof document.elementFromPoint !== 'function') {
+        document.elementFromPoint = function() { return null; };
+    }
     document.activeElement = document.body || null;
     document.scrollingElement = document.documentElement || null;
     document.location = globalThis.location;

@@ -8,7 +8,8 @@ use winit::window::Window;
 
 use super::BROWSER_CHROME_HEIGHT;
 use super::chrome::ChromeRenderer;
-use super::input::WindowInput;
+use super::input::{SnapshotRebuildReason, WindowInput};
+use crate::blitz_document::PaintResult;
 
 pub(super) struct AuroraApp {
     pub(super) input: WindowInput,
@@ -20,6 +21,7 @@ pub(super) struct AuroraApp {
     pub(super) mouse_x: f64,
     pub(super) mouse_y: f64,
     pub(super) chrome: ChromeRenderer,
+    content_frame_cache: LastGoodSceneState,
 }
 
 impl AuroraApp {
@@ -34,6 +36,7 @@ impl AuroraApp {
             mouse_x: 0.0,
             mouse_y: 0.0,
             chrome: ChromeRenderer::default(),
+            content_frame_cache: LastGoodSceneState::default(),
         }
     }
 
@@ -59,7 +62,8 @@ impl AuroraApp {
             }
         }
         if runtime_dirtied_blitz && self.input.blitz_doc.is_none() {
-            self.input.mark_blitz_snapshot_dirty();
+            self.input
+                .mark_blitz_snapshot_dirty(SnapshotRebuildReason::MissingMapping);
         }
 
         let needs_redraw = self.input.media.update();
@@ -157,6 +161,80 @@ impl AuroraApp {
             .submit(std::iter::once(encoder.finish()));
         surface_texture.present();
     }
+
+    fn handle_content_paint_failure(
+        &mut self,
+        paint_result: PaintResult,
+        content_scene: &mut Scene,
+        width: u32,
+        content_height: u32,
+    ) -> PaintResult {
+        self.input
+            .mark_blitz_snapshot_dirty(SnapshotRebuildReason::PaintFailure);
+        self.input.needs_reflow = true;
+        let effective_result = self.content_frame_cache.finish_failed_paint(
+            paint_result,
+            content_scene,
+            width,
+            content_height,
+        );
+        if matches!(effective_result, PaintResult::PreservedLastGoodFrame) {
+            log::warn!(
+                "Preserving last successful Blitz content frame after paint failure: consecutive_failures={} last_successful_paint_time={:?}",
+                self.content_frame_cache.consecutive_paint_failures,
+                self.content_frame_cache.last_successful_paint_time
+            );
+        }
+        effective_result
+    }
+}
+
+#[derive(Default)]
+struct LastGoodSceneState {
+    last_good_scene: Option<Scene>,
+    last_good_scene_size: Option<(u32, u32)>,
+    last_successful_paint_time: Option<Instant>,
+    consecutive_paint_failures: u32,
+}
+
+impl LastGoodSceneState {
+    fn record_successful_paint(
+        &mut self,
+        scene: &Scene,
+        width: u32,
+        height: u32,
+        painted_at: Instant,
+    ) {
+        self.last_good_scene = Some(scene.clone());
+        self.last_good_scene_size = Some((width, height));
+        self.last_successful_paint_time = Some(painted_at);
+        self.consecutive_paint_failures = 0;
+    }
+
+    fn finish_failed_paint(
+        &mut self,
+        paint_result: PaintResult,
+        scene: &mut Scene,
+        width: u32,
+        height: u32,
+    ) -> PaintResult {
+        debug_assert!(matches!(
+            paint_result,
+            PaintResult::FailedRecoverable | PaintResult::FailedUnhealthy
+        ));
+        self.consecutive_paint_failures += 1;
+
+        if matches!(paint_result, PaintResult::FailedRecoverable)
+            && self.last_good_scene_size == Some((width, height))
+            && let Some(last_good_scene) = self.last_good_scene.clone()
+        {
+            *scene = last_good_scene;
+            return PaintResult::PreservedLastGoodFrame;
+        }
+
+        *scene = Scene::new();
+        paint_result
+    }
 }
 
 fn renderer_for_surface<'a>(
@@ -197,13 +275,28 @@ fn paint_content_layer(app: &mut AuroraApp, scene: &mut Scene, width: u32, heigh
     );
     let mut content_scene = Scene::new();
     if let Some(blitz_doc) = app.input.blitz_doc.as_ref().cloned() {
-        if !blitz_doc
-            .borrow_mut()
-            .paint_to_scene(&mut content_scene, width, content_height)
-        {
-            app.input.mark_blitz_snapshot_dirty();
-            app.input.needs_reflow = true;
-            content_scene = Scene::new();
+        let paint_result =
+            blitz_doc
+                .borrow_mut()
+                .paint_to_scene(&mut content_scene, width, content_height);
+        match paint_result {
+            PaintResult::PaintedCurrentFrame => {
+                app.content_frame_cache.record_successful_paint(
+                    &content_scene,
+                    width,
+                    content_height,
+                    Instant::now(),
+                );
+            }
+            PaintResult::PreservedLastGoodFrame => {}
+            PaintResult::FailedRecoverable | PaintResult::FailedUnhealthy => {
+                let _effective_result = app.handle_content_paint_failure(
+                    paint_result,
+                    &mut content_scene,
+                    width,
+                    content_height,
+                );
+            }
         }
     }
     scene.append(
@@ -211,4 +304,164 @@ fn paint_content_layer(app: &mut AuroraApp, scene: &mut Scene, width: u32, heigh
         Some(Affine::translate((0.0, content_top - app.scroll_y))),
     );
     scene.pop_layer();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::css::Stylesheet;
+    use crate::identity::{Capability, Identity, IdentityKind};
+    use crate::layout::{LayoutTree, ViewportSize};
+    use crate::media::MediaCache;
+    use crate::style::StyleTree;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+    use vello::kurbo::Rect;
+
+    fn scene_with_rect() -> Scene {
+        let mut scene = Scene::new();
+        scene.fill(
+            Fill::NonZero,
+            Affine::IDENTITY,
+            Color::BLACK,
+            None,
+            &Rect::new(0.0, 0.0, 10.0, 10.0),
+        );
+        scene
+    }
+
+    fn test_identity() -> Identity {
+        Identity::new(
+            "did:aurora:test",
+            "Aurora Test",
+            IdentityKind::Agent,
+            [Capability::ReadWorkspace, Capability::NetworkAccess],
+        )
+    }
+
+    fn test_input() -> WindowInput {
+        let dom = crate::html::Parser::new("<html><body><p id='item'>hello</p></body></html>")
+            .parse_document();
+        crate::dom::reparent_subtree(&dom);
+        let identity = test_identity();
+        let mut stylesheet = Stylesheet::from_dom(&dom, None, &identity);
+        stylesheet.merge(Stylesheet::user_agent_stylesheet());
+        let style_tree = StyleTree::from_dom(&dom, &stylesheet);
+        let viewport = ViewportSize {
+            width: 800.0,
+            height: 600.0,
+        };
+        let layout = LayoutTree::from_style_tree_with_viewport(&style_tree, viewport);
+
+        WindowInput {
+            dom,
+            stylesheet: Rc::new(RefCell::new(stylesheet)),
+            base_url: None,
+            identity,
+            viewport: Rc::new(RefCell::new(viewport)),
+            layout: Rc::new(RefCell::new(layout)),
+            images: crate::ImageCache::default(),
+            svgs: crate::SvgCache::default(),
+            media: MediaCache::default(),
+            runtime: None,
+            blitz_doc: None,
+            needs_reflow: false,
+            blitz_snapshot_dirty: false,
+            pending_snapshot_rebuild_reason: None,
+            pending_snapshot_rebuild_source: None,
+            snapshot_rebuild_count: 0,
+            consecutive_snapshot_rebuilds: 0,
+            last_snapshot_rebuild_reason: None,
+            last_snapshot_rebuild_source: None,
+            last_snapshot_rebuild_op_id: None,
+            #[cfg(debug_assertions)]
+            snapshot_rebuild_events: std::collections::VecDeque::new(),
+        }
+    }
+
+    #[test]
+    fn last_good_scene_records_successful_paint() {
+        let mut state = LastGoodSceneState::default();
+        let scene = scene_with_rect();
+        let painted_at = Instant::now();
+
+        state.record_successful_paint(&scene, 800, 540, painted_at);
+
+        assert!(state.last_good_scene.is_some());
+        assert_eq!(state.last_good_scene_size, Some((800, 540)));
+        assert_eq!(state.last_successful_paint_time, Some(painted_at));
+        assert_eq!(state.consecutive_paint_failures, 0);
+    }
+
+    #[test]
+    fn recoverable_failure_preserves_matching_last_good_scene() {
+        let mut state = LastGoodSceneState::default();
+        let scene = scene_with_rect();
+        state.record_successful_paint(&scene, 800, 540, Instant::now());
+        let mut failed_scene = Scene::new();
+
+        let result =
+            state.finish_failed_paint(PaintResult::FailedRecoverable, &mut failed_scene, 800, 540);
+
+        assert_eq!(result, PaintResult::PreservedLastGoodFrame);
+        assert_eq!(state.consecutive_paint_failures, 1);
+        assert_eq!(
+            failed_scene.encoding().n_paths,
+            scene.encoding().n_paths,
+            "preserved scene should replace the failed frame"
+        );
+    }
+
+    #[test]
+    fn recoverable_failure_without_matching_size_clears_failed_scene() {
+        let mut state = LastGoodSceneState::default();
+        state.record_successful_paint(&scene_with_rect(), 800, 540, Instant::now());
+        let mut failed_scene = scene_with_rect();
+
+        let result =
+            state.finish_failed_paint(PaintResult::FailedRecoverable, &mut failed_scene, 1024, 700);
+
+        assert_eq!(result, PaintResult::FailedRecoverable);
+        assert_eq!(state.consecutive_paint_failures, 1);
+        assert_eq!(failed_scene.encoding().n_paths, 0);
+    }
+
+    #[test]
+    fn unhealthy_failure_does_not_preserve_last_good_scene() {
+        let mut state = LastGoodSceneState::default();
+        state.record_successful_paint(&scene_with_rect(), 800, 540, Instant::now());
+        let mut failed_scene = scene_with_rect();
+
+        let result =
+            state.finish_failed_paint(PaintResult::FailedUnhealthy, &mut failed_scene, 800, 540);
+
+        assert_eq!(result, PaintResult::FailedUnhealthy);
+        assert_eq!(state.consecutive_paint_failures, 1);
+        assert_eq!(failed_scene.encoding().n_paths, 0);
+    }
+
+    #[test]
+    fn recoverable_content_paint_failure_preserves_scene_and_schedules_recovery() {
+        let mut app = AuroraApp::new(test_input());
+        let scene = scene_with_rect();
+        app.content_frame_cache
+            .record_successful_paint(&scene, 800, 540, Instant::now());
+        let mut failed_scene = Scene::new();
+
+        let result = app.handle_content_paint_failure(
+            PaintResult::FailedRecoverable,
+            &mut failed_scene,
+            800,
+            540,
+        );
+
+        assert_eq!(result, PaintResult::PreservedLastGoodFrame);
+        assert_eq!(failed_scene.encoding().n_paths, scene.encoding().n_paths);
+        assert!(app.input.blitz_snapshot_dirty);
+        assert!(app.input.needs_reflow);
+        assert_eq!(
+            app.input.pending_snapshot_rebuild_reason,
+            Some(SnapshotRebuildReason::PaintFailure)
+        );
+    }
 }

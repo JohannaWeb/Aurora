@@ -10,6 +10,7 @@ mod screenshot;
 mod scroll_metrics;
 
 pub use input::WindowInput;
+pub(crate) use input::SnapshotRebuildReason;
 pub use open::open;
 
 pub(crate) const BROWSER_CHROME_HEIGHT: f32 = 72.0;

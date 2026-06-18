@@ -1,4 +1,5 @@
 use super::cli::{CliOptions, env_f32};
+use super::event_loop::{run_event_loop_turn, EventLoopPhase};
 use super::fixtures::demo_html;
 use super::images::{load_images, load_svgs};
 use super::scripts::extract_scripts;
@@ -30,14 +31,9 @@ pub(crate) fn run_browser(cli: CliOptions, identity: Identity) {
     let content_h = content_viewport.height as u32;
     // Build the live renderer document before script execution and share it
     // with V8 so DOM mutations can be applied directly to Blitz as they happen.
-    let blitz_doc = BlitzDocument::try_from_dom(
-        &dom,
-        base_url.as_deref(),
-        &identity,
-        content_w,
-        content_h,
-    )
-    .map(|doc| Rc::new(RefCell::new(doc)));
+    let blitz_doc =
+        BlitzDocument::try_from_dom(&dom, base_url.as_deref(), &identity, content_w, content_h)
+            .map(|doc| Rc::new(RefCell::new(doc)));
 
     let mut runtime = run_scripts(&dom, base_url.as_deref(), &identity, blitz_doc.clone());
 
@@ -56,7 +52,13 @@ pub(crate) fn run_browser(cli: CliOptions, identity: Identity) {
         let image_cache = load_images(layout.root(), base_url.as_deref(), &identity);
         let svg_cache = load_svgs(layout.root(), base_url.as_deref(), &identity);
         let media_cache = crate::MediaCache::load(layout.root(), base_url.as_deref(), &identity);
-        (Some(style_tree), layout, image_cache, svg_cache, media_cache)
+        (
+            Some(style_tree),
+            layout,
+            image_cache,
+            svg_cache,
+            media_cache,
+        )
     } else {
         (
             None,
@@ -93,10 +95,10 @@ pub(crate) fn run_browser(cli: CliOptions, identity: Identity) {
                 // TEMP: exercise the same paint the live window does, to see if
                 // it panics (→ white page) or produces an empty scene.
                 let mut scene = vello::Scene::new();
-                let ok = blitz_doc.paint_to_scene(&mut scene, content_w, content_h);
+                let paint_result = blitz_doc.paint_to_scene(&mut scene, content_w, content_h);
                 let enc = scene.encoding();
                 eprintln!(
-                    "[render] paint_to_scene ok={ok} encoding: paths={} draw_tags={} path_data={}",
+                    "[render] paint_to_scene result={paint_result:?} encoding: paths={} draw_tags={} path_data={}",
                     enc.n_paths,
                     enc.draw_tags.len(),
                     enc.path_data.len()
@@ -180,13 +182,12 @@ fn run_scripts(
             .collect()
     };
 
-    let mut runtime: Box<dyn crate::js_engine::JsRuntime> =
-        crate::js_engine::create_runtime(
-            crate::js_engine::EngineKind::from_env(),
-            dom,
-            render_document,
-        )
-            .expect("V8 backend is required for JavaScript execution");
+    let mut runtime: Box<dyn crate::js_engine::JsRuntime> = crate::js_engine::create_runtime(
+        crate::js_engine::EngineKind::from_env(),
+        dom,
+        render_document,
+    )
+    .expect("V8 backend is required for JavaScript execution");
     if let Some(url) = base_url {
         // `{url:?}` produces a quoted, escaped string literal valid in JS.
         let _ = runtime.execute(&format!(
@@ -245,13 +246,27 @@ fn pump_ready_work(runtime: &mut dyn crate::js_engine::JsRuntime) {
             break;
         }
 
-        let mut fired = runtime.tick(now);
-        if runtime.has_animation_frame_callbacks() && now >= next_frame {
-            fired |= runtime.drain_animation_frame_callbacks(now);
+        // Drive one event-loop turn through explicit, canonically-ordered phases
+        // (Phase 7). The headless pump implements the JS-relevant phases; style,
+        // layout, paint, and idle callbacks are window-loop concerns left as
+        // no-ops here so the full turn ordering stays explicit.
+        let raf_due = runtime.has_animation_frame_callbacks() && now >= next_frame;
+        let fired_phases = run_event_loop_turn(|phase| match phase {
+            EventLoopPhase::RunTask => runtime.tick(now),
+            // V8 drains microtasks at the end of each task, so this is implicit.
+            EventLoopPhase::MicrotaskCheckpoint => false,
+            EventLoopPhase::MutationObserverDelivery => runtime.deliver_mutation_records(),
+            EventLoopPhase::ResizeObserverDelivery => false,
+            EventLoopPhase::RequestAnimationFrame => {
+                raf_due && runtime.drain_animation_frame_callbacks(now)
+            }
+            EventLoopPhase::StyleAndLayout | EventLoopPhase::Paint => false,
+            EventLoopPhase::IdleCallbacks => false,
+        });
+        if raf_due {
             next_frame = now + FRAME;
         }
-        fired |= runtime.deliver_mutation_records();
-        if fired {
+        if !fired_phases.is_empty() {
             continue;
         }
 
@@ -404,6 +419,15 @@ fn maybe_open_window(
             blitz_doc,
             needs_reflow: false,
             blitz_snapshot_dirty: false,
+            pending_snapshot_rebuild_reason: None,
+            pending_snapshot_rebuild_source: None,
+            snapshot_rebuild_count: 0,
+            consecutive_snapshot_rebuilds: 0,
+            last_snapshot_rebuild_reason: None,
+            last_snapshot_rebuild_source: None,
+            last_snapshot_rebuild_op_id: None,
+            #[cfg(debug_assertions)]
+            snapshot_rebuild_events: std::collections::VecDeque::new(),
         };
         if let Err(error) = crate::window::open(window_input) {
             eprintln!("Window disabled: {error}");

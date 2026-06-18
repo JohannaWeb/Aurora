@@ -6,7 +6,7 @@ mod scrollbar;
 mod text;
 
 use super::BROWSER_CHROME_HEIGHT;
-use super::input::WindowInput;
+use super::input::{SnapshotRebuildReason, WindowInput};
 use anyrender::ImageRenderer;
 use anyrender_vello::VelloImageRenderer;
 use image::{ImageBuffer, Rgba};
@@ -65,14 +65,17 @@ fn render_blitz_content(
     chrome_offset: i32,
 ) -> bool {
     catch_unwind(AssertUnwindSafe(|| {
-        let content_height = height.saturating_sub(BROWSER_CHROME_HEIGHT.round() as u32).max(1);
+        let content_height = height
+            .saturating_sub(BROWSER_CHROME_HEIGHT.round() as u32)
+            .max(1);
         let mut renderer = VelloImageRenderer::new(width, content_height);
         let mut content = Vec::new();
         renderer.render_to_vec(
             |painter| {
-                blitz_doc
-                    .borrow_mut()
-                    .paint_with(painter, width, content_height);
+                let _paint_result =
+                    blitz_doc
+                        .borrow_mut()
+                        .paint_with(painter, width, content_height);
             },
             &mut content,
         );
@@ -131,7 +134,7 @@ fn flush_ready_frame_tasks(input: &mut WindowInput, width: u32, height: u32) {
         };
         if needs_reflow {
             if input.blitz_doc.is_none() {
-                input.mark_blitz_snapshot_dirty();
+                input.mark_blitz_snapshot_dirty(SnapshotRebuildReason::MissingMapping);
             }
             input.reflow(width, height);
         }

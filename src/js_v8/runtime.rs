@@ -6,6 +6,7 @@ use std::time::{Duration, Instant};
 use crate::css::Stylesheet;
 use crate::dom::{Node, NodePtr};
 use crate::layout::{LayoutTree, ViewportSize};
+use crate::window::SnapshotRebuildReason;
 
 use super::capture::WindowCapture;
 use super::node_create::create_js_node;
@@ -148,6 +149,14 @@ impl V8Runtime {
             document_template.set(
                 v8_str(scope, "createTextNode").into(),
                 create_text_node_fn.into(),
+            );
+
+            let element_from_point_fn = v8::FunctionTemplate::builder(element_from_point)
+                .data(doc_external.into())
+                .build(scope);
+            document_template.set(
+                v8_str(scope, "elementFromPoint").into(),
+                element_from_point_fn.into(),
             );
 
             let document_obj = document_template.new_instance(scope).unwrap();
@@ -592,6 +601,12 @@ impl V8Runtime {
                 ) {
                     let _ = compile_and_run(scope, "globalThis.__aurora_debug_youtube__ = true;");
                 }
+                if matches!(
+                    std::env::var("AURORA_DEBUG_SHADYCSS").as_deref(),
+                    Ok("1") | Ok("true") | Ok("TRUE") | Ok("yes") | Ok("YES")
+                ) {
+                    let _ = compile_and_run(scope, "globalThis.__aurora_debug_shadycss__ = true;");
+                }
             }
 
             let context = v8::Global::new(scope, context);
@@ -988,6 +1003,35 @@ fn create_text_node(
     retval.set(js_node.into());
 }
 
+/// `document.elementFromPoint(x, y)` — hit-tests the Blitz layout (Phase 8.2
+/// follow-up). Returns the wrapper for the deepest element at the point, or
+/// `null` when there is no render document or nothing is hit.
+fn element_from_point(
+    scope: &mut v8::PinScope<'_, '_>,
+    args: v8::FunctionCallbackArguments,
+    mut retval: v8::ReturnValue,
+) {
+    let x = args.get(0).number_value(scope).unwrap_or(f64::NAN) as f32;
+    let y = args.get(1).number_value(scope).unwrap_or(f64::NAN) as f32;
+    let data = args.data();
+    let external = v8::Local::<v8::External>::try_from(data).unwrap();
+    let doc_data_ptr = external.value() as *const DocumentData;
+    let doc_data = unsafe { &*doc_data_ptr };
+
+    let hit = if x.is_finite() && y.is_finite() {
+        doc_data.registry.hit_test(x, y)
+    } else {
+        None
+    };
+    match hit {
+        Some(node) => {
+            let js_node = create_js_node(scope, node, &doc_data.registry, &doc_data.document);
+            retval.set(js_node.into());
+        }
+        None => retval.set(v8::null(scope).into()),
+    }
+}
+
 fn atob(
     scope: &mut v8::PinScope<'_, '_>,
     args: v8::FunctionCallbackArguments,
@@ -1335,6 +1379,10 @@ impl crate::js_engine::JsRuntime for V8Runtime {
     }
     fn take_needs_reflow(&mut self) -> bool {
         self.registry.take_needs_reflow()
+    }
+
+    fn take_snapshot_rebuild_reason(&mut self) -> Option<SnapshotRebuildReason> {
+        self.registry.take_snapshot_rebuild_reason()
     }
 
     fn tick(&mut self, now: Instant) -> bool {

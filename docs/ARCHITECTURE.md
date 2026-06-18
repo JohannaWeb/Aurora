@@ -9,13 +9,13 @@
 
 ### 1.1 Requirements Overview
 
-Aurora is an experimental, GPU-accelerated browser engine written in Rust. Its primary near-term goal is achieving working YouTube playback. Its longer-term goal is to serve as a sovereign, AI-native, capability-gated web client as part of the Bastion stack.
+Aurora is an experimental, GPU-accelerated browser engine written in Rust. Its primary near-term benchmark is YouTube: a hostile, modern-web application that stresses application-data bootstrap, DOM mutation, custom elements, scoped style, and layout. The first milestone is not full YouTube rendering or playback; it is rendering one real content-bearing YouTube route reliably. Aurora's longer-term goal is to serve as a sovereign, AI-native, capability-gated web client as part of the Bastion stack.
 
 ### 1.2 Quality Goals
 
 | Priority | Quality Goal | Motivation |
 |----------|-------------|------------|
-| 1 | **Correctness of real-world JS** | YouTube and modern sites require a capable, JIT-backed engine |
+| 1 | **Correctness of hostile modern-web bootstrap** | YouTube requires a capable JS engine, DOM mutation path, custom elements, style, and layout working together |
 | 2 | **GPU rendering performance** | Smooth, GPU-first rendering via Vello + WGPU |
 | 3 | **Security via capability model** | Resources mediated through explicit `Identity` + `Capability` checks |
 | 4 | **AI-native design** | First-class environment for AI agents, not a bolted-on afterthought |
@@ -25,7 +25,7 @@ Aurora is an experimental, GPU-accelerated browser engine written in Rust. Its p
 
 | Role | Expectation |
 |------|------------|
-| Developer (Johanna) | Iterate quickly toward YouTube; maintain a clean, understandable Rust codebase |
+| Developer (Johanna) | Iterate quickly toward the YouTube benchmark route; maintain a clean, understandable Rust codebase |
 | AI Agents | A programmable browser surface with capability-gated APIs |
 | Future contributors | Clear module boundaries, documented trade-offs |
 
@@ -36,7 +36,7 @@ Aurora is an experimental, GPU-accelerated browser engine written in Rust. Its p
 - Written entirely in **Rust** (stable toolchain, 2024 edition).
 - Must compile and run on Linux (primary target); macOS optional.
 - No dependency on Chromium, WebKit, Gecko, or Servo.
-- JavaScript must be handled by an engine with a real JIT (SpiderMonkey) for YouTube viability.
+- JavaScript must be handled by an engine with a real JIT for YouTube-scale bundled JavaScript.
 - GPU rendering is non-negotiable — no software rasteriser fallback.
 
 ---
@@ -79,7 +79,8 @@ Aurora fetches HTML from the network or local filesystem, parses it, runs JavaSc
 | Painting | **blitz-paint** + **anyrender_vello** | GPU-first vector rendering via Vello |
 | Windowing | **winit** | Cross-platform, async-friendly event loop |
 | Text | **parley** | Full text layout with shaping |
-| JavaScript (primary) | **SpiderMonkey** (`mozjs`) | Real JIT; required for YouTube and modern sites |
+| JavaScript (primary) | **V8** (`v8`) | Default JIT engine for YouTube-scale bundled JavaScript and the live DOM/BOM bridge |
+| JavaScript (alternate) | **SpiderMonkey** (`engine-sm` feature) | Alternative JIT engine |
 | JavaScript (alternate) | **Boa** (`engine-boa` feature) | Pure Rust fallback for specific test scenarios |
 | Networking | Custom fetch module | Capability-gated; supports `http`, `https`, `file://`, data URLs |
 | Identity | `Identity` + `Capability` structs | Fine-grained capability model for sovereign browsing |
@@ -99,8 +100,8 @@ Aurora fetches HTML from the network or local filesystem, parses it, runs JavaSc
 │  └──────────┘  └──────────┘  └──────────┘  └──────────────┘   │
 │                                                                  │
 │  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────────┐   │
-│  │  js_sm   │  │  js_boa  │  │  dom     │  │blitz_document│   │
-│  │(SpiderM) │  │ (feat.)  │  │(legacy)  │  │              │   │
+│  │  js_v8   │  │ js_boa   │  │  dom     │  │blitz_document│   │
+│  │(default) │  │ (feat.)  │  │(legacy)  │  │              │   │
 │  └──────────┘  └──────────┘  └──────────┘  └──────────────┘   │
 │                                                                  │
 │  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────────┐   │
@@ -123,9 +124,10 @@ Aurora fetches HTML from the network or local filesystem, parses it, runs JavaSc
 | `blitz_document` | `BlitzDocument` wrapper — owns `blitz-dom` instance, paints via `blitz-paint` + `anyrender_vello` |
 | `fetch` | Capability-gated HTTP/HTTPS/file/data-URL fetching with TLS |
 | `identity` | `Identity` and `Capability` types for capability-gated access |
-| `js_sm` | SpiderMonkey runtime, `SmRuntime`, DOM/BOM bridge, `NodeRegistry` |
+| `js_v8` | V8 runtime, DOM/BOM bridge, `NodeRegistry`, custom-element and mutation integration |
+| `js_sm` | SpiderMonkey runtime (optional alternate engine) |
 | `js_boa` | Boa runtime (optional, `engine-boa` feature) |
-| `js_engine` | `JsRuntime` trait — unified interface over SpiderMonkey / Boa |
+| `js_engine` | `JsRuntime` trait — unified interface over V8 / SpiderMonkey / Boa |
 | `dom` | Legacy hand-rolled DOM tree (`NodePtr`, `NodeRegistry`) — source of truth for JS and legacy tests |
 | `html` | Hand-rolled HTML tokeniser/parser feeding the legacy DOM |
 | `css` | CSS extraction and parsing from `<style>` tags |
@@ -159,7 +161,7 @@ main()
        ├─ run_scripts()
        │    ├─ extract_scripts()
        │    ├─ fetch all external scripts in parallel (threads)
-       │    ├─ SmRuntime::new(dom.clone())
+       │    ├─ V8 runtime setup with live DOM/BOM bridge
        │    └─ runtime.execute(script) for each script
        │
        ├─ Stylesheet::from_dom()  +  merge UA stylesheet
@@ -207,7 +209,7 @@ WindowEvent::MouseInput (left press)
   │    └─ [if href found] navigate_to() → reload pipeline
   │
   └─ legacy LayoutTree::hit_test()      → JS event dispatch
-       └─ SmRuntime::dispatch_event(node, "click")
+       └─ JS runtime dispatch_event(node, "click")
 ```
 
 ---
@@ -228,7 +230,7 @@ WindowEvent::MouseInput (left press)
 │  │  └──────────┘                         │  │
 │  │                                        │  │
 │  │  ┌──────────────────────────────────┐  │  │
-│  │  │ SpiderMonkey (mozjs C++ runtime) │  │  │
+│  │  │ V8 JavaScript runtime            │  │  │
 │  │  └──────────────────────────────────┘  │  │
 │  │                                        │  │
 │  │  ┌────────────┐  ┌─────────────────┐  │  │
@@ -276,16 +278,17 @@ Aurora currently maintains two parallel document representations:
 | **Source of truth for** | JavaScript bridge, legacy tests, hit testing for JS events | Painting, navigation hit testing |
 | **Populated by** | Hand-rolled `html::Parser` | `blitz-html::HtmlDocument` |
 | **Layout engine** | Hand-rolled `layout::LayoutTree` | Stylo (via blitz-dom) |
-| **Mutation by JS** | Direct mutation via `SmRuntime` bridge | Serialise → reparse (current) |
+| **Mutation by JS** | Direct mutation via the JS bridge | Incremental sync where supported; explicit snapshot rebuild on failed sync |
 
-> **Known issue**: JS DOM mutations trigger a full HTML serialise → blitz reparse cycle. This is the highest-priority technical debt.
+> **Known issue**: Aurora still maintains a legacy DOM and a Blitz DOM. Incremental sync handles many JS mutations, but failed or unsupported sync paths still fall back to full snapshot rebuilds. Collapsing toward one authoritative rendering DOM remains the highest-priority technical debt.
 
 ### 8.3 JavaScript Engine Strategy
 
 ```
 JsRuntime trait
      │
-     ├─── SmRuntime (SpiderMonkey)   ← default, JIT-backed, YouTube target
+     ├─── V8 runtime                ← default, JIT-backed, YouTube benchmark target
+     ├─── SmRuntime (SpiderMonkey)  ← engine-sm feature, alternate JIT runtime
      └─── BoaRuntime (Boa)          ← engine-boa feature, pure Rust, specific tests
 ```
 
@@ -318,11 +321,11 @@ An in-process `NET_CACHE` (BTreeMap behind a Mutex) deduplicates repeated fetche
 - **Decision**: Use `blitz-dom` which embeds Stylo and handles layout.
 - **Consequences**: Faster path to correct rendering; introduces dual-DOM complexity while legacy DOM coexists.
 
-### ADR-002: SpiderMonkey as primary JS engine
+### ADR-002: JIT JavaScript engine for the YouTube benchmark
 - **Status**: Adopted
 - **Context**: Boa (pure Rust) lacks a JIT and cannot run YouTube or modern bundled JS.
-- **Decision**: Embed SpiderMonkey via `mozjs`; keep Boa as an optional feature for specific tests.
-- **Consequences**: YouTube is now tractable; requires C++ build toolchain for SpiderMonkey.
+- **Decision**: Use V8 as the default runtime; keep SpiderMonkey and Boa as optional feature-gated alternatives.
+- **Consequences**: YouTube-scale JavaScript is tractable; runtime integration complexity remains significant.
 
 ### ADR-003: Capability-gated fetch
 - **Status**: Adopted
@@ -342,7 +345,7 @@ An in-process `NET_CACHE` (BTreeMap behind a Mutex) deduplicates repeated fetche
 
 | Requirement | Measure |
 |-------------|---------|
-| YouTube loads without panic | SpiderMonkey executes YouTube's JS init without crashing |
+| YouTube benchmark route paints real content | Aurora bootstraps enough application data, DOM mutation, custom elements, style, and layout to render one content-bearing route reliably |
 | Real TLS validation | `reqwest` with `rustls` and default cert store; no `danger_accept_invalid_certs` |
 | Capability enforcement | `file://` fetch rejected if `ReadWorkspace` not in identity |
 | Test suite passes | `cargo test` green |
@@ -354,7 +357,7 @@ An in-process `NET_CACHE` (BTreeMap behind a Mutex) deduplicates repeated fetche
 
 | Risk / Debt | Severity | Notes |
 |-------------|----------|-------|
-| Dual DOM serialize→reparse reflow | **High** | O(whole document) per JS mutation; kills animation performance |
+| Dual DOM snapshot rebuild fallback | **High** | Unsupported or failed incremental sync paths still rebuild the render snapshot and can diverge from JS-visible DOM behavior |
 | No full HTML parser | **Medium** | Hand-rolled tokeniser misses many real-world constructs |
 | Partial CSS coverage | **Medium** | Many properties and values not yet handled |
 | 112+ `.unwrap()` calls in network/parse paths | **Medium** | Each is a potential remote DoS / crash |

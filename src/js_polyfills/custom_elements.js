@@ -364,6 +364,36 @@
             // component's tag name so they don't leak across components.
             var shimmedStyleScopes = Object.create(null);
 
+            // ── ShadyCSS-lite instrumentation (Phase 5) ──────────────────────
+            // Diagnostics are gated behind AURORA_DEBUG_SHADYCSS (mirrored into
+            // globalThis.__aurora_debug_shadycss__ by the runtime bootstrap). The
+            // once-per-page warning fires the first time synthetic rewriting runs,
+            // regardless of the debug flag, so divergence from native Shadow DOM
+            // styling is always surfaced.
+            var shadyCssDiagnostics = [];
+            var shadyCssWarned = false;
+            var shadyCssWarningCount = 0;
+            function shadyCssDebugEnabled() { return !!globalThis.__aurora_debug_shadycss__; }
+            function shadyCssRecord(entry) {
+                if (!shadyCssDebugEnabled()) return;
+                shadyCssDiagnostics.push(entry);
+                try {
+                    console.log('[shadycss] ' + entry.component + ' ' + entry.kind +
+                        (entry.from != null ? ' "' + entry.from + '" -> "' + entry.to + '"' : '') +
+                        (entry.detail != null ? ' ' + entry.detail : ''));
+                } catch (e) {}
+            }
+            function shadyCssWarnOnce() {
+                if (shadyCssWarned) return;
+                shadyCssWarned = true;
+                shadyCssWarningCount++;
+                try {
+                    var w = (typeof console !== 'undefined') && (console.warn || console.log);
+                    if (w) w.call(console, 'Aurora is using synthetic ShadyCSS-lite rewriting. ' +
+                        'Rendering may diverge from native Shadow DOM styling.');
+                } catch (e) {}
+            }
+
             // Split `str` on top-level `sep`, ignoring it inside (), [], "", ''.
             function splitTopLevel(str, sep) {
                 var out = [], depth = 0, quote = null, start = 0;
@@ -406,13 +436,19 @@
 
             function rewriteSelectorList(list, tag) {
                 return splitTopLevel(list, ',').map(function(s) {
-                    return rewriteScopedSelector(s, tag);
+                    var rewritten = rewriteScopedSelector(s, tag);
+                    if (shadyCssDebugEnabled() && s.trim() !== rewritten) {
+                        shadyCssRecord({ component: tag, kind: 'selector', from: s.trim(), to: rewritten });
+                    }
+                    return rewritten;
                 }).join(', ');
             }
 
             // Walk top-level rules, rewriting selector preludes. Recurses into
             // @media/@supports; leaves @keyframes/@font-face/@import untouched.
             function scopeCss(css, tag) {
+                // Synthetic rewriting is about to run — surface the divergence once.
+                shadyCssWarnOnce();
                 var out = '', i = 0, n = css.length, prelude = '';
                 while (i < n) {
                     var c = css[i];
@@ -430,6 +466,10 @@
                             if (low.indexOf('@media') === 0 || low.indexOf('@supports') === 0) {
                                 out += pre + '{' + scopeCss(body, tag) + '}';
                             } else {
+                                // @keyframes/@font-face/etc. pass through unscoped.
+                                if (shadyCssDebugEnabled()) {
+                                    shadyCssRecord({ component: tag, kind: 'at-rule-passthrough', detail: pre.split(/\s/)[0] });
+                                }
                                 out += pre + '{' + body + '}';
                             }
                         } else if (pre) {
@@ -446,6 +486,21 @@
                 }
                 return out + prelude; // keep any trailing @import/;-rule verbatim
             }
+
+            // Expose the pure ShadyCSS-lite rewriters on a namespaced internal
+            // hook. These are referenced by Shadow DOM semantics tests and by the
+            // Phase 5 ShadyCSS instrumentation; exposing the functions changes no
+            // runtime behavior (the live hoist path still calls them directly).
+            globalThis.__aurora_shadycss__ = globalThis.__aurora_shadycss__ || {};
+            globalThis.__aurora_shadycss__.rewriteSelector = rewriteScopedSelector;
+            globalThis.__aurora_shadycss__.scopeCss = scopeCss;
+            // Phase 5 instrumentation surface: diagnostics buffer (populated when
+            // AURORA_DEBUG_SHADYCSS is on) and the once-per-page warning counter.
+            globalThis.__aurora_shadycss__.diagnostics = shadyCssDiagnostics;
+            Object.defineProperty(globalThis.__aurora_shadycss__, 'warningCount', {
+                configurable: true,
+                get: function() { return shadyCssWarningCount; }
+            });
 
             function shimDomModuleStyles(id, tpl) {
                 if (!id || shimmedStyleScopes[id]) return;
@@ -465,8 +520,16 @@
                     cssText = cssText.replace(/\/\*[\s\S]*?\*\//g, '');
                     if (!cssText.trim()) continue;
                     var scoped;
-                    try { scoped = scopeCss(cssText, id); } catch (e) { scoped = null; }
-                    if (!scoped) continue;
+                    try {
+                        scoped = scopeCss(cssText, id);
+                    } catch (e) {
+                        shadyCssRecord({ component: id, kind: 'parse-failure', detail: String(e) });
+                        scoped = null;
+                    }
+                    if (!scoped) {
+                        shadyCssRecord({ component: id, kind: 'dropped' });
+                        continue;
+                    }
                     try {
                         var out = document.createElement('style');
                         out.setAttribute('data-style-scope', id);

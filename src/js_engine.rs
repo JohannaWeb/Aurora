@@ -5,6 +5,7 @@ use std::time::Instant;
 use crate::css::Stylesheet;
 use crate::dom::NodePtr;
 use crate::layout::{LayoutTree, ViewportSize};
+use crate::window::SnapshotRebuildReason;
 
 /// Which JS engine backend to construct.
 ///
@@ -82,6 +83,9 @@ pub(crate) trait JsRuntime {
     fn clear_dirty_bits(&mut self);
     fn has_dirty_bits(&self) -> bool;
     fn take_needs_reflow(&mut self) -> bool;
+    fn take_snapshot_rebuild_reason(&mut self) -> Option<SnapshotRebuildReason> {
+        None
+    }
 
     fn tick(&mut self, now: Instant) -> bool;
     fn drain_animation_frame_callbacks(&mut self, now: Instant) -> bool;

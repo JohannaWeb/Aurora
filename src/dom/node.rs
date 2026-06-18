@@ -70,9 +70,11 @@ pub fn link_children(node: &NodePtr) {
         set_parent(child, node);
     }
     if let Some(content) = template_contents {
+        set_parent(&content, node);
         link_children(&content);
     }
     if let Some(shadow_root) = shadow_root {
+        set_parent(&shadow_root, node);
         link_children(&shadow_root);
     }
 }
@@ -100,9 +102,11 @@ pub fn reparent_subtree(node: &NodePtr) {
         reparent_subtree(child);
     }
     if let Some(content) = template_contents {
+        set_parent(&content, node);
         reparent_subtree(&content);
     }
     if let Some(shadow_root) = shadow_root {
+        set_parent(&shadow_root, node);
         reparent_subtree(&shadow_root);
     }
 }

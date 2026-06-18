@@ -266,7 +266,7 @@ impl ChromeRenderer {
             self.width = width;
         }
         if let Some(doc) = self.doc.as_mut() {
-            doc.paint_to_scene(scene, width, CHROME_HEIGHT);
+            let _paint_result = doc.paint_to_scene(scene, width, CHROME_HEIGHT);
         }
     }
 }

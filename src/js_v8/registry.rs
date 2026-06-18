@@ -4,6 +4,7 @@ use std::rc::Rc;
 use v8;
 
 use crate::dom::NodePtr;
+use crate::window::SnapshotRebuildReason;
 
 pub(super) struct NodeRegistry {
     pub(super) nodes: Rc<RefCell<BTreeMap<u32, NodePtr>>>,
@@ -25,6 +26,7 @@ pub(super) struct NodeRegistry {
     pub(super) mo_entries: Rc<RefCell<Vec<super::mutation_observer::MoEntry>>>,
     /// Monotonic id source for MutationObservers (kept separate from node ids).
     mo_next: Rc<RefCell<u32>>,
+    snapshot_rebuild_reason: Rc<RefCell<Option<SnapshotRebuildReason>>>,
 }
 
 impl NodeRegistry {
@@ -44,6 +46,7 @@ impl NodeRegistry {
             mo_observers: Rc::new(RefCell::new(BTreeMap::new())),
             mo_entries: Rc::new(RefCell::new(Vec::new())),
             mo_next: Rc::new(RefCell::new(1)),
+            snapshot_rebuild_reason: Rc::new(RefCell::new(None)),
         }
     }
 
@@ -121,8 +124,24 @@ impl NodeRegistry {
         *self.render_document.borrow_mut() = render_document;
     }
 
+    pub(super) fn schedule_snapshot_rebuild_reason(&self, reason: SnapshotRebuildReason) {
+        *self.snapshot_rebuild_reason.borrow_mut() = Some(reason);
+    }
+
+    pub(super) fn take_snapshot_rebuild_reason(&self) -> Option<SnapshotRebuildReason> {
+        self.snapshot_rebuild_reason.borrow_mut().take()
+    }
+
     pub(super) fn has_render_document(&self) -> bool {
         self.render_document.borrow().is_some()
+    }
+
+    /// Hit-test content coordinates against the Blitz layout, returning the
+    /// deepest mapped DOM node at that point. Backs `document.elementFromPoint`.
+    pub(super) fn hit_test(&self, x: f32, y: f32) -> Option<NodePtr> {
+        let render_document = self.render_document.borrow().as_ref().cloned()?;
+        let hit = render_document.borrow().hit_test_dom_node(x, y);
+        hit
     }
 
     pub(super) fn blitz_node_id(&self, node: &NodePtr) -> Option<usize> {
@@ -185,10 +204,20 @@ impl NodeRegistry {
             .and_then(|doc| doc.borrow().closest_dom(node, selector))
     }
 
-    pub(super) fn sync_append_child_to_render_document(&self, parent: &NodePtr, child: &NodePtr) {
-        if let Some(render_document) = self.render_document.borrow().as_ref().cloned() {
-            render_document.borrow_mut().sync_append_child(parent, child);
-        }
+    pub(super) fn sync_append_child_to_render_document(
+        &self,
+        parent: &NodePtr,
+        child: &NodePtr,
+    ) -> bool {
+        self.render_document
+            .borrow()
+            .as_ref()
+            .cloned()
+            .is_none_or(|render_document| {
+                render_document
+                    .borrow_mut()
+                    .sync_append_child(parent, child)
+            })
     }
 
     pub(super) fn sync_insert_before_to_render_document(
@@ -196,18 +225,24 @@ impl NodeRegistry {
         parent: &NodePtr,
         new_child: &NodePtr,
         ref_child: Option<&NodePtr>,
-    ) {
-        if let Some(render_document) = self.render_document.borrow().as_ref().cloned() {
-            render_document
-                .borrow_mut()
-                .sync_insert_before(parent, new_child, ref_child);
-        }
+    ) -> bool {
+        self.render_document
+            .borrow()
+            .as_ref()
+            .cloned()
+            .is_none_or(|render_document| {
+                render_document
+                    .borrow_mut()
+                    .sync_insert_before(parent, new_child, ref_child)
+            })
     }
 
-    pub(super) fn sync_remove_child_from_render_document(&self, child: &NodePtr) {
-        if let Some(render_document) = self.render_document.borrow().as_ref().cloned() {
-            render_document.borrow_mut().sync_remove_child(child);
-        }
+    pub(super) fn sync_remove_child_from_render_document(&self, child: &NodePtr) -> bool {
+        self.render_document
+            .borrow()
+            .as_ref()
+            .cloned()
+            .is_none_or(|render_document| render_document.borrow_mut().sync_remove_child(child))
     }
 
     pub(super) fn sync_replace_child_in_render_document(
@@ -215,12 +250,16 @@ impl NodeRegistry {
         parent: &NodePtr,
         new_child: &NodePtr,
         old_child: &NodePtr,
-    ) {
-        if let Some(render_document) = self.render_document.borrow().as_ref().cloned() {
-            render_document
-                .borrow_mut()
-                .sync_replace_child(parent, new_child, old_child);
-        }
+    ) -> bool {
+        self.render_document
+            .borrow()
+            .as_ref()
+            .cloned()
+            .is_none_or(|render_document| {
+                render_document
+                    .borrow_mut()
+                    .sync_replace_child(parent, new_child, old_child)
+            })
     }
 
     pub(super) fn sync_attribute_to_render_document(
@@ -228,20 +267,32 @@ impl NodeRegistry {
         node: &NodePtr,
         name: &str,
         value: &str,
-    ) {
-        if let Some(render_document) = self.render_document.borrow().as_ref().cloned() {
-            render_document
-                .borrow_mut()
-                .sync_set_attribute(node, name, value);
-        }
+    ) -> bool {
+        self.render_document
+            .borrow()
+            .as_ref()
+            .cloned()
+            .is_none_or(|render_document| {
+                render_document
+                    .borrow_mut()
+                    .sync_set_attribute(node, name, value)
+            })
     }
 
-    pub(super) fn sync_remove_attribute_from_render_document(&self, node: &NodePtr, name: &str) {
-        if let Some(render_document) = self.render_document.borrow().as_ref().cloned() {
-            render_document
-                .borrow_mut()
-                .sync_remove_attribute(node, name);
-        }
+    pub(super) fn sync_remove_attribute_from_render_document(
+        &self,
+        node: &NodePtr,
+        name: &str,
+    ) -> bool {
+        self.render_document
+            .borrow()
+            .as_ref()
+            .cloned()
+            .is_none_or(|render_document| {
+                render_document
+                    .borrow_mut()
+                    .sync_remove_attribute(node, name)
+            })
     }
 
     pub(super) fn sync_all_attributes_to_render_document(&self, node: &NodePtr) {
@@ -250,10 +301,23 @@ impl NodeRegistry {
         }
     }
 
-    pub(super) fn sync_text_to_render_document(&self, node: &NodePtr, text: &str) {
-        if let Some(render_document) = self.render_document.borrow().as_ref().cloned() {
-            render_document.borrow_mut().sync_text_node(node, text);
-        }
+    pub(super) fn sync_text_to_render_document(&self, node: &NodePtr, text: &str) -> bool {
+        self.render_document
+            .borrow()
+            .as_ref()
+            .cloned()
+            .is_none_or(|render_document| render_document.borrow_mut().sync_text_node(node, text))
+    }
+
+    /// Blitz/Stylo border-box geometry for `node`, if a render document is
+    /// attached and the node is laid out. Backs the JS layout accessors.
+    pub(super) fn layout_metrics(
+        &self,
+        node: &NodePtr,
+    ) -> Option<crate::blitz_document::LayoutMetrics> {
+        let render_document = self.render_document.borrow().as_ref().cloned()?;
+        let metrics = render_document.borrow().dom_node_layout_metrics(node);
+        metrics
     }
 
     pub(super) fn sync_shadow_root_to_render_document(
@@ -261,24 +325,34 @@ impl NodeRegistry {
         host: &NodePtr,
         shadow_root: &NodePtr,
         mode: &str,
-    ) {
-        if let Some(render_document) = self.render_document.borrow().as_ref().cloned() {
-            render_document
-                .borrow_mut()
-                .sync_attach_shadow_root(host, shadow_root, mode);
-        }
+    ) -> bool {
+        self.render_document
+            .borrow()
+            .as_ref()
+            .cloned()
+            .is_none_or(|render_document| {
+                render_document
+                    .borrow_mut()
+                    .sync_attach_shadow_root(host, shadow_root, mode)
+            })
     }
 
-    pub(super) fn sync_clear_children_in_render_document(&self, parent: &NodePtr) {
-        if let Some(render_document) = self.render_document.borrow().as_ref().cloned() {
-            render_document.borrow_mut().sync_clear_children(parent);
-        }
+    pub(super) fn sync_clear_children_in_render_document(&self, parent: &NodePtr) -> bool {
+        self.render_document
+            .borrow()
+            .as_ref()
+            .cloned()
+            .is_none_or(|render_document| render_document.borrow_mut().sync_clear_children(parent))
     }
 
-    pub(super) fn sync_children_to_render_document(&self, parent: &NodePtr) {
-        if let Some(render_document) = self.render_document.borrow().as_ref().cloned() {
-            render_document.borrow_mut().sync_replace_children(parent);
-        }
+    pub(super) fn sync_children_to_render_document(&self, parent: &NodePtr) -> bool {
+        self.render_document
+            .borrow()
+            .as_ref()
+            .cloned()
+            .is_none_or(|render_document| {
+                render_document.borrow_mut().sync_replace_children(parent)
+            })
     }
 
     pub(super) fn register(&self, node: NodePtr) -> u32 {

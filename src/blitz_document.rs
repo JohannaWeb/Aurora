@@ -7,7 +7,7 @@ use blitz_traits::shell::{ColorScheme, Viewport};
 use markup5ever::{LocalName, QualName, local_name, namespace_prefix, ns};
 use vello::Scene;
 
-use crate::dom::{Node, NodePtr};
+use crate::dom::{Node, NodePtr, ShadowTreeBackend};
 use crate::identity::Identity;
 
 use std::collections::BTreeMap;
@@ -90,10 +90,57 @@ impl MirrorIntegrityError {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MirrorMutationResult {
+    Succeeded,
+    Failed,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MirrorMutationFailure {
+    MissingMapping,
+    SyncOperationFailed,
+    DebugValidationFailed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MirrorMutationTrace {
+    pub op_id: u64,
+    pub op_name: &'static str,
+    pub legacy_node: Option<usize>,
+    pub blitz_node: Option<usize>,
+    pub parent: Option<usize>,
+    pub child: Option<usize>,
+    pub shadow_root: bool,
+    pub result: MirrorMutationResult,
+    pub failure: Option<MirrorMutationFailure>,
+}
+
+/// Border-box geometry of a DOM node from the Blitz/Stylo layout, in
+/// document-relative (pre-scroll) coordinates. Backs the JS layout accessors.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct LayoutMetrics {
+    pub x: f32,
+    pub y: f32,
+    pub width: f32,
+    pub height: f32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[must_use]
+pub enum PaintResult {
+    PaintedCurrentFrame,
+    PreservedLastGoodFrame,
+    FailedRecoverable,
+    FailedUnhealthy,
+}
+
 pub struct BlitzDocument {
     inner: BaseDocument,
     healthy: bool,
     consecutive_panics: u32,
+    next_mirror_op_id: u64,
+    last_mirror_mutation: Option<MirrorMutationTrace>,
     legacy_to_blitz: BTreeMap<usize, usize>,
     blitz_to_legacy: BTreeMap<usize, NodePtr>,
 }
@@ -127,6 +174,8 @@ impl BlitzDocument {
                 inner,
                 healthy: true,
                 consecutive_panics: 0,
+                next_mirror_op_id: 1,
+                last_mirror_mutation: None,
                 legacy_to_blitz: BTreeMap::new(),
                 blitz_to_legacy: BTreeMap::new(),
             }
@@ -160,6 +209,8 @@ impl BlitzDocument {
                 inner,
                 healthy: true,
                 consecutive_panics: 0,
+                next_mirror_op_id: 1,
+                last_mirror_mutation: None,
                 legacy_to_blitz,
                 blitz_to_legacy,
             }
@@ -204,6 +255,10 @@ impl BlitzDocument {
         self.legacy_to_blitz.get(&legacy_node_key(node)).copied()
     }
 
+    pub fn last_mirror_mutation_trace(&self) -> Option<&MirrorMutationTrace> {
+        self.last_mirror_mutation.as_ref()
+    }
+
     #[cfg(debug_assertions)]
     pub fn validate_mirror_integrity(&self) -> Result<(), MirrorIntegrityError> {
         self.validate_mirror_integrity_for("manual validation")
@@ -240,7 +295,9 @@ impl BlitzDocument {
                     "mapped Blitz node no longer exists",
                 ));
             };
-            self.validate_mapped_node_state(operation, dom_node, *legacy_id, *blitz_id, blitz_node)?;
+            self.validate_mapped_node_state(
+                operation, dom_node, *legacy_id, *blitz_id, blitz_node,
+            )?;
         }
 
         for (blitz_id, dom_node) in &self.blitz_to_legacy {
@@ -335,10 +392,17 @@ impl BlitzDocument {
                         operation,
                         Some(legacy_id),
                         Some(blitz_id),
-                        format!("shadow root synthetic node is <{}>, expected <div>", blitz_el.name.local),
+                        format!(
+                            "shadow root synthetic node is <{}>, expected <div>",
+                            blitz_el.name.local
+                        ),
                     ));
                 }
-                if blitz_node.data.attr(local_name!("data-aurora-shadow-root")) != Some("true") {
+                if blitz_node
+                    .data
+                    .attr(LocalName::from("data-aurora-shadow-root"))
+                    != Some("true")
+                {
                     return Err(MirrorIntegrityError::new(
                         operation,
                         Some(legacy_id),
@@ -369,7 +433,9 @@ impl BlitzDocument {
                 }
                 if let Node::Element(host_el) = &*host.borrow() {
                     let expected_host_tag = host_el.tag_name.as_str();
-                    if blitz_node.data.attr(local_name!("data-aurora-shadow-host"))
+                    if blitz_node
+                        .data
+                        .attr(LocalName::from("data-aurora-shadow-host"))
                         != Some(expected_host_tag)
                     {
                         return Err(MirrorIntegrityError::new(
@@ -468,18 +534,100 @@ impl BlitzDocument {
     }
 
     #[cfg(debug_assertions)]
-    fn debug_validate_mirror_after(&self, operation: &'static str) {
-        if let Err(error) = self.validate_mirror_integrity_for(operation) {
-            log::error!(
-                "Blitz mirror integrity check failed after {}: {:?}",
-                operation,
+    fn debug_validate_mirror_after(
+        &self,
+        operation: &'static str,
+    ) -> Result<(), MirrorIntegrityError> {
+        self.validate_mirror_integrity_for(operation)
+            .map_err(|error| {
+                log::error!(
+                    "Blitz mirror integrity check failed after {}: {:?}",
+                    operation,
+                    error
+                );
                 error
-            );
-        }
+            })
     }
 
     #[cfg(not(debug_assertions))]
-    fn debug_validate_mirror_after(&self, _operation: &'static str) {}
+    fn debug_validate_mirror_after(&self, _operation: &'static str) -> Result<(), ()> {
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn record_mirror_mutation(
+        &mut self,
+        op_name: &'static str,
+        legacy_node: Option<usize>,
+        blitz_node: Option<usize>,
+        parent: Option<usize>,
+        child: Option<usize>,
+        shadow_root: bool,
+        result: MirrorMutationResult,
+        failure: Option<MirrorMutationFailure>,
+    ) {
+        let trace = MirrorMutationTrace {
+            op_id: self.next_mirror_op_id,
+            op_name,
+            legacy_node,
+            blitz_node,
+            parent,
+            child,
+            shadow_root,
+            result,
+            failure,
+        };
+        self.next_mirror_op_id += 1;
+        if matches!(
+            std::env::var("AURORA_DEBUG_MIRROR_MUTATIONS").as_deref(),
+            Ok("1") | Ok("true") | Ok("TRUE") | Ok("yes") | Ok("YES")
+        ) {
+            log::debug!("Blitz mirror mutation trace: {:?}", trace);
+        }
+        self.last_mirror_mutation = Some(trace);
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn finish_mirror_mutation(
+        &mut self,
+        op_name: &'static str,
+        legacy_node: Option<usize>,
+        blitz_node: Option<usize>,
+        parent: Option<usize>,
+        child: Option<usize>,
+        shadow_root: bool,
+        updated: bool,
+    ) {
+        if updated {
+            self.consecutive_panics = 0;
+            let validation_failed = self.debug_validate_mirror_after(op_name).is_err();
+            self.record_mirror_mutation(
+                op_name,
+                legacy_node,
+                blitz_node,
+                parent,
+                child,
+                shadow_root,
+                if validation_failed {
+                    MirrorMutationResult::Failed
+                } else {
+                    MirrorMutationResult::Succeeded
+                },
+                validation_failed.then_some(MirrorMutationFailure::DebugValidationFailed),
+            );
+        } else {
+            self.record_mirror_mutation(
+                op_name,
+                legacy_node,
+                blitz_node,
+                parent,
+                child,
+                shadow_root,
+                MirrorMutationResult::Failed,
+                Some(MirrorMutationFailure::SyncOperationFailed),
+            );
+        }
+    }
 
     pub fn dom_node_for_blitz_id(&self, node_id: usize) -> Option<NodePtr> {
         self.blitz_to_legacy.get(&node_id).cloned()
@@ -572,6 +720,30 @@ impl BlitzDocument {
         document_bottom(root).max(root.final_layout.size.height)
     }
 
+    /// Border-box geometry of `node` from the Blitz/Stylo layout that produced
+    /// the current pixels. Position is document-relative (sum of taffy locations
+    /// up the box tree), pre-scroll. Returns `None` if the node isn't mapped into
+    /// the render tree. This is the authoritative source for JS layout accessors
+    /// (`offsetWidth`, `getBoundingClientRect`, …) in normal Blitz mode.
+    pub fn dom_node_layout_metrics(&self, node: &NodePtr) -> Option<LayoutMetrics> {
+        let node_id = self.blitz_node_id_for_dom(node)?;
+        let size = self.inner.get_node(node_id)?.final_layout.size;
+        let (mut x, mut y) = (0.0_f32, 0.0_f32);
+        let mut current = Some(node_id);
+        while let Some(id) = current {
+            let Some(n) = self.inner.get_node(id) else { break };
+            x += n.final_layout.location.x;
+            y += n.final_layout.location.y;
+            current = n.parent;
+        }
+        Some(LayoutMetrics {
+            x,
+            y,
+            width: size.width,
+            height: size.height,
+        })
+    }
+
     fn blitz_is_descendant_or_self(&self, mut node_id: usize, ancestor_id: usize) -> bool {
         loop {
             if node_id == ancestor_id {
@@ -610,7 +782,18 @@ impl BlitzDocument {
     }
 
     pub fn sync_append_child(&mut self, parent: &NodePtr, child: &NodePtr) -> bool {
+        let op_name = "sync_append_child";
         let Some(parent_id) = self.blitz_node_id_for_dom(parent) else {
+            self.record_mirror_mutation(
+                op_name,
+                Some(legacy_node_key(parent)),
+                None,
+                Some(legacy_node_key(parent)),
+                Some(legacy_node_key(child)),
+                is_shadow_root_node(child),
+                MirrorMutationResult::Failed,
+                Some(MirrorMutationFailure::MissingMapping),
+            );
             return false;
         };
         let parent_ns = self.node_namespace(parent_id).unwrap_or_else(|| ns!(html));
@@ -631,10 +814,16 @@ impl BlitzDocument {
             true
         })
         .unwrap_or(false);
-        if updated {
-            self.consecutive_panics = 0;
-            self.debug_validate_mirror_after("sync_append_child");
-        }
+        let child_id = self.blitz_node_id_for_dom(child);
+        self.finish_mirror_mutation(
+            op_name,
+            Some(legacy_node_key(child)),
+            child_id,
+            Some(legacy_node_key(parent)),
+            Some(legacy_node_key(child)),
+            is_shadow_root_node(child),
+            updated,
+        );
         updated
     }
 
@@ -644,7 +833,18 @@ impl BlitzDocument {
         new_child: &NodePtr,
         ref_child: Option<&NodePtr>,
     ) -> bool {
+        let op_name = "sync_insert_before";
         let Some(parent_id) = self.blitz_node_id_for_dom(parent) else {
+            self.record_mirror_mutation(
+                op_name,
+                Some(legacy_node_key(parent)),
+                None,
+                Some(legacy_node_key(parent)),
+                Some(legacy_node_key(new_child)),
+                is_shadow_root_node(new_child),
+                MirrorMutationResult::Failed,
+                Some(MirrorMutationFailure::MissingMapping),
+            );
             return false;
         };
         let parent_ns = self.node_namespace(parent_id).unwrap_or_else(|| ns!(html));
@@ -670,17 +870,35 @@ impl BlitzDocument {
             true
         })
         .unwrap_or(false);
-        if updated {
-            self.consecutive_panics = 0;
-            self.debug_validate_mirror_after("sync_insert_before");
-        }
+        let child_id = self.blitz_node_id_for_dom(new_child);
+        self.finish_mirror_mutation(
+            op_name,
+            Some(legacy_node_key(new_child)),
+            child_id,
+            Some(legacy_node_key(parent)),
+            Some(legacy_node_key(new_child)),
+            is_shadow_root_node(new_child),
+            updated,
+        );
         updated
     }
 
     pub fn sync_remove_child(&mut self, child: &NodePtr) -> bool {
+        let op_name = "sync_remove_child";
         let Some(child_id) = self.blitz_node_id_for_dom(child) else {
+            self.record_mirror_mutation(
+                op_name,
+                Some(legacy_node_key(child)),
+                None,
+                crate::dom::parent_ptr(child).map(|parent| legacy_node_key(&parent)),
+                Some(legacy_node_key(child)),
+                is_shadow_root_node(child),
+                MirrorMutationResult::Failed,
+                Some(MirrorMutationFailure::MissingMapping),
+            );
             return false;
         };
+        let parent_key = crate::dom::parent_ptr(child).map(|parent| legacy_node_key(&parent));
         let updated = catch_stylo_panic("removing DOM mutation from Blitz document", || {
             let mut mutator = self.inner.mutate();
             mutator.remove_node(child_id);
@@ -689,9 +907,16 @@ impl BlitzDocument {
         .unwrap_or(false);
         if updated {
             remove_subtree_mapping(child, &mut self.legacy_to_blitz, &mut self.blitz_to_legacy);
-            self.consecutive_panics = 0;
-            self.debug_validate_mirror_after("sync_remove_child");
         }
+        self.finish_mirror_mutation(
+            op_name,
+            Some(legacy_node_key(child)),
+            Some(child_id),
+            parent_key,
+            Some(legacy_node_key(child)),
+            is_shadow_root_node(child),
+            updated,
+        );
         updated
     }
 
@@ -701,7 +926,18 @@ impl BlitzDocument {
         new_child: &NodePtr,
         old_child: &NodePtr,
     ) -> bool {
+        let op_name = "sync_replace_child";
         let Some(old_id) = self.blitz_node_id_for_dom(old_child) else {
+            self.record_mirror_mutation(
+                op_name,
+                Some(legacy_node_key(old_child)),
+                None,
+                Some(legacy_node_key(parent)),
+                Some(legacy_node_key(new_child)),
+                is_shadow_root_node(new_child) || is_shadow_root_node(old_child),
+                MirrorMutationResult::Failed,
+                Some(MirrorMutationFailure::MissingMapping),
+            );
             return false;
         };
         let parent_ns = self
@@ -731,14 +967,33 @@ impl BlitzDocument {
                 &mut self.legacy_to_blitz,
                 &mut self.blitz_to_legacy,
             );
-            self.consecutive_panics = 0;
-            self.debug_validate_mirror_after("sync_replace_child");
         }
+        let new_id = self.blitz_node_id_for_dom(new_child);
+        self.finish_mirror_mutation(
+            op_name,
+            Some(legacy_node_key(new_child)),
+            new_id.or(Some(old_id)),
+            Some(legacy_node_key(parent)),
+            Some(legacy_node_key(new_child)),
+            is_shadow_root_node(new_child) || is_shadow_root_node(old_child),
+            updated,
+        );
         updated
     }
 
     pub fn sync_set_attribute(&mut self, node: &NodePtr, name: &str, value: &str) -> bool {
+        let op_name = "sync_set_attribute";
         let Some(node_id) = self.blitz_node_id_for_dom(node) else {
+            self.record_mirror_mutation(
+                op_name,
+                Some(legacy_node_key(node)),
+                None,
+                crate::dom::parent_ptr(node).map(|parent| legacy_node_key(&parent)),
+                None,
+                is_shadow_root_node(node),
+                MirrorMutationResult::Failed,
+                Some(MirrorMutationFailure::MissingMapping),
+            );
             return false;
         };
         let updated = catch_stylo_panic("setting DOM attribute in Blitz document", || {
@@ -747,15 +1002,31 @@ impl BlitzDocument {
             true
         })
         .unwrap_or(false);
-        if updated {
-            self.consecutive_panics = 0;
-            self.debug_validate_mirror_after("sync_set_attribute");
-        }
+        self.finish_mirror_mutation(
+            op_name,
+            Some(legacy_node_key(node)),
+            Some(node_id),
+            crate::dom::parent_ptr(node).map(|parent| legacy_node_key(&parent)),
+            None,
+            is_shadow_root_node(node),
+            updated,
+        );
         updated
     }
 
     pub fn sync_remove_attribute(&mut self, node: &NodePtr, name: &str) -> bool {
+        let op_name = "sync_remove_attribute";
         let Some(node_id) = self.blitz_node_id_for_dom(node) else {
+            self.record_mirror_mutation(
+                op_name,
+                Some(legacy_node_key(node)),
+                None,
+                crate::dom::parent_ptr(node).map(|parent| legacy_node_key(&parent)),
+                None,
+                is_shadow_root_node(node),
+                MirrorMutationResult::Failed,
+                Some(MirrorMutationFailure::MissingMapping),
+            );
             return false;
         };
         let updated = catch_stylo_panic("removing DOM attribute from Blitz document", || {
@@ -764,18 +1035,44 @@ impl BlitzDocument {
             true
         })
         .unwrap_or(false);
-        if updated {
-            self.consecutive_panics = 0;
-            self.debug_validate_mirror_after("sync_remove_attribute");
-        }
+        self.finish_mirror_mutation(
+            op_name,
+            Some(legacy_node_key(node)),
+            Some(node_id),
+            crate::dom::parent_ptr(node).map(|parent| legacy_node_key(&parent)),
+            None,
+            is_shadow_root_node(node),
+            updated,
+        );
         updated
     }
 
     pub fn sync_all_attributes(&mut self, node: &NodePtr) -> bool {
+        let op_name = "sync_all_attributes";
         let Some(node_id) = self.blitz_node_id_for_dom(node) else {
+            self.record_mirror_mutation(
+                op_name,
+                Some(legacy_node_key(node)),
+                None,
+                crate::dom::parent_ptr(node).map(|parent| legacy_node_key(&parent)),
+                None,
+                is_shadow_root_node(node),
+                MirrorMutationResult::Failed,
+                Some(MirrorMutationFailure::MissingMapping),
+            );
             return false;
         };
         let Ok(node_borrow) = node.try_borrow() else {
+            self.record_mirror_mutation(
+                op_name,
+                Some(legacy_node_key(node)),
+                Some(node_id),
+                crate::dom::parent_ptr(node).map(|parent| legacy_node_key(&parent)),
+                None,
+                is_shadow_root_node(node),
+                MirrorMutationResult::Failed,
+                Some(MirrorMutationFailure::SyncOperationFailed),
+            );
             return false;
         };
         let attrs = match &*node_borrow {
@@ -810,15 +1107,31 @@ impl BlitzDocument {
             true
         })
         .unwrap_or(false);
-        if updated {
-            self.consecutive_panics = 0;
-            self.debug_validate_mirror_after("sync_all_attributes");
-        }
+        self.finish_mirror_mutation(
+            op_name,
+            Some(legacy_node_key(node)),
+            Some(node_id),
+            crate::dom::parent_ptr(node).map(|parent| legacy_node_key(&parent)),
+            None,
+            is_shadow_root_node(node),
+            updated,
+        );
         updated
     }
 
     pub fn sync_text_node(&mut self, node: &NodePtr, text: &str) -> bool {
+        let op_name = "sync_text_node";
         let Some(node_id) = self.blitz_node_id_for_dom(node) else {
+            self.record_mirror_mutation(
+                op_name,
+                Some(legacy_node_key(node)),
+                None,
+                crate::dom::parent_ptr(node).map(|parent| legacy_node_key(&parent)),
+                None,
+                is_shadow_root_node(node),
+                MirrorMutationResult::Failed,
+                Some(MirrorMutationFailure::MissingMapping),
+            );
             return false;
         };
         let updated = catch_stylo_panic("setting DOM text in Blitz document", || {
@@ -827,10 +1140,15 @@ impl BlitzDocument {
             true
         })
         .unwrap_or(false);
-        if updated {
-            self.consecutive_panics = 0;
-            self.debug_validate_mirror_after("sync_text_node");
-        }
+        self.finish_mirror_mutation(
+            op_name,
+            Some(legacy_node_key(node)),
+            Some(node_id),
+            crate::dom::parent_ptr(node).map(|parent| legacy_node_key(&parent)),
+            None,
+            is_shadow_root_node(node),
+            updated,
+        );
         updated
     }
 
@@ -840,10 +1158,31 @@ impl BlitzDocument {
         shadow_root: &NodePtr,
         mode: &str,
     ) -> bool {
+        let op_name = "sync_attach_shadow_root";
         let Some(host_id) = self.blitz_node_id_for_dom(host) else {
+            self.record_mirror_mutation(
+                op_name,
+                Some(legacy_node_key(shadow_root)),
+                None,
+                Some(legacy_node_key(host)),
+                Some(legacy_node_key(shadow_root)),
+                true,
+                MirrorMutationResult::Failed,
+                Some(MirrorMutationFailure::MissingMapping),
+            );
             return false;
         };
         if self.blitz_node_id_for_dom(shadow_root).is_some() {
+            self.record_mirror_mutation(
+                op_name,
+                Some(legacy_node_key(shadow_root)),
+                self.blitz_node_id_for_dom(shadow_root),
+                Some(legacy_node_key(host)),
+                Some(legacy_node_key(shadow_root)),
+                true,
+                MirrorMutationResult::Succeeded,
+                None,
+            );
             return true;
         }
         let host_ns = self.node_namespace(host_id).unwrap_or_else(|| ns!(html));
@@ -882,15 +1221,32 @@ impl BlitzDocument {
             true
         })
         .unwrap_or(false);
-        if updated {
-            self.consecutive_panics = 0;
-            self.debug_validate_mirror_after("sync_attach_shadow_root");
-        }
+        let shadow_id = self.blitz_node_id_for_dom(shadow_root);
+        self.finish_mirror_mutation(
+            op_name,
+            Some(legacy_node_key(shadow_root)),
+            shadow_id,
+            Some(legacy_node_key(host)),
+            Some(legacy_node_key(shadow_root)),
+            true,
+            updated,
+        );
         updated
     }
 
     pub fn sync_clear_children(&mut self, parent: &NodePtr) -> bool {
+        let op_name = "sync_clear_children";
         let Some(parent_id) = self.blitz_node_id_for_dom(parent) else {
+            self.record_mirror_mutation(
+                op_name,
+                Some(legacy_node_key(parent)),
+                None,
+                Some(legacy_node_key(parent)),
+                None,
+                is_shadow_root_node(parent),
+                MirrorMutationResult::Failed,
+                Some(MirrorMutationFailure::MissingMapping),
+            );
             return false;
         };
         remove_subtree_mappings_for_children(
@@ -904,15 +1260,31 @@ impl BlitzDocument {
             true
         })
         .unwrap_or(false);
-        if updated {
-            self.consecutive_panics = 0;
-            self.debug_validate_mirror_after("sync_clear_children");
-        }
+        self.finish_mirror_mutation(
+            op_name,
+            Some(legacy_node_key(parent)),
+            Some(parent_id),
+            Some(legacy_node_key(parent)),
+            None,
+            is_shadow_root_node(parent),
+            updated,
+        );
         updated
     }
 
     pub fn sync_replace_children(&mut self, parent: &NodePtr) -> bool {
+        let op_name = "sync_replace_children";
         let Some(parent_id) = self.blitz_node_id_for_dom(parent) else {
+            self.record_mirror_mutation(
+                op_name,
+                Some(legacy_node_key(parent)),
+                None,
+                Some(legacy_node_key(parent)),
+                None,
+                is_shadow_root_node(parent),
+                MirrorMutationResult::Failed,
+                Some(MirrorMutationFailure::MissingMapping),
+            );
             return false;
         };
         let parent_ns = self.node_namespace(parent_id).unwrap_or_else(|| ns!(html));
@@ -958,10 +1330,15 @@ impl BlitzDocument {
             true
         })
         .unwrap_or(false);
-        if updated {
-            self.consecutive_panics = 0;
-            self.debug_validate_mirror_after("sync_replace_children");
-        }
+        self.finish_mirror_mutation(
+            op_name,
+            Some(legacy_node_key(parent)),
+            Some(parent_id),
+            Some(legacy_node_key(parent)),
+            None,
+            is_shadow_root_node(parent),
+            updated,
+        );
         updated
     }
 
@@ -972,25 +1349,16 @@ impl BlitzDocument {
             .map(|element| element.name.ns.clone())
     }
 
-    pub fn paint_to_scene(&mut self, scene: &mut Scene, width: u32, height: u32) -> bool {
+    pub fn paint_to_scene(&mut self, scene: &mut Scene, width: u32, height: u32) -> PaintResult {
         if !self.resolve_inner() {
-            return false;
+            return self.paint_failure_result("resolving before paint");
         }
         let mut painter = VelloScenePainter::new(scene);
         let painted = catch_stylo_panic("painting Blitz document", || {
             blitz_paint::paint_scene(&mut painter, &mut self.inner, 1.0, width, height, 0, 0);
         })
         .is_some();
-        if painted {
-            self.healthy = true;
-            self.consecutive_panics = 0;
-        } else {
-            self.consecutive_panics += 1;
-            if self.consecutive_panics >= MAX_CONSECUTIVE_PANICS {
-                self.healthy = false;
-            }
-        }
-        painted
+        self.finish_paint_attempt("paint_to_scene", painted)
     }
 
     pub fn paint_with(
@@ -998,24 +1366,51 @@ impl BlitzDocument {
         painter: &mut impl PaintScene,
         width: u32,
         height: u32,
-    ) -> bool {
+    ) -> PaintResult {
         if !self.resolve_inner() {
-            return false;
+            return self.paint_failure_result("resolving before paint_with");
         }
         let painted = catch_stylo_panic("painting Blitz document", || {
             blitz_paint::paint_scene(painter, &mut self.inner, 1.0, width, height, 0, 0);
         })
         .is_some();
+        self.finish_paint_attempt("paint_with", painted)
+    }
+
+    fn finish_paint_attempt(&mut self, context: &'static str, painted: bool) -> PaintResult {
         if painted {
+            let previous_failures = self.consecutive_panics;
             self.healthy = true;
             self.consecutive_panics = 0;
+            if previous_failures > 0 {
+                log::info!(
+                    "Blitz paint recovered in {context} after {previous_failures} consecutive failures"
+                );
+            }
+            PaintResult::PaintedCurrentFrame
         } else {
             self.consecutive_panics += 1;
             if self.consecutive_panics >= MAX_CONSECUTIVE_PANICS {
                 self.healthy = false;
             }
+            self.paint_failure_result(context)
         }
-        painted
+    }
+
+    fn paint_failure_result(&self, context: &'static str) -> PaintResult {
+        if self.healthy {
+            log::warn!(
+                "Recoverable Blitz paint failure in {context}; consecutive_failures={}",
+                self.consecutive_panics
+            );
+            PaintResult::FailedRecoverable
+        } else {
+            log::error!(
+                "Unhealthy Blitz paint failure in {context}; consecutive_failures={}",
+                self.consecutive_panics
+            );
+            PaintResult::FailedUnhealthy
+        }
     }
 
     /// TEMP: walk the tree printing each element's tag, computed size, position
@@ -1213,30 +1608,11 @@ fn is_element_node(node: &NodePtr) -> bool {
 }
 
 fn is_shadow_root_node(node: &NodePtr) -> bool {
-    if !is_document_fragment(node) {
-        return false;
-    }
-    let Some(parent) = crate::dom::parent_ptr(node) else {
-        return false;
-    };
-    match &*parent.borrow() {
-        Node::Element(el) => el
-            .shadow_root
-            .as_ref()
-            .is_some_and(|shadow_root| std::rc::Rc::ptr_eq(shadow_root, node)),
-        _ => false,
-    }
+    crate::dom::SyntheticShadowTreeBackend.is_shadow_root(node)
 }
 
 fn nearest_shadow_root(node: &NodePtr) -> Option<NodePtr> {
-    let mut current = Some(node.clone());
-    while let Some(candidate) = current {
-        if is_shadow_root_node(&candidate) {
-            return Some(candidate);
-        }
-        current = crate::dom::parent_ptr(&candidate);
-    }
-    None
+    crate::dom::SyntheticShadowTreeBackend.nearest_shadow_root(node)
 }
 
 fn query_can_see(start: &NodePtr, found: &NodePtr) -> bool {
@@ -1445,7 +1821,263 @@ fn collect_node_counts(node: &blitz_dom::Node, counts: &mut NodeCounts) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dom::Node;
+    use crate::dom::{Node, set_parent};
+    use crate::identity::{Capability, IdentityKind};
+    use std::sync::Mutex;
+
+    static BLITZ_DOCUMENT_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    fn test_identity() -> Identity {
+        Identity::new(
+            "did:aurora:test",
+            "Aurora Test",
+            IdentityKind::Agent,
+            [Capability::ReadWorkspace, Capability::NetworkAccess],
+        )
+    }
+
+    fn attr(name: &str, value: &str) -> BTreeMap<String, String> {
+        BTreeMap::from([(name.to_string(), value.to_string())])
+    }
+
+    fn body_from_document(document: &NodePtr) -> NodePtr {
+        let Node::Document { children, .. } = &*document.borrow() else {
+            panic!("expected document node");
+        };
+        let html = children.first().expect("document should have html").clone();
+        let Node::Element(html_el) = &*html.borrow() else {
+            panic!("expected html element");
+        };
+        html_el
+            .children
+            .iter()
+            .find(|child| matches!(&*child.borrow(), Node::Element(el) if el.tag_name == "body"))
+            .expect("document should have body")
+            .clone()
+    }
+
+    fn document_with_body_children(children: Vec<NodePtr>) -> NodePtr {
+        let document = Node::document(vec![Node::element(
+            "html",
+            vec![
+                Node::element("head", Vec::new()),
+                Node::element("body", children),
+            ],
+        )]);
+        crate::dom::reparent_subtree(&document);
+        document
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    fn debug_mirror_integrity_accepts_initial_dom_snapshot() {
+        let _guard = BLITZ_DOCUMENT_TEST_LOCK.lock().unwrap();
+        let document = document_with_body_children(vec![Node::element_with_attributes(
+            "p",
+            attr("data-role", "greeting"),
+            vec![Node::text("hello")],
+        )]);
+
+        let blitz_doc = BlitzDocument::try_from_dom(&document, None, &test_identity(), 800, 600)
+            .expect("Blitz document should build");
+
+        blitz_doc.validate_mirror_integrity().unwrap();
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    fn debug_mirror_integrity_accepts_synced_dom_mutations() {
+        let _guard = BLITZ_DOCUMENT_TEST_LOCK.lock().unwrap();
+        let text = Node::text("old");
+        let item = Node::element_with_attributes("p", attr("id", "item"), vec![text.clone()]);
+        let document = document_with_body_children(vec![item.clone()]);
+        let body = body_from_document(&document);
+        let mut blitz_doc =
+            BlitzDocument::try_from_dom(&document, None, &test_identity(), 800, 600)
+                .expect("Blitz document should build");
+
+        let appended = Node::element("span", vec![Node::text("new")]);
+        if let Node::Element(body_el) = &mut *body.borrow_mut() {
+            body_el.children.push(appended.clone());
+        }
+        set_parent(&appended, &body);
+        assert!(blitz_doc.sync_append_child(&body, &appended));
+        blitz_doc.validate_mirror_integrity().unwrap();
+
+        if let Node::Element(item_el) = &mut *item.borrow_mut() {
+            item_el
+                .attributes
+                .insert("data-state".to_string(), "ready".to_string());
+        }
+        assert!(blitz_doc.sync_set_attribute(&item, "data-state", "ready"));
+        blitz_doc.validate_mirror_integrity().unwrap();
+
+        if let Node::Text(text_node) = &mut *text.borrow_mut() {
+            text_node.content = "updated".to_string();
+        }
+        assert!(blitz_doc.sync_text_node(&text, "updated"));
+        blitz_doc.validate_mirror_integrity().unwrap();
+
+        if let Node::Element(body_el) = &mut *body.borrow_mut() {
+            body_el
+                .children
+                .retain(|child| !std::rc::Rc::ptr_eq(child, &appended));
+        }
+        crate::dom::clear_parent(&appended);
+        assert!(blitz_doc.sync_remove_child(&appended));
+        blitz_doc.validate_mirror_integrity().unwrap();
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    fn debug_mirror_integrity_accepts_synced_shadow_root() {
+        let _guard = BLITZ_DOCUMENT_TEST_LOCK.lock().unwrap();
+        let host = Node::element("x-host", Vec::new());
+        let document = document_with_body_children(vec![host.clone()]);
+        let mut blitz_doc =
+            BlitzDocument::try_from_dom(&document, None, &test_identity(), 800, 600)
+                .expect("Blitz document should build");
+
+        let shadow_root =
+            Node::document_fragment(vec![Node::element("span", vec![Node::text("shadow")])]);
+        if let Node::Element(host_el) = &mut *host.borrow_mut() {
+            host_el.shadow_root = Some(shadow_root.clone());
+        }
+        set_parent(&shadow_root, &host);
+        crate::dom::reparent_subtree(&shadow_root);
+
+        assert!(blitz_doc.sync_attach_shadow_root(&host, &shadow_root, "open"));
+        blitz_doc.validate_mirror_integrity().unwrap();
+        assert!(blitz_doc.blitz_node_id_for_dom(&shadow_root).is_some());
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    fn debug_mirror_integrity_reports_corrupt_reverse_mapping() {
+        let _guard = BLITZ_DOCUMENT_TEST_LOCK.lock().unwrap();
+        let document = document_with_body_children(vec![Node::element("p", vec![Node::text("x")])]);
+        let mut blitz_doc =
+            BlitzDocument::try_from_dom(&document, None, &test_identity(), 800, 600)
+                .expect("Blitz document should build");
+
+        blitz_doc.blitz_to_legacy.remove(&0);
+
+        let error = blitz_doc.validate_mirror_integrity().unwrap_err();
+        assert_eq!(error.operation, "manual validation");
+        assert_eq!(error.blitz_node, Some(0));
+        assert!(
+            error
+                .message
+                .contains("legacy_to_blitz entry has no reverse")
+        );
+    }
+
+    #[test]
+    fn mirror_mutation_trace_records_monotonic_operation_ids() {
+        let _guard = BLITZ_DOCUMENT_TEST_LOCK.lock().unwrap();
+        let item = Node::element_with_attributes("p", attr("id", "item"), vec![Node::text("old")]);
+        let document = document_with_body_children(vec![item.clone()]);
+        let mut blitz_doc =
+            BlitzDocument::try_from_dom(&document, None, &test_identity(), 800, 600)
+                .expect("Blitz document should build");
+
+        if let Node::Element(item_el) = &mut *item.borrow_mut() {
+            item_el
+                .attributes
+                .insert("data-state".to_string(), "ready".to_string());
+        }
+        assert!(blitz_doc.sync_set_attribute(&item, "data-state", "ready"));
+        let first = blitz_doc
+            .last_mirror_mutation_trace()
+            .expect("trace should be recorded")
+            .clone();
+        assert_eq!(first.op_id, 1);
+        assert_eq!(first.op_name, "sync_set_attribute");
+        assert_eq!(first.result, MirrorMutationResult::Succeeded);
+        assert_eq!(first.failure, None);
+        assert_eq!(first.legacy_node, Some(legacy_node_key(&item)));
+        assert!(first.blitz_node.is_some());
+
+        if let Node::Element(item_el) = &mut *item.borrow_mut() {
+            item_el.attributes.remove("data-state");
+        }
+        assert!(blitz_doc.sync_remove_attribute(&item, "data-state"));
+        let second = blitz_doc
+            .last_mirror_mutation_trace()
+            .expect("trace should be recorded");
+        assert_eq!(second.op_id, first.op_id + 1);
+        assert_eq!(second.op_name, "sync_remove_attribute");
+        assert_eq!(second.result, MirrorMutationResult::Succeeded);
+        assert_eq!(second.failure, None);
+    }
+
+    #[test]
+    fn mirror_mutation_trace_records_missing_mapping_failures() {
+        let _guard = BLITZ_DOCUMENT_TEST_LOCK.lock().unwrap();
+        let document = document_with_body_children(vec![Node::element("p", vec![Node::text("x")])]);
+        let mut blitz_doc =
+            BlitzDocument::try_from_dom(&document, None, &test_identity(), 800, 600)
+                .expect("Blitz document should build");
+        let orphan = Node::element("orphan", Vec::new());
+        let child = Node::element("child", Vec::new());
+
+        assert!(!blitz_doc.sync_append_child(&orphan, &child));
+        let trace = blitz_doc
+            .last_mirror_mutation_trace()
+            .expect("failed sync should be traced");
+        assert_eq!(trace.op_id, 1);
+        assert_eq!(trace.op_name, "sync_append_child");
+        assert_eq!(trace.result, MirrorMutationResult::Failed);
+        assert_eq!(trace.failure, Some(MirrorMutationFailure::MissingMapping));
+        assert_eq!(trace.parent, Some(legacy_node_key(&orphan)));
+        assert_eq!(trace.child, Some(legacy_node_key(&child)));
+        assert_eq!(trace.blitz_node, None);
+    }
+
+    #[test]
+    fn paint_to_scene_reports_painted_current_frame_on_success() {
+        let _guard = BLITZ_DOCUMENT_TEST_LOCK.lock().unwrap();
+        let document = document_with_body_children(vec![Node::element("p", vec![Node::text("x")])]);
+        let mut blitz_doc =
+            BlitzDocument::try_from_dom(&document, None, &test_identity(), 800, 600)
+                .expect("Blitz document should build");
+        let mut scene = Scene::new();
+
+        assert_eq!(
+            blitz_doc.paint_to_scene(&mut scene, 800, 600),
+            PaintResult::PaintedCurrentFrame
+        );
+    }
+
+    #[test]
+    fn paint_failure_state_distinguishes_recoverable_from_unhealthy() {
+        let _guard = BLITZ_DOCUMENT_TEST_LOCK.lock().unwrap();
+        let document = document_with_body_children(vec![Node::element("p", vec![Node::text("x")])]);
+        let mut blitz_doc =
+            BlitzDocument::try_from_dom(&document, None, &test_identity(), 800, 600)
+                .expect("Blitz document should build");
+
+        assert_eq!(
+            blitz_doc.finish_paint_attempt("test", false),
+            PaintResult::FailedRecoverable
+        );
+
+        for _ in 1..MAX_CONSECUTIVE_PANICS {
+            let _ = blitz_doc.finish_paint_attempt("test", false);
+        }
+        assert_eq!(
+            blitz_doc.paint_failure_result("test"),
+            PaintResult::FailedUnhealthy
+        );
+        assert!(!blitz_doc.healthy);
+
+        assert_eq!(
+            blitz_doc.finish_paint_attempt("test", true),
+            PaintResult::PaintedCurrentFrame
+        );
+        assert!(blitz_doc.healthy);
+        assert_eq!(blitz_doc.consecutive_panics, 0);
+    }
 
     #[test]
     fn html_elements_stay_html_outside_foreign_content() {
