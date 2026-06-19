@@ -139,9 +139,71 @@ YouTube's minified component system, not a bounded fix.
 - `docs/ARCHITECTURE.md` corrected (V8-only; no false "no-Chromium/Servo" claim).
 
 ## How to reproduce the diagnosis
-The probes were reverted to keep the tree clean. To re-run, re-add env-gated helpers in
-`src/js_polyfills/custom_elements.js` + a caller in `src/runner/pipeline.rs`, then:
 ```bash
 AURORA_DEBUG_RENDER=1  AURORA_HEADLESS=1  cargo run -- https://youtube.com   # layout sizes + path count
 AURORA_DEBUG_YOUTUBE=1 AURORA_HEADLESS=1  cargo run -- https://youtube.com   # component/probe state
+# Custom-element lifecycle tracer (now permanent, gated infrastructure):
+AURORA_TRACE_CE=1 AURORA_TRACE_CE_FILTER="ytd-app,ytd-topbar-logo-renderer" \
+  AURORA_HEADLESS=1 cargo run -- https://youtube.com
 ```
+
+---
+
+# Update 2026-06-19 — lifecycle instrumentation finds the true root cause
+
+Per the recommendation, we built **permanent, gated custom-element lifecycle instrumentation**
+(`AURORA_TRACE_CE` / `AURORA_TRACE_CE_FILTER`, in `src/js_polyfills/custom_elements.js`,
+flag wired in `src/js_v8/runtime.rs`). It traces, per element: the ctor at `define`, the ctor
+at upgrade, the construct-via-`new` path, prototype-chain summaries after `setPrototypeOf`,
+after construction, and after `connectedCallback`, the `connect` gate (connected? retry?),
+and `_enableProperties`/`_flushProperties` timing vs. children/shadow/template. Emits
+`[ce] <phase> <name>#<id> …` lines.
+
+### What it found (the definitive chain)
+
+1. **At `define`, `ytd-app` and `ytd-topbar-logo-renderer` are identical** — both registered
+   with a thin `depth=6` ctor, no stamping methods. The registered class is *not* the divergence.
+2. **The split is in the constructor.** `post-construct` shows `ytd-app`'s instance jump to
+   `depth=15` (the full Polymer mixin tower) with `kids=14 template=yes`, while the logo stays
+   `depth=6 kids=0`. `instIsCtorProto=false` + `ctorProtoAfter=depth=6` for both: the registered
+   ctor stays thin; `ytd-app`'s constructor reaches the **real full Polymer class via its
+   `super()` chain**, the logo's does not. **`ytd-topbar-logo-renderer` is genuinely a lite
+   element** (no template stamping); its `connectedCallback` is its render trigger.
+3. **The logo's `connectedCallback` never fires.** The connect gate shows
+   `ytd-app isConnected=true` (fires, renders) but `ytd-topbar-logo-renderer isConnected=false`
+   → `connect-bail-disconnected`, looping forever on the bounded retry.
+4. **Why disconnected — exact mechanism.** The bail ancestry:
+   `logo < div < div < div < tp-yt-app-drawer < div < #document-fragment(viaHost:false)`.
+   The walk climbs into a shadow-root `#document-fragment` and dead-ends: that fragment has
+   **no `parentNode` and no `.host`**. `find_parent_for` (node_create.rs) rejects the host
+   because a shadow root lives in `el.shadow_root`, not the host's regular `children`, so
+   `query::find_parent` returns `None`. And the fragment is a **raw ShadyDOM logical render
+   root** (Polymer runs `useNativeShadow=false`), *not* registered as any element's
+   `el.shadow_root`, so it has no host link at all — and it is **detached from the document**
+   (a `__aurora_connect_sweep__` walk from `document.body` reaches it 0 times).
+
+### True root cause
+**The missing masthead content lives in detached ShadyDOM *logical* shadow fragments that
+Aurora never composes into the connected/rendered document tree.** Therefore the elements
+inside are never "connected" → their `connectedCallback` (the render trigger for lite
+elements) never fires → they never render. This is a **ShadyDOM logical-tree composition**
+gap, a real subsystem — not native shadow DOM, not the mirror, not a single bug.
+
+### Fixes shipped this round (correct, low-risk, kept)
+- **`ShadowRoot.host` accessor** (`src/js_v8/node_create.rs` `get_shadow_host`) — synthetic
+  shadow-root fragments now expose `.host` (via `SyntheticShadowTreeBackend::host_for_shadow_root`),
+  so connectivity/composed-event traversal can cross *registered* shadow boundaries. Does not
+  cover raw ShadyDOM logical fragments (they aren't registered shadow roots).
+- **Connect sweep** (`__aurora_connect_sweep__`, called from `apply_polymer_bindings`) — fires
+  `connectedCallback` for upgraded-but-disconnected custom elements once they are reachable and
+  connected, matching browser insertion semantics. No-op for the detached-fragment case, but
+  correct for elements that attach after their retry window.
+- **Permanent CE lifecycle instrumentation** (`AURORA_TRACE_CE`).
+- All gated/zero-overhead when off; 180 lib tests green; YouTube render unchanged (286 paths).
+
+### The remaining work (well-defined now)
+Implement **ShadyDOM logical-tree composition**: when Polymer (in `useNativeShadow=false` mode)
+stamps content into a logical shadow root, that fragment must be linked to its host and composed
+into the rendered tree so its elements connect, fire `connectedCallback`, and paint. This is the
+real YouTube-content unlock and a bounded (if non-trivial) subsystem — the instrumentation above
+makes it tractable to build and verify.

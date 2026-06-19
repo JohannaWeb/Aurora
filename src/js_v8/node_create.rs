@@ -190,6 +190,12 @@ pub(super) fn create_js_node<'s>(
         get_parent_element,
         node_external,
     );
+    // `ShadowRoot.host`: synthetic shadow-root fragments are parented to their host
+    // via `el.shadow_root` (not the host's regular `children`), so `parentNode` can't
+    // see the host. Exposing `host` lets connectivity/composed-event traversal cross
+    // the shadow boundary — without it, custom elements stamped into a shadow root are
+    // treated as disconnected and their connectedCallback never fires.
+    install_readonly_accessor(scope, template, "host", get_shadow_host, node_external);
     install_readonly_accessor(
         scope,
         template,
@@ -1703,6 +1709,29 @@ fn get_parent_node(
         retval.set(js_node.into());
     } else {
         retval.set(v8::null(scope).into());
+    }
+}
+
+/// `ShadowRoot.host` — for a synthetic shadow-root fragment, the host element it is
+/// attached to. Returns `undefined` for any node that is not a shadow root, so it is a
+/// harmless absent property on normal nodes.
+fn get_shadow_host(
+    scope: &mut v8::PinScope<'_, '_>,
+    _name: v8::Local<v8::Name>,
+    args: v8::PropertyCallbackArguments,
+    mut retval: v8::ReturnValue,
+) {
+    use crate::dom::ShadowTreeBackend;
+    let external = v8::Local::<v8::External>::try_from(args.data()).unwrap();
+    let node_data = unsafe { &*(external.value() as *const NodeData) };
+
+    if let Some(host) =
+        crate::dom::SyntheticShadowTreeBackend.host_for_shadow_root(&node_data.node)
+    {
+        let js_node = create_js_node(scope, host, &node_data.registry, &node_data.document);
+        retval.set(js_node.into());
+    } else {
+        retval.set(v8::undefined(scope).into());
     }
 }
 

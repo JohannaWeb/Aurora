@@ -55,6 +55,8 @@
                             try { Object.setPrototypeOf(el, ctor.prototype); } catch (e) {}
                             el.__ce_upgraded__ = true;
                             attachDefinitionMetadata(el, definition);
+                            ceLog('construct-via-new', el, 'ctor=' + ceCtorTag(ctor) +
+                                ' chain=' + ceChain(Object.getPrototypeOf(el)));
                             return el;
                         }
                     }
@@ -92,6 +94,112 @@
                 var message = error && (error.name || 'Error') + ': ' + (error.message || '');
                 var stack = error && error.stack ? ('\n' + error.stack) : '';
                 console.log('[yt-life] ERROR ' + where + ': ' + (message || String(error)) + stack);
+            }
+
+            // ── Custom-element lifecycle tracer ─────────────────────────────────
+            // A serious JS-compatibility instrumentation layer for the YouTube/Polymer
+            // bootstrap. Gated behind `globalThis.__aurora_ce_trace__` (set from the
+            // AURORA_TRACE_CE env var) so it is a cheap no-op in normal runs. An optional
+            // `__aurora_ce_trace_filter__` (array of name substrings, from
+            // AURORA_TRACE_CE_FILTER) narrows output to specific elements.
+            //
+            // Emits `[ce] <phase> <name>#<instanceId> <extra>` lines that let you diff the
+            // full lifecycle of a rendering element (e.g. ytd-app) against a broken one
+            // (e.g. ytd-topbar-logo-renderer): which ctor `define` received vs. which ctor
+            // upgrade used, the instance prototype chain right after construction vs. after
+            // connectedCallback, whether props/protos are patched post-construction, and
+            // whether children/shadow/template appear before or after the property system
+            // is enabled.
+            var ceTraceCounter = 0;
+            var ceCtorCounter = 0;
+            var CE_STAMP_KEYS = ['ready', '_stampTemplate', '_attachDom', '_enableProperties', '_flushProperties', 'connectedCallback'];
+            function ceOn() { return !!globalThis.__aurora_ce_trace__; }
+            function ceWant(name) {
+                var f = globalThis.__aurora_ce_trace_filter__;
+                if (!f || !f.length) return true;
+                for (var i = 0; i < f.length; i++) if (name && String(name).indexOf(f[i]) >= 0) return true;
+                return false;
+            }
+            function ceInstId(el) {
+                if (!el.__ce_trace_id__) {
+                    try { Object.defineProperty(el, '__ce_trace_id__', { value: ++ceTraceCounter, configurable: true }); }
+                    catch (e) { el.__ce_trace_id__ = ++ceTraceCounter; }
+                }
+                return el.__ce_trace_id__;
+            }
+            function ceCtorTag(ctor) {
+                if (typeof ctor !== 'function') return 'none';
+                if (!ctor.__ce_ctor_id__) {
+                    try { Object.defineProperty(ctor, '__ce_ctor_id__', { value: ++ceCtorCounter, configurable: true }); }
+                    catch (e) { ctor.__ce_ctor_id__ = ++ceCtorCounter; }
+                }
+                return (ctor.name || '?') + '@c' + ctor.__ce_ctor_id__;
+            }
+            // Summarize a prototype chain: at which depth each stamping-related method
+            // first appears as an own property. `-` = absent anywhere in the chain.
+            function ceChain(start) {
+                if (!start) return 'null';
+                var p = start, d = 0, found = {};
+                while (p && d < 40) {
+                    for (var i = 0; i < CE_STAMP_KEYS.length; i++) {
+                        var k = CE_STAMP_KEYS[i];
+                        if (!(k in found) && hasOwn.call(p, k)) found[k] = d;
+                    }
+                    p = Object.getPrototypeOf(p); d++;
+                }
+                var parts = [];
+                for (var j = 0; j < CE_STAMP_KEYS.length; j++) {
+                    var key = CE_STAMP_KEYS[j];
+                    parts.push(key + (key in found ? '@' + found[key] : '=-'));
+                }
+                return 'depth=' + d + ' ' + parts.join(' ');
+            }
+            // Stamping-related OWN properties on the instance — a sign the instance was
+            // patched after construction (rather than inheriting via its prototype).
+            function ceOwnStamp(el) {
+                var own = [];
+                ['ready', '_stampTemplate', '_attachDom', '_template', 'root', '$'].forEach(function(k) {
+                    try { if (hasOwn.call(el, k)) own.push(k); } catch (e) {}
+                });
+                return own.length ? own.join(',') : '-';
+            }
+            // Snapshot of rendered content so we can order it against the property system.
+            function ceContent(el) {
+                var kids = '?', sr = '?', tpl = '?';
+                try { kids = el.childNodes ? el.childNodes.length : '?'; } catch (e) {}
+                try {
+                    sr = el.shadowRoot ? (el.shadowRoot.childNodes ? el.shadowRoot.childNodes.length : 0) : 'none';
+                } catch (e) { sr = 'threw'; }
+                try { tpl = el._template ? 'yes' : String(el._template); } catch (e) { tpl = 'threw'; }
+                return 'kids=' + kids + ' shadow=' + sr + ' template=' + tpl;
+            }
+            function ceLog(phase, el, extra) {
+                if (!ceOn()) return;
+                var name; try { name = el.localName || el.nodeName || '?'; } catch (e) { name = '?'; }
+                if (!ceWant(name)) return;
+                console.log('[ce] ' + phase + ' ' + name + '#' + ceInstId(el) + (extra ? ' ' + extra : ''));
+            }
+            function ceLogName(phase, name, extra) {
+                if (!ceOn() || !ceWant(name)) return;
+                console.log('[ce] ' + phase + ' ' + name + (extra ? ' ' + extra : ''));
+            }
+            // Wrap `_enableProperties`/`_flushProperties` on an instance to log when the
+            // property system runs relative to children/shadow/template appearing.
+            function ceWrapPropMethods(el, name) {
+                if (!ceOn() || !ceWant(name)) return;
+                try {
+                    if (el.__ce_prop_wrapped__) return;
+                    Object.defineProperty(el, '__ce_prop_wrapped__', { value: true, configurable: true });
+                } catch (e) { if (el.__ce_prop_wrapped__) return; el.__ce_prop_wrapped__ = true; }
+                ['_enableProperties', '_flushProperties'].forEach(function(m) {
+                    var orig = el[m];
+                    if (typeof orig !== 'function') return;
+                    el[m] = function() {
+                        ceLog('before-' + m, el, ceContent(el));
+                        try { return orig.apply(this, arguments); }
+                        finally { ceLog('after-' + m, el, ceContent(el)); }
+                    };
+                });
             }
 
             (function installGlobalErrorTracing() {
@@ -144,6 +252,24 @@
                     }
                 } catch (e) {}
                 return '';
+            }
+
+            // Trace helper: walk parentNode (falling back to .host across shadow
+            // boundaries) and report each hop, so we can see exactly where connectivity
+            // to the document breaks for an element whose connectedCallback never fires.
+            function ceAncestry(el) {
+                var parts = [], node = el, guard = 0;
+                while (node && guard++ < 40) {
+                    var tag = '?';
+                    try { tag = node.nodeType === 9 ? '#document' : (node.localName || node.nodeName || ('nt' + node.nodeType)); } catch (e) {}
+                    parts.push(tag);
+                    if (node === document || node.nodeType === 9) break;
+                    var next = null;
+                    try { next = node.parentNode || null; } catch (e) {}
+                    if (!next) { try { next = node.host || null; } catch (e) {} parts[parts.length - 1] += '(viaHost:' + !!next + ')'; }
+                    node = next;
+                }
+                return parts.join(' < ');
             }
 
             function isActuallyConnected(el) {
@@ -1460,12 +1586,16 @@
                 }
                 el.__ce_upgraded__ = true;
                 attachDefinitionMetadata(el, definition);
+                ceLog('upgrade-enter', el, 'upgradeCtor=' + ceCtorTag(ctor) +
+                    ' protoBefore=' + ceChain(Object.getPrototypeOf(el)));
                 if (shouldTraceName(name)) trace('upgrade ' + name + ' connect=' + (connect !== false));
                 try {
                     if (globalThis.__aurora_debug_youtube__ && debugProbeName(name)) {
                         trace('upgrade-stage ' + name + ' proto-start');
                     }
                     Object.setPrototypeOf(el, ctor.prototype);
+                    ceLog('set-proto', el, 'toCtor=' + ceCtorTag(ctor) +
+                        ' assignedChain=' + ceChain(ctor.prototype));
                     if (globalThis.__aurora_debug_youtube__ && debugProbeName(name)) {
                         trace('upgrade-stage ' + name + ' proto-done');
                     }
@@ -1530,6 +1660,11 @@
                 } catch (e) {
                     traceError('constructor ' + name, e);
                 }
+                ceWrapPropMethods(el, name);
+                ceLog('post-construct', el, 'instChain=' + ceChain(Object.getPrototypeOf(el)) +
+                    ' instIsCtorProto=' + (Object.getPrototypeOf(el) === ctor.prototype) +
+                    ' ctorProtoAfter=' + ceChain(ctor.prototype) +
+                    ' own=' + ceOwnStamp(el) + ' ' + ceContent(el));
                 maybeCallCreated(el, name);
                 readyUpgraded(el, name);
                 if (globalThis.__aurora_debug_youtube__ && debugProbeName(name)) {
@@ -1559,10 +1694,15 @@
             }
 
             function connectUpgraded(el, name, connect) {
+                ceLog('connect-enter', el, 'connect=' + connect +
+                    ' isConnected=' + (function() { try { return isActuallyConnected(el); } catch (e) { return 'threw'; } })() +
+                    ' retry=' + (el.__ce_connect_retry__ || 0) + ' failed=' + !!el.__ce_connect_failed__);
                 if (connect === false) return;
                 try {
                     if (el.__ce_connect_failed__) return;
                     if (!isActuallyConnected(el)) {
+                        ceLog('connect-bail-disconnected', el, 'retry=' + (el.__ce_connect_retry__ || 0) +
+                            ' ancestry=' + ceAncestry(el));
                         if (!el.__ce_connect_retry__) {
                             el.__ce_connect_retry__ = 1;
                             setTimeout(function() {
@@ -1603,7 +1743,11 @@
                         }
                         if (typeof el.connectedCallback === 'function') {
                             if (shouldTraceName(name)) trace('connectedCallback ' + name);
+                            ceLog('pre-connectedCallback', el, 'chain=' + ceChain(Object.getPrototypeOf(el)) +
+                                ' own=' + ceOwnStamp(el) + ' ' + ceContent(el));
                             el.connectedCallback();
+                            ceLog('post-connectedCallback', el, 'chain=' + ceChain(Object.getPrototypeOf(el)) +
+                                ' own=' + ceOwnStamp(el) + ' ' + ceContent(el));
                         } else if (typeof el.attached === 'function') {
                             if (shouldTraceName(name)) trace('attached ' + name);
                             el.attached();
@@ -1724,6 +1868,8 @@
             globalThis.customElements = {
                 define: function(name, ctor, opts) {
                 if (shouldTraceName(name)) trace('define ' + name);
+                ceLogName('define', name, 'defineCtor=' + ceCtorTag(ctor) +
+                    ' ctorChain=' + ceChain(ctor && ctor.prototype));
                 var definition = ensureDefinitionMetadata(name, ctor);
                 attachDefinitionMetadata(ctor, definition);
                 invokeBeforeRegister(ctor, name);
@@ -1822,5 +1968,49 @@
                 }
                 walk(root, 0);
                 return count;
+            };
+
+            // Connect sweep: drive connectedCallback for custom elements that upgraded
+            // while disconnected (e.g. lite elements stamped into a host's logical shadow
+            // root) and have since become connected. Aurora's connectUpgraded bails when
+            // an element is disconnected and only retries on a short bounded timer, so an
+            // element whose subtree is attached later never fires connectedCallback —
+            // and lite elements render *in* connectedCallback. Re-attempting after the DOM
+            // settles, and looping while progress is made (connecting a host stamps and
+            // exposes more children to connect), recovers them. Idempotent per element.
+            globalThis.__aurora_connect_sweep__ = function(root, maxPasses) {
+                var total = 0;
+                var passes = maxPasses || 4;
+                for (var pass = 0; pass < passes; pass++) {
+                    var connectedThisPass = 0;
+                    var start = root || (document && document.body) || document;
+                    var seen = [];
+                    (function walk(node, depth) {
+                        if (!node || depth > 80) return;
+                        var nt; try { nt = node.nodeType; } catch (e) { return; }
+                        if (nt === 1) {
+                            var ln; try { ln = node.localName || ''; } catch (e) { ln = ''; }
+                            if (ln.indexOf('-') >= 0 && node.__ce_upgraded__ &&
+                                !node.__ce_connected__ && !node.__ce_connect_failed__) {
+                                try {
+                                    if (isActuallyConnected(node)) {
+                                        connectUpgraded(node, ln, true);
+                                        if (node.__ce_connected__) { connectedThisPass++; total++; }
+                                    }
+                                } catch (e) {}
+                            }
+                        }
+                        var sr; try { sr = node.shadowRoot || node.__shady_shadowRoot; } catch (e) {}
+                        if (sr && sr !== node) {
+                            var s; try { s = sr.firstChild; } catch (e) {}
+                            while (s) { walk(s, depth + 1); try { s = s.nextSibling; } catch (e) { break; } }
+                        }
+                        var c; try { c = node.firstChild; } catch (e) {}
+                        while (c) { walk(c, depth + 1); try { c = c.nextSibling; } catch (e) { break; } }
+                    })(start, 0);
+                    if (globalThis.__aurora_ce_trace__) console.log('[ce] connect-sweep pass=' + pass + ' connected=' + connectedThisPass);
+                    if (!connectedThisPass) break;
+                }
+                return total;
             };
         })();

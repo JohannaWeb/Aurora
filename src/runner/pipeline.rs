@@ -310,6 +310,12 @@ fn apply_polymer_bindings(runtime: &mut dyn crate::js_engine::JsRuntime) {
         r#"
         (function() {
             try {
+                if (typeof globalThis.__aurora_connect_sweep__ === 'function') {
+                    var c = globalThis.__aurora_connect_sweep__(document.body);
+                    if (globalThis.__aurora_debug_youtube__) {
+                        console.log('[yt-bind] connect sweep fired connectedCallback on ' + c + ' element(s)');
+                    }
+                }
                 if (typeof globalThis.__aurora_sweep_bindings__ === 'function') {
                     var n = globalThis.__aurora_sweep_bindings__(document.body);
                     if (globalThis.__aurora_debug_youtube__) {

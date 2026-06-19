@@ -714,6 +714,28 @@ impl V8Runtime {
                 ) {
                     let _ = compile_and_run(scope, "globalThis.__aurora_debug_youtube__ = true;");
                 }
+                // Custom-element lifecycle tracer (see custom_elements.js). AURORA_TRACE_CE
+                // enables it; AURORA_TRACE_CE_FILTER (comma-separated name substrings) narrows
+                // output to specific elements, e.g. "ytd-app,ytd-topbar-logo-renderer".
+                if matches!(
+                    std::env::var("AURORA_TRACE_CE").as_deref(),
+                    Ok("1") | Ok("true") | Ok("TRUE") | Ok("yes") | Ok("YES")
+                ) {
+                    let _ = compile_and_run(scope, "globalThis.__aurora_ce_trace__ = true;");
+                    if let Ok(filter) = std::env::var("AURORA_TRACE_CE_FILTER") {
+                        let list = filter
+                            .split(',')
+                            .map(|s| s.trim())
+                            .filter(|s| !s.is_empty())
+                            .map(|s| format!("{s:?}"))
+                            .collect::<Vec<_>>()
+                            .join(",");
+                        let _ = compile_and_run(
+                            scope,
+                            &format!("globalThis.__aurora_ce_trace_filter__ = [{list}];"),
+                        );
+                    }
+                }
                 if matches!(
                     std::env::var("AURORA_DEBUG_SHADYCSS").as_deref(),
                     Ok("1") | Ok("true") | Ok("TRUE") | Ok("yes") | Ok("YES")
