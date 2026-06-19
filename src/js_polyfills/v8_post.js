@@ -34,8 +34,16 @@
     });
 
     // Document factory and convenience shims over the native bridge.
-    document.createElementNS = function(ns, tag) { return document.createElement(tag); };
-    // Mirrors js_sm: comments become text nodes (no Comment node type in the DOM core).
+    document.createElementNS = function(ns, tag) {
+        var el = document.createElement(tag);
+        var namespace = String(ns || '');
+        if (/svg/i.test(namespace)) {
+            try { el.namespaceURI = namespace; } catch (e) {}
+            try { Object.setPrototypeOf(el, SVGElement.prototype); } catch (e) {}
+        }
+        return el;
+    };
+    // Comments become text nodes (no Comment node type in the DOM core).
     document.createComment = function(text) { return document.createTextNode(text); };
     document.createDocumentFragment = function() { return document.createElement('#document-fragment'); };
     document.importNode = function(node, deep) {
@@ -283,7 +291,16 @@
                         configurable: true,
                         enumerable: true,
                         get: function() {
-                            return value || fallback();
+                            // Phase 8.2: prefer the real Blitz/Stylo rendered box
+                            // size; fall back to any set value, then the heuristic
+                            // (used only for unlaid-out / collapsed elements).
+                            var native = 0;
+                            try {
+                                if (typeof el.__aurora_metric__ === 'function') {
+                                    native = Number(el.__aurora_metric__(name) || 0);
+                                }
+                            } catch (e) {}
+                            return native || value || fallback();
                         },
                         set: function(next) {
                             value = Number(next || 0);
@@ -291,12 +308,19 @@
                     });
                 } catch (e) {}
             }
+            var zeroFallback = function() { return 0; };
             metric('clientWidth', widthFallback);
             metric('offsetWidth', widthFallback);
             metric('scrollWidth', widthFallback);
             metric('clientHeight', heightFallback);
             metric('offsetHeight', heightFallback);
             metric('scrollHeight', heightFallback);
+            // Position accessors read the Blitz/Stylo box origin (document-
+            // relative) via the same native bridge; __aurora_metric__ maps
+            // offsetTop→y and offsetLeft→x. scrollTop/scrollLeft stay plain
+            // settable data properties (element scroll offset, 0 until scrolled).
+            metric('offsetTop', zeroFallback);
+            metric('offsetLeft', zeroFallback);
         }
         el.animate = function() {
             var anim = {
@@ -520,7 +544,11 @@
     document.execCommand = function() { return false; };
     document.hasFocus = function() { return false; };
     document.getSelection = function() { return null; };
-    document.elementFromPoint = function() { return null; };
+    // `document.elementFromPoint` is provided natively (hit-tests Blitz layout).
+    // Only install a null stub if the native binding is missing.
+    if (typeof document.elementFromPoint !== 'function') {
+        document.elementFromPoint = function() { return null; };
+    }
     document.activeElement = document.body || null;
     document.scrollingElement = document.documentElement || null;
     document.location = globalThis.location;

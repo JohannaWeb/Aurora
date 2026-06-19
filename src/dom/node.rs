@@ -53,16 +53,29 @@ pub fn parent_ptr(node: &NodePtr) -> Option<NodePtr> {
 
 /// Point every (element) child of `node` at `node`.
 pub fn link_children(node: &NodePtr) {
-    let (children, template_contents): (Vec<NodePtr>, Option<NodePtr>) = match &*node.borrow() {
-        Node::Element(el) => (el.children.clone(), el.template_contents.clone()),
-        Node::Document { children, .. } => (children.clone(), None),
+    let (children, template_contents, shadow_root): (
+        Vec<NodePtr>,
+        Option<NodePtr>,
+        Option<NodePtr>,
+    ) = match &*node.borrow() {
+        Node::Element(el) => (
+            el.children.clone(),
+            el.template_contents.clone(),
+            el.shadow_root.clone(),
+        ),
+        Node::Document { children, .. } => (children.clone(), None, None),
         _ => return,
     };
     for child in &children {
         set_parent(child, node);
     }
     if let Some(content) = template_contents {
+        set_parent(&content, node);
         link_children(&content);
+    }
+    if let Some(shadow_root) = shadow_root {
+        set_parent(&shadow_root, node);
+        link_children(&shadow_root);
     }
 }
 
@@ -71,9 +84,17 @@ pub fn link_children(node: &NodePtr) {
 /// Used to link a freshly parsed tree in one pass; mutation primitives maintain
 /// the pointers incrementally thereafter.
 pub fn reparent_subtree(node: &NodePtr) {
-    let (children, template_contents): (Vec<NodePtr>, Option<NodePtr>) = match &*node.borrow() {
-        Node::Element(el) => (el.children.clone(), el.template_contents.clone()),
-        Node::Document { children, .. } => (children.clone(), None),
+    let (children, template_contents, shadow_root): (
+        Vec<NodePtr>,
+        Option<NodePtr>,
+        Option<NodePtr>,
+    ) = match &*node.borrow() {
+        Node::Element(el) => (
+            el.children.clone(),
+            el.template_contents.clone(),
+            el.shadow_root.clone(),
+        ),
+        Node::Document { children, .. } => (children.clone(), None, None),
         _ => return,
     };
     for child in &children {
@@ -81,7 +102,12 @@ pub fn reparent_subtree(node: &NodePtr) {
         reparent_subtree(child);
     }
     if let Some(content) = template_contents {
+        set_parent(&content, node);
         reparent_subtree(&content);
+    }
+    if let Some(shadow_root) = shadow_root {
+        set_parent(&shadow_root, node);
+        reparent_subtree(&shadow_root);
     }
 }
 
@@ -125,12 +151,32 @@ pub struct ElementNode {
     pub children: Vec<NodePtr>,
     /// Parsed `<template>` contents, stored separately from light DOM children.
     pub template_contents: Option<NodePtr>,
+    /// Open shadow root, stored separately from light DOM children. Rendering
+    /// may flatten this into Blitz while JS keeps distinct ShadowRoot identity.
+    pub shadow_root: Option<NodePtr>,
+    /// For `<slot>` elements, the list of light-DOM nodes assigned to this slot
+    /// by the distribution algorithm.
+    pub assigned_nodes: Vec<NodePtr>,
     /// Back-pointer to the parent node, maintained by the mutation primitives so
     /// connectivity/ancestor queries are O(depth) instead of full-tree scans.
     pub parent: ParentLink,
 }
 
 impl Node {
+    pub fn as_element(&self) -> Option<&ElementNode> {
+        match self {
+            Node::Element(el) => Some(el),
+            _ => None,
+        }
+    }
+
+    pub fn as_element_mut(&mut self) -> Option<&mut ElementNode> {
+        match self {
+            Node::Element(el) => Some(el),
+            _ => None,
+        }
+    }
+
     /// Create a document node wrapping top-level child nodes.
     pub fn document(children: Vec<NodePtr>) -> NodePtr {
         Self::document_with_mode(children, DocumentMode::NoQuirks)
@@ -155,6 +201,8 @@ impl Node {
             attributes,
             children,
             template_contents: None,
+            shadow_root: None,
+            assigned_nodes: Vec::new(),
             parent: ParentLink::default(),
         })));
         // Link any children supplied at construction time to this new node.

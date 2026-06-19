@@ -32,6 +32,15 @@ fn serialize_node(node: &NodePtr, out: &mut String, is_rawtext: bool) {
                 "script" | "style"
             );
 
+            // <template> elements store their inert content in template_contents,
+            // not children. Serialize it so Polymer component styles survive the
+            // round-trip through Blitz's HTML parser.
+            if el.tag_name.eq_ignore_ascii_case("template") {
+                if let Some(ref content) = el.template_contents {
+                    serialize_node(content, out, false);
+                }
+            }
+
             for child in &el.children {
                 serialize_node(child, out, el_is_raw);
             }
@@ -83,6 +92,32 @@ mod tests {
     use super::*;
     use crate::dom::Node;
     use std::collections::BTreeMap;
+
+    #[test]
+    fn test_serialize_template_contents() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+        let style_text = Node::text("div { color: red; }");
+        let style_el = Node::element_with_attributes("style", BTreeMap::new(), vec![style_text]);
+        let content_fragment = Node::document(vec![style_el]);
+        let tpl = Rc::new(RefCell::new(Node::Element(crate::dom::ElementNode {
+            tag_name: "template".into(),
+            attributes: BTreeMap::new(),
+            children: vec![],
+            template_contents: Some(content_fragment),
+            shadow_root: None,
+            assigned_nodes: vec![],
+            parent: Default::default(),
+        })));
+        let doc = Node::document(vec![tpl]);
+        let serialized = serialize_outer_html(&doc);
+        assert!(
+            serialized.contains("<style>div { color: red; }</style>"),
+            "{serialized}"
+        );
+        assert!(serialized.contains("<template>"), "{serialized}");
+        assert!(serialized.contains("</template>"), "{serialized}");
+    }
 
     #[test]
     fn test_serialize_doctype_and_rawtext() {

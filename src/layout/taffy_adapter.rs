@@ -81,7 +81,11 @@ pub fn style_to_taffy_with_viewport(styles: &StyleMap, viewport: ViewportSize) -
     taffy
 }
 
-fn inset_value(value: Option<&str>, viewport: ViewportSize, font_size: f32) -> LengthPercentageAuto {
+fn inset_value(
+    value: Option<&str>,
+    viewport: ViewportSize,
+    font_size: f32,
+) -> LengthPercentageAuto {
     let Some(value) = value.map(str::trim) else {
         return LengthPercentageAuto::auto();
     };

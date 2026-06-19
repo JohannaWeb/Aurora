@@ -1,8 +1,8 @@
 #[cfg(test)]
 mod tests {
-    use crate::js_v8::V8Runtime;
     use crate::html::Parser;
     use crate::js_engine::JsRuntime;
+    use crate::js_v8::V8Runtime;
 
     fn dom_with_style(html: &str) -> crate::dom::NodePtr {
         Parser::new(html).parse_document()
@@ -47,11 +47,15 @@ mod tests {
             Ok("0".to_string())
         );
 
-        runtime.execute(r#"
+        runtime
+            .execute(
+                r#"
             const style = document.createElement('style');
             style.textContent = 'div { display: block; }';
             document.head.appendChild(style);
-        "#).unwrap();
+        "#,
+            )
+            .unwrap();
 
         // This should ideally reflect the change.
         // Current implementation in v8_post.js uses a `synced` flag that prevents re-syncing.

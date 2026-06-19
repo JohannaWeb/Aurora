@@ -1,5 +1,427 @@
 use super::*;
+use crate::js_v8::mutation_observer;
+use crate::js_v8::registry::NodeRegistry;
+use crate::window::SnapshotRebuildReason;
 use std::rc::Rc;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DomMutationKind {
+    AppendChild,
+    PrependChild,
+    InsertBefore,
+    RemoveChild,
+    ReplaceChild,
+    SetAttribute,
+    RemoveAttribute,
+    SetTextContent,
+    ReplaceChildren,
+    AttachShadow,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct DomMutationResult {
+    pub(crate) kind: DomMutationKind,
+    pub(crate) render_synced: bool,
+    pub(crate) target_id: u32,
+    pub(crate) changed: bool,
+}
+
+pub(crate) enum DomMutation<'a> {
+    AppendChild {
+        parent: &'a NodePtr,
+        child: &'a NodePtr,
+    },
+    PrependChild {
+        parent: &'a NodePtr,
+        child: &'a NodePtr,
+    },
+    InsertBefore {
+        parent: &'a NodePtr,
+        new_child: &'a NodePtr,
+        ref_child: Option<&'a NodePtr>,
+    },
+    RemoveChild {
+        parent: &'a NodePtr,
+        child: &'a NodePtr,
+    },
+    ReplaceChild {
+        parent: &'a NodePtr,
+        new_child: &'a NodePtr,
+        old_child: &'a NodePtr,
+    },
+    SetAttribute {
+        node: &'a NodePtr,
+        name: &'a str,
+        value: &'a str,
+    },
+    RemoveAttribute {
+        node: &'a NodePtr,
+        name: &'a str,
+    },
+    SetTextContent {
+        node: &'a NodePtr,
+        text: String,
+    },
+    ReplaceChildren {
+        node: &'a NodePtr,
+        children: Vec<NodePtr>,
+    },
+    AttachShadow {
+        host: &'a NodePtr,
+        shadow_root: &'a NodePtr,
+        mode: &'a str,
+    },
+}
+
+pub(crate) fn apply_dom_mutation(
+    registry: &Rc<NodeRegistry>,
+    mutation: DomMutation<'_>,
+) -> DomMutationResult {
+    fn schedule_sync_failure(registry: &Rc<NodeRegistry>) {
+        registry.schedule_snapshot_rebuild_reason(SnapshotRebuildReason::SyncOperationFailed);
+    }
+
+    match mutation {
+        DomMutation::AppendChild { parent, child } => {
+            let target_id = registry.register(parent.clone());
+            let inserted_nodes = insertion_nodes(child);
+            let added_ids = node_ids(registry, &inserted_nodes);
+            append_child_ptr(parent, child);
+            let render_synced =
+                sync_inserted_nodes_to_render_document(registry, parent, &inserted_nodes);
+            if render_synced {
+                mutation_observer::queue_childlist(registry, target_id, added_ids, vec![]);
+            } else {
+                schedule_sync_failure(registry);
+            }
+            registry.mark_layout_dirty(parent);
+            DomMutationResult {
+                kind: DomMutationKind::AppendChild,
+                render_synced,
+                target_id,
+                changed: true,
+            }
+        }
+        DomMutation::PrependChild { parent, child } => {
+            let target_id = registry.register(parent.clone());
+            let inserted_nodes = insertion_nodes(child);
+            let added_ids = node_ids(registry, &inserted_nodes);
+            prepend_child_ptr(parent, child);
+            let render_synced =
+                sync_inserted_nodes_to_render_document(registry, parent, &inserted_nodes);
+            if render_synced {
+                mutation_observer::queue_childlist(registry, target_id, added_ids, vec![]);
+            } else {
+                schedule_sync_failure(registry);
+            }
+            registry.mark_layout_dirty(parent);
+            DomMutationResult {
+                kind: DomMutationKind::PrependChild,
+                render_synced,
+                target_id,
+                changed: true,
+            }
+        }
+        DomMutation::InsertBefore {
+            parent,
+            new_child,
+            ref_child,
+        } => {
+            let target_id = registry.register(parent.clone());
+            let inserted_nodes = insertion_nodes(new_child);
+            let added_ids = node_ids(registry, &inserted_nodes);
+            insert_before_ptr(parent, new_child, ref_child);
+            let render_synced =
+                sync_inserted_nodes_to_render_document(registry, parent, &inserted_nodes);
+            if render_synced {
+                mutation_observer::queue_childlist(registry, target_id, added_ids, vec![]);
+            } else {
+                schedule_sync_failure(registry);
+            }
+            registry.mark_layout_dirty(parent);
+            DomMutationResult {
+                kind: DomMutationKind::InsertBefore,
+                render_synced,
+                target_id,
+                changed: true,
+            }
+        }
+        DomMutation::RemoveChild { parent, child } => {
+            let target_id = registry.register(parent.clone());
+            let child_id = registry.register(child.clone());
+            remove_child_ptr(parent, child);
+            let render_synced = sync_removed_node_from_render_document(registry, child);
+            if render_synced {
+                mutation_observer::queue_childlist(registry, target_id, vec![], vec![child_id]);
+            } else {
+                schedule_sync_failure(registry);
+            }
+            registry.mark_layout_dirty(parent);
+            DomMutationResult {
+                kind: DomMutationKind::RemoveChild,
+                render_synced,
+                target_id,
+                changed: true,
+            }
+        }
+        DomMutation::ReplaceChild {
+            parent,
+            new_child,
+            old_child,
+        } => {
+            let target_id = registry.register(parent.clone());
+            let inserted_nodes = insertion_nodes(new_child);
+            let added_ids = node_ids(registry, &inserted_nodes);
+            let old_id = registry.register(old_child.clone());
+            replace_child_ptr(parent, new_child, old_child);
+            let render_synced = sync_removed_node_from_render_document(registry, old_child)
+                && sync_inserted_nodes_to_render_document(registry, parent, &inserted_nodes);
+            if render_synced {
+                mutation_observer::queue_childlist(registry, target_id, added_ids, vec![old_id]);
+            } else {
+                schedule_sync_failure(registry);
+            }
+            registry.mark_layout_dirty(parent);
+            DomMutationResult {
+                kind: DomMutationKind::ReplaceChild,
+                render_synced,
+                target_id,
+                changed: true,
+            }
+        }
+        DomMutation::SetAttribute { node, name, value } => {
+            let target_id = registry.register(node.clone());
+            let mut changed = false;
+            if let Node::Element(el) = &mut *node.borrow_mut() {
+                el.attributes.insert(name.to_string(), value.to_string());
+                changed = true;
+            }
+            let render_synced = if changed {
+                registry.mark_style_dirty(node);
+                let render_synced = registry.sync_attribute_to_render_document(node, name, value);
+                if render_synced {
+                    mutation_observer::queue_attribute(registry, target_id, name);
+                } else {
+                    schedule_sync_failure(registry);
+                }
+                render_synced
+            } else {
+                true
+            };
+            DomMutationResult {
+                kind: DomMutationKind::SetAttribute,
+                render_synced,
+                target_id,
+                changed,
+            }
+        }
+        DomMutation::RemoveAttribute { node, name } => {
+            let target_id = registry.register(node.clone());
+            let mut changed = false;
+            if let Node::Element(el) = &mut *node.borrow_mut() {
+                el.attributes.remove(name);
+                changed = true;
+            }
+            let render_synced = if changed {
+                registry.mark_style_dirty(node);
+                let render_synced = registry.sync_remove_attribute_from_render_document(node, name);
+                if render_synced {
+                    mutation_observer::queue_attribute(registry, target_id, name);
+                } else {
+                    schedule_sync_failure(registry);
+                }
+                render_synced
+            } else {
+                true
+            };
+            DomMutationResult {
+                kind: DomMutationKind::RemoveAttribute,
+                render_synced,
+                target_id,
+                changed,
+            }
+        }
+        DomMutation::SetTextContent { node, text } => {
+            let target_id = registry.register(node.clone());
+            let mut render_synced = true;
+            // Apply the structural mutation under the borrow, then release it
+            // BEFORE syncing. The render-sync hooks (`sync_text_node`,
+            // `sync_clear_children`) walk parent pointers via `parent_ptr`/
+            // `is_shadow_root_node`, which re-borrow `node`; holding the
+            // `borrow_mut` across the sync call aborts with "already mutably
+            // borrowed" (hit constantly by Polymer rewriting `textContent`).
+            enum TextTarget {
+                TextNode,
+                Element,
+                Unsupported,
+            }
+            let target = match &mut *node.borrow_mut() {
+                Node::Text(t) => {
+                    t.content = text.clone();
+                    TextTarget::TextNode
+                }
+                Node::Element(el) => {
+                    el.children = vec![Node::text(text.clone())];
+                    TextTarget::Element
+                }
+                Node::Document { .. } => TextTarget::Unsupported,
+            };
+            let changed = !matches!(target, TextTarget::Unsupported);
+            match target {
+                TextTarget::TextNode => {
+                    render_synced = registry.sync_text_to_render_document(node, &text);
+                    if !render_synced {
+                        schedule_sync_failure(registry);
+                    }
+                }
+                TextTarget::Element => {
+                    let cleared = registry.sync_clear_children_in_render_document(node);
+                    crate::dom::reparent_subtree(node);
+                    let reattached = registry.sync_children_to_render_document(node);
+                    render_synced = cleared && reattached;
+                    if !render_synced {
+                        schedule_sync_failure(registry);
+                    }
+                }
+                TextTarget::Unsupported => {}
+            }
+            DomMutationResult {
+                kind: DomMutationKind::SetTextContent,
+                render_synced,
+                target_id,
+                changed,
+            }
+        }
+        DomMutation::ReplaceChildren { node, children } => {
+            let target_id = registry.register(node.clone());
+            let changed = match &mut *node.borrow_mut() {
+                Node::Element(el) => {
+                    el.children = children;
+                    true
+                }
+                Node::Document {
+                    children: existing, ..
+                } => {
+                    *existing = children;
+                    true
+                }
+                _ => false,
+            };
+            let mut render_synced = true;
+            if changed {
+                let cleared = registry.sync_clear_children_in_render_document(node);
+                crate::dom::reparent_subtree(node);
+                let reattached = registry.sync_children_to_render_document(node);
+                render_synced = cleared && reattached;
+                if !render_synced {
+                    schedule_sync_failure(registry);
+                }
+            }
+            DomMutationResult {
+                kind: DomMutationKind::ReplaceChildren,
+                render_synced,
+                target_id,
+                changed,
+            }
+        }
+        DomMutation::AttachShadow {
+            host,
+            shadow_root,
+            mode,
+        } => {
+            let target_id = registry.register(host.clone());
+            let render_synced =
+                registry.sync_shadow_root_to_render_document(host, shadow_root, mode);
+            if !render_synced {
+                schedule_sync_failure(registry);
+            }
+            DomMutationResult {
+                kind: DomMutationKind::AttachShadow,
+                render_synced,
+                target_id,
+                changed: true,
+            }
+        }
+    }
+}
+
+fn insertion_nodes(node: &NodePtr) -> Vec<NodePtr> {
+    document_fragment_children(node).unwrap_or_else(|| vec![node.clone()])
+}
+
+fn node_ids(registry: &Rc<NodeRegistry>, nodes: &[NodePtr]) -> Vec<u32> {
+    nodes
+        .iter()
+        .cloned()
+        .into_iter()
+        .map(|node| registry.register(node))
+        .collect()
+}
+
+fn document_fragment_children(node: &NodePtr) -> Option<Vec<NodePtr>> {
+    match &*node.borrow() {
+        Node::Element(el) if el.tag_name == "#document-fragment" => Some(el.children.clone()),
+        _ => None,
+    }
+}
+
+fn sync_removed_node_from_render_document(registry: &Rc<NodeRegistry>, node: &NodePtr) -> bool {
+    if registry.has_render_mapping(node) {
+        registry.sync_remove_child_from_render_document(node)
+    } else {
+        true
+    }
+}
+
+fn sync_inserted_nodes_to_render_document(
+    registry: &Rc<NodeRegistry>,
+    parent: &NodePtr,
+    nodes: &[NodePtr],
+) -> bool {
+    if !registry.has_render_document() {
+        return true;
+    }
+
+    let parent_is_mirrored = registry.has_render_mapping(parent);
+    for node in nodes {
+        if !sync_removed_node_from_render_document(registry, node) {
+            return false;
+        }
+    }
+
+    if !parent_is_mirrored {
+        return true;
+    }
+
+    for node in nodes.iter().rev() {
+        let anchor = next_render_mapped_sibling(registry, parent, node);
+        if !registry.sync_insert_before_to_render_document(parent, node, anchor.as_ref()) {
+            return false;
+        }
+    }
+    true
+}
+
+fn next_render_mapped_sibling(
+    registry: &Rc<NodeRegistry>,
+    parent: &NodePtr,
+    node: &NodePtr,
+) -> Option<NodePtr> {
+    let children = child_nodes(parent);
+    let pos = children.iter().position(|child| Rc::ptr_eq(child, node))?;
+    children
+        .into_iter()
+        .skip(pos + 1)
+        .find(|child| registry.has_render_mapping(child))
+}
+
+fn child_nodes(node: &NodePtr) -> Vec<NodePtr> {
+    match &*node.borrow() {
+        Node::Element(el) => el.children.clone(),
+        Node::Document { children, .. } => children.clone(),
+        Node::Text(_) => Vec::new(),
+    }
+}
 
 fn take_document_fragment_children(node: &NodePtr) -> Option<Vec<NodePtr>> {
     let mut borrow = node.borrow_mut();
@@ -106,10 +528,8 @@ pub(crate) fn insert_before_ptr(
     ref_child: Option<&NodePtr>,
 ) {
     if let Some(children) = take_document_fragment_children(new_child) {
-        let mut ref_cursor = ref_child.cloned();
         for frag_child in children {
-            insert_before_ptr(parent, &frag_child, ref_cursor.as_ref());
-            ref_cursor = Some(frag_child);
+            insert_before_ptr(parent, &frag_child, ref_child);
         }
         return;
     }
@@ -221,6 +641,341 @@ pub(crate) fn clone_node(node: &NodePtr, deep: bool) -> NodePtr {
         crate::dom::reparent_subtree(&cloned);
     }
     cloned
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::blitz_document::{BlitzDocument, MirrorMutationResult};
+    use crate::identity::{Capability, Identity, IdentityKind};
+    use crate::{dom::Node, html::Parser};
+    use std::cell::RefCell;
+
+    fn registry() -> Rc<NodeRegistry> {
+        Rc::new(NodeRegistry::new())
+    }
+
+    fn test_identity() -> Identity {
+        Identity::new(
+            "did:aurora:test",
+            "Aurora Test",
+            IdentityKind::Agent,
+            [Capability::ReadWorkspace, Capability::NetworkAccess],
+        )
+    }
+
+    fn element_children(node: &NodePtr) -> Vec<NodePtr> {
+        let Node::Element(el) = &*node.borrow() else {
+            panic!("expected element");
+        };
+        el.children.clone()
+    }
+
+    fn find_element_by_id(node: &NodePtr, id: &str) -> Option<NodePtr> {
+        match &*node.borrow() {
+            Node::Element(el) if el.attributes.get("id").is_some_and(|value| value == id) => {
+                Some(node.clone())
+            }
+            Node::Element(el) => el
+                .children
+                .iter()
+                .find_map(|child| find_element_by_id(child, id)),
+            Node::Document { children, .. } => children
+                .iter()
+                .find_map(|child| find_element_by_id(child, id)),
+            Node::Text(_) => None,
+        }
+    }
+
+    #[test]
+    fn dispatcher_applies_append_child_and_marks_dirty() {
+        let registry = registry();
+        let parent = Node::element("div", Vec::new());
+        let child = Node::element("span", Vec::new());
+
+        let result = apply_dom_mutation(
+            &registry,
+            DomMutation::AppendChild {
+                parent: &parent,
+                child: &child,
+            },
+        );
+
+        assert_eq!(result.kind, DomMutationKind::AppendChild);
+        assert!(result.render_synced);
+        assert_eq!(element_children(&parent).len(), 1);
+        assert!(Rc::ptr_eq(&element_children(&parent)[0], &child));
+        assert!(registry.has_dirty_bits());
+    }
+
+    #[test]
+    fn dispatcher_append_child_keeps_render_mirror_valid() {
+        let registry = registry();
+        let dom = Parser::new("<html><body><div id='parent'></div></body></html>").parse_document();
+        crate::dom::reparent_subtree(&dom);
+        let parent = find_element_by_id(&dom, "parent").expect("parent should exist");
+        let render_doc = Rc::new(RefCell::new(
+            BlitzDocument::try_from_dom(&dom, None, &test_identity(), 800, 600)
+                .expect("render document should build"),
+        ));
+        registry.set_render_document(Some(render_doc.clone()));
+        let child = Node::element("span", vec![Node::text("new")]);
+
+        let result = apply_dom_mutation(
+            &registry,
+            DomMutation::AppendChild {
+                parent: &parent,
+                child: &child,
+            },
+        );
+
+        assert!(result.render_synced);
+        assert_eq!(registry.take_snapshot_rebuild_reason(), None);
+        let trace = render_doc
+            .borrow()
+            .last_mirror_mutation_trace()
+            .expect("append should record a mirror trace")
+            .clone();
+        assert_eq!(trace.op_name, "sync_insert_before");
+        assert_eq!(trace.result, MirrorMutationResult::Succeeded);
+    }
+
+    #[test]
+    fn dispatcher_append_child_moves_render_mirror_between_parents() {
+        let registry = registry();
+        let dom =
+            Parser::new("<html><body><div id='a'><span id='m'>move</span></div><div id='b'></div></body></html>")
+                .parse_document();
+        crate::dom::reparent_subtree(&dom);
+        let from = find_element_by_id(&dom, "a").expect("source parent should exist");
+        let to = find_element_by_id(&dom, "b").expect("target parent should exist");
+        let moved = find_element_by_id(&dom, "m").expect("moved child should exist");
+        let render_doc = Rc::new(RefCell::new(
+            BlitzDocument::try_from_dom(&dom, None, &test_identity(), 800, 600)
+                .expect("render document should build"),
+        ));
+        registry.set_render_document(Some(render_doc.clone()));
+
+        let result = apply_dom_mutation(
+            &registry,
+            DomMutation::AppendChild {
+                parent: &to,
+                child: &moved,
+            },
+        );
+
+        assert!(result.render_synced);
+        assert!(element_children(&from).is_empty());
+        assert!(Rc::ptr_eq(&element_children(&to)[0], &moved));
+        assert_eq!(registry.take_snapshot_rebuild_reason(), None);
+        render_doc
+            .borrow()
+            .validate_mirror_integrity()
+            .expect("move should leave the render mirror valid");
+    }
+
+    #[test]
+    fn dispatcher_applies_insert_before() {
+        let registry = registry();
+        let first = Node::element("first", Vec::new());
+        let second = Node::element("second", Vec::new());
+        let parent = Node::element("div", vec![second.clone()]);
+        crate::dom::reparent_subtree(&parent);
+
+        let result = apply_dom_mutation(
+            &registry,
+            DomMutation::InsertBefore {
+                parent: &parent,
+                new_child: &first,
+                ref_child: Some(&second),
+            },
+        );
+
+        let children = element_children(&parent);
+        assert_eq!(result.kind, DomMutationKind::InsertBefore);
+        assert!(Rc::ptr_eq(&children[0], &first));
+        assert!(Rc::ptr_eq(&children[1], &second));
+        assert!(registry.has_dirty_bits());
+    }
+
+    #[test]
+    fn dispatcher_insert_before_document_fragment_preserves_order() {
+        let registry = registry();
+        let first = Node::element("first", Vec::new());
+        let second = Node::element("second", Vec::new());
+        let anchor = Node::element("anchor", Vec::new());
+        let fragment = Node::document_fragment(vec![first.clone(), second.clone()]);
+        let parent = Node::element("div", vec![anchor.clone()]);
+        crate::dom::reparent_subtree(&parent);
+
+        let result = apply_dom_mutation(
+            &registry,
+            DomMutation::InsertBefore {
+                parent: &parent,
+                new_child: &fragment,
+                ref_child: Some(&anchor),
+            },
+        );
+
+        let children = element_children(&parent);
+        assert_eq!(result.kind, DomMutationKind::InsertBefore);
+        assert_eq!(children.len(), 3);
+        assert!(Rc::ptr_eq(&children[0], &first));
+        assert!(Rc::ptr_eq(&children[1], &second));
+        assert!(Rc::ptr_eq(&children[2], &anchor));
+        assert!(element_children(&fragment).is_empty());
+    }
+
+    #[test]
+    fn dispatcher_applies_remove_child() {
+        let registry = registry();
+        let child = Node::element("span", Vec::new());
+        let parent = Node::element("div", vec![child.clone()]);
+        crate::dom::reparent_subtree(&parent);
+
+        let result = apply_dom_mutation(
+            &registry,
+            DomMutation::RemoveChild {
+                parent: &parent,
+                child: &child,
+            },
+        );
+
+        assert_eq!(result.kind, DomMutationKind::RemoveChild);
+        assert!(element_children(&parent).is_empty());
+        assert!(crate::dom::parent_ptr(&child).is_none());
+        assert!(registry.has_dirty_bits());
+    }
+
+    #[test]
+    fn dispatcher_applies_replace_child() {
+        let registry = registry();
+        let old_child = Node::element("old", Vec::new());
+        let new_child = Node::element("new", Vec::new());
+        let parent = Node::element("div", vec![old_child.clone()]);
+        crate::dom::reparent_subtree(&parent);
+
+        let result = apply_dom_mutation(
+            &registry,
+            DomMutation::ReplaceChild {
+                parent: &parent,
+                new_child: &new_child,
+                old_child: &old_child,
+            },
+        );
+
+        let children = element_children(&parent);
+        assert_eq!(result.kind, DomMutationKind::ReplaceChild);
+        assert_eq!(children.len(), 1);
+        assert!(Rc::ptr_eq(&children[0], &new_child));
+        assert!(crate::dom::parent_ptr(&old_child).is_none());
+        assert!(registry.has_dirty_bits());
+    }
+
+    #[test]
+    fn dispatcher_applies_set_attribute_and_marks_dirty() {
+        let registry = registry();
+        let node = Node::element("div", Vec::new());
+
+        let result = apply_dom_mutation(
+            &registry,
+            DomMutation::SetAttribute {
+                node: &node,
+                name: "data-state",
+                value: "ready",
+            },
+        );
+
+        let Node::Element(el) = &*node.borrow() else {
+            panic!("expected element");
+        };
+        assert_eq!(result.kind, DomMutationKind::SetAttribute);
+        assert!(result.changed);
+        assert_eq!(
+            el.attributes.get("data-state").map(String::as_str),
+            Some("ready")
+        );
+        assert!(registry.has_dirty_bits());
+    }
+
+    #[test]
+    fn dispatcher_applies_remove_attribute_and_marks_dirty() {
+        let registry = registry();
+        let node = Node::element_with_attributes(
+            "div",
+            std::collections::BTreeMap::from([("data-state".to_string(), "ready".to_string())]),
+            Vec::new(),
+        );
+
+        let result = apply_dom_mutation(
+            &registry,
+            DomMutation::RemoveAttribute {
+                node: &node,
+                name: "data-state",
+            },
+        );
+
+        let Node::Element(el) = &*node.borrow() else {
+            panic!("expected element");
+        };
+        assert_eq!(result.kind, DomMutationKind::RemoveAttribute);
+        assert!(result.changed);
+        assert!(!el.attributes.contains_key("data-state"));
+        assert!(registry.has_dirty_bits());
+    }
+
+    #[test]
+    fn dispatcher_attribute_mutation_ignores_non_elements() {
+        let registry = registry();
+        let node = Node::text("hello");
+
+        let result = apply_dom_mutation(
+            &registry,
+            DomMutation::SetAttribute {
+                node: &node,
+                name: "data-state",
+                value: "ready",
+            },
+        );
+
+        assert_eq!(result.kind, DomMutationKind::SetAttribute);
+        assert!(!result.changed);
+        assert!(!registry.has_dirty_bits());
+    }
+
+    #[test]
+    fn dispatcher_schedules_rebuild_when_render_sync_fails() {
+        let registry = registry();
+        let identity = test_identity();
+        let render_dom =
+            crate::html::Parser::new("<html><body><div></div></body></html>").parse_document();
+        let render_doc = crate::blitz_document::BlitzDocument::try_from_dom(
+            &render_dom,
+            None,
+            &identity,
+            800,
+            600,
+        )
+        .expect("render document should build");
+        registry.set_render_document(Some(Rc::new(RefCell::new(render_doc))));
+
+        let node = Node::element("div", Vec::new());
+        let result = apply_dom_mutation(
+            &registry,
+            DomMutation::SetAttribute {
+                node: &node,
+                name: "data-state",
+                value: "ready",
+            },
+        );
+
+        assert_eq!(result.kind, DomMutationKind::SetAttribute);
+        assert!(!result.render_synced);
+        assert_eq!(
+            registry.take_snapshot_rebuild_reason(),
+            Some(SnapshotRebuildReason::SyncOperationFailed)
+        );
+    }
 }
 
 /// Whether `node` is reachable from `document` by walking parent pointers.

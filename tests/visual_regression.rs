@@ -180,6 +180,11 @@ fn snapshot_wikipedia_rust() {
 }
 
 #[test]
+fn snapshot_youtube() {
+    assert_snapshot("youtube", 1280, 800);
+}
+
+#[test]
 fn snapshot_hydrated_first_paint_smoke() {
     let html = r#"
         <html>

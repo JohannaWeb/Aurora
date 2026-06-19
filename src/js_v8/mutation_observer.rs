@@ -1,6 +1,6 @@
 //! A real `MutationObserver` for the V8 backend.
 //!
-//! Mirrors the SpiderMonkey implementation: `observe()` registrations accumulate
+//! `observe()` registrations accumulate
 //! `MutationRecord`s as the DOM is mutated (childList / attributes, optionally
 //! over a subtree), and the records are delivered to each observer's callback
 //! when the event loop is pumped (`deliver`). Polymer/ShadyDOM rely on this

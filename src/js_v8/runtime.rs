@@ -6,6 +6,7 @@ use std::time::{Duration, Instant};
 use crate::css::Stylesheet;
 use crate::dom::{Node, NodePtr};
 use crate::layout::{LayoutTree, ViewportSize};
+use crate::window::SnapshotRebuildReason;
 
 use super::capture::WindowCapture;
 use super::node_create::create_js_node;
@@ -14,8 +15,7 @@ use super::selectors::query;
 use super::tree::mutation;
 
 // V8 allows exactly one platform per process, initialized before the first
-// isolate and never torn down (same constraint family as SpiderMonkey's
-// JSEngine, but V8 tolerates living forever).
+// isolate and never torn down. V8 tolerates the platform living for the process.
 static V8_INIT: Once = Once::new();
 
 fn ensure_platform() {
@@ -41,6 +41,13 @@ struct DocumentData {
 
 impl V8Runtime {
     pub(crate) fn new(document: NodePtr) -> Self {
+        Self::with_render_document(document, None)
+    }
+
+    pub(crate) fn with_render_document(
+        document: NodePtr,
+        render_document: Option<Rc<RefCell<crate::blitz_document::BlitzDocument>>>,
+    ) -> Self {
         ensure_platform();
         // Establish the parent back-pointer invariant for the initial tree so
         // connectivity/ancestor queries are O(depth); the parent pointer is then
@@ -52,6 +59,7 @@ impl V8Runtime {
         // Make the document reachable from the registry (used by e.g.
         // MutationObserver record construction, which only has the registry).
         *registry.document.borrow_mut() = Some(document.clone());
+        registry.set_render_document(render_document);
 
         let context = {
             v8::scope!(let scope, &mut isolate);
@@ -143,26 +151,59 @@ impl V8Runtime {
                 create_text_node_fn.into(),
             );
 
+            let element_from_point_fn = v8::FunctionTemplate::builder(element_from_point)
+                .data(doc_external.into())
+                .build(scope);
+            document_template.set(
+                v8_str(scope, "elementFromPoint").into(),
+                element_from_point_fn.into(),
+            );
+
             let document_obj = document_template.new_instance(scope).unwrap();
             global.set(scope, v8_str(scope, "document").into(), document_obj.into());
+            document_obj.set(
+                scope,
+                v8_str(scope, "nodeType").into(),
+                v8::Integer::new(scope, 9).into(),
+            );
+            document_obj.set(
+                scope,
+                v8_str(scope, "nodeName").into(),
+                v8_str(scope, "#document").into(),
+            );
 
             // Set document structure fields
-            let mut bodies = Vec::new();
-            query::collect_by_tag(&document, "body", &mut bodies);
+            let bodies = registry
+                .collect_by_tag_dom("body", &document)
+                .unwrap_or_else(|| {
+                    let mut bodies = Vec::new();
+                    query::collect_by_tag(&document, "body", &mut bodies);
+                    bodies
+                });
             if let Some(body_node) = bodies.first() {
                 let js_body = create_js_node(scope, body_node.clone(), &registry, &document);
                 document_obj.set(scope, v8_str(scope, "body").into(), js_body.into());
             }
 
-            let mut heads = Vec::new();
-            query::collect_by_tag(&document, "head", &mut heads);
+            let heads = registry
+                .collect_by_tag_dom("head", &document)
+                .unwrap_or_else(|| {
+                    let mut heads = Vec::new();
+                    query::collect_by_tag(&document, "head", &mut heads);
+                    heads
+                });
             if let Some(head_node) = heads.first() {
                 let js_head = create_js_node(scope, head_node.clone(), &registry, &document);
                 document_obj.set(scope, v8_str(scope, "head").into(), js_head.into());
             }
 
-            let mut htmls = Vec::new();
-            query::collect_by_tag(&document, "html", &mut htmls);
+            let htmls = registry
+                .collect_by_tag_dom("html", &document)
+                .unwrap_or_else(|| {
+                    let mut htmls = Vec::new();
+                    query::collect_by_tag(&document, "html", &mut htmls);
+                    htmls
+                });
             if let Some(html_node) = htmls.first() {
                 let js_html = create_js_node(scope, html_node.clone(), &registry, &document);
                 document_obj.set(
@@ -182,8 +223,13 @@ impl V8Runtime {
             document_obj.set(scope, v8_str(scope, "defaultView").into(), global.into());
 
             // document.title
-            let mut titles = Vec::new();
-            query::collect_by_tag(&document, "title", &mut titles);
+            let titles = registry
+                .collect_by_tag_dom("title", &document)
+                .unwrap_or_else(|| {
+                    let mut titles = Vec::new();
+                    query::collect_by_tag(&document, "title", &mut titles);
+                    titles
+                });
             if let Some(title_node) = titles.first() {
                 let text = mutation::collect_text(title_node);
                 document_obj.set(
@@ -410,6 +456,25 @@ impl V8Runtime {
             {
                 v8::tc_scope!(let scope, scope);
                 let polyfill = r#"
+                    function __aurora_request_url__(input) {
+                        var raw = input;
+                        if (input && typeof input === 'object' && typeof input.url === 'string') {
+                            raw = input.url;
+                        }
+                        raw = String(raw || '');
+                        try {
+                            return new URL(raw, (globalThis.location && globalThis.location.href) || 'https://www.youtube.com/').href;
+                        } catch (e) {
+                            if (raw.indexOf('//') === 0) {
+                                return ((globalThis.location && globalThis.location.protocol) || 'https:') + raw;
+                            }
+                            if (raw.charAt(0) === '/') {
+                                return ((globalThis.location && globalThis.location.origin) || 'https://www.youtube.com') + raw;
+                            }
+                            return raw;
+                        }
+                    }
+
                     globalThis.XMLHttpRequest = function() {
                         this.readyState = 0;
                         this.status = 0;
@@ -419,25 +484,81 @@ impl V8Runtime {
                         this.onreadystatechange = null;
                         this.onload = null;
                         this.onerror = null;
+                        this._listeners = {};
                     };
                     globalThis.XMLHttpRequest.prototype.open = function(method, url) {
                         this._method = method;
                         this._url = url;
                         this.readyState = 1;
                     };
-                    globalThis.XMLHttpRequest.prototype.send = function() {
+                    globalThis.XMLHttpRequest.prototype._emit = function(type) {
+                        var evt = { type: type, target: this, currentTarget: this };
+                        var listeners = this._listeners && this._listeners[type] ? this._listeners[type].slice() : [];
+                        for (var i = 0; i < listeners.length; i++) {
+                            try { listeners[i].call(this, evt); } catch (e) {}
+                        }
+                        var handler = this['on' + type];
+                        if (typeof handler === 'function') {
+                            try { handler.call(this, evt); } catch (e) {}
+                        }
+                    };
+                    globalThis.XMLHttpRequest.prototype.send = function(body) {
+                        var method = (this._method || 'GET').toUpperCase();
+                        var url = __aurora_request_url__(this._url || '');
+                        if (globalThis.__aurora_debug_youtube__) {
+                            console.log('[yt-net] xhr ' + method + ' ' + url);
+                        }
+                        var result = null;
+                        try {
+                            result = globalThis.__aurora_fetch_sync__(url, method, body == null ? '' : String(body));
+                        } catch (e) {
+                            if (globalThis.__aurora_debug_youtube__) {
+                                console.log('[yt-net] xhr-throw ' + method + ' ' + url + ' ' + e);
+                            }
+                        }
                         this.readyState = 4;
-                        this.status = 0;
-                        this.responseText = "";
-                        if (typeof this.onreadystatechange === 'function') this.onreadystatechange();
-                        if (typeof this.onerror === 'function') this.onerror();
+                        if (result && result.ok) {
+                            this.status = result.status || 200;
+                            this.responseText = String(result.body || "");
+                            if (this.responseType === "json") {
+                                try { this.response = JSON.parse(this.responseText || "null"); }
+                                catch (e) { this.response = null; }
+                            } else {
+                                this.response = this.responseText;
+                            }
+                            if (globalThis.__aurora_debug_youtube__) {
+                                console.log('[yt-net] xhr-done status=' + this.status +
+                                    ' bytes=' + this.responseText.length + ' ' + url);
+                            }
+                            this._emit('readystatechange');
+                            this._emit('load');
+                            this._emit('loadend');
+                        } else {
+                            this.status = result && result.status ? result.status : 0;
+                            this.responseText = "";
+                            this.response = null;
+                            if (globalThis.__aurora_debug_youtube__) {
+                                console.log('[yt-net] xhr-fail status=' + this.status +
+                                    ' error=' + (result && result.error ? result.error : '') + ' ' + url);
+                            }
+                            this._emit('readystatechange');
+                            this._emit('error');
+                            this._emit('loadend');
+                        }
                     };
                     globalThis.XMLHttpRequest.prototype.setRequestHeader = function() {};
                     globalThis.XMLHttpRequest.prototype.getResponseHeader = function() { return null; };
                     globalThis.XMLHttpRequest.prototype.getAllResponseHeaders = function() { return ""; };
                     globalThis.XMLHttpRequest.prototype.abort = function() {};
-                    globalThis.XMLHttpRequest.prototype.addEventListener = function() {};
-                    globalThis.XMLHttpRequest.prototype.removeEventListener = function() {};
+                    globalThis.XMLHttpRequest.prototype.addEventListener = function(type, listener) {
+                        if (typeof listener !== 'function') return;
+                        (this._listeners[type] || (this._listeners[type] = [])).push(listener);
+                    };
+                    globalThis.XMLHttpRequest.prototype.removeEventListener = function(type, listener) {
+                        var list = this._listeners && this._listeners[type];
+                        if (!list) return;
+                        this._listeners[type] = list.filter(function(fn) { return fn !== listener; });
+                    };
                     globalThis.XMLHttpRequest.UNSENT = 0;
                     globalThis.XMLHttpRequest.OPENED = 1;
                     globalThis.XMLHttpRequest.HEADERS_RECEIVED = 2;
@@ -445,17 +566,30 @@ impl V8Runtime {
                     globalThis.XMLHttpRequest.DONE = 4;
 
                     globalThis.fetch = function(url, options) {
-                        var method = (options && options.method) ? options.method.toUpperCase() : 'GET';
+                        var method = (options && options.method)
+                            ? options.method.toUpperCase()
+                            : (url && typeof url === 'object' && url.method ? String(url.method).toUpperCase() : 'GET');
+                        var requestUrl = __aurora_request_url__(url);
+                        var requestBody = options && options.body != null
+                            ? String(options.body)
+                            : (url && typeof url === 'object' && url.body != null ? String(url.body) : '');
+                        if (globalThis.__aurora_debug_youtube__) {
+                            console.log('[yt-net] fetch ' + method + ' ' + requestUrl);
+                        }
                         try {
-                            var result = globalThis.__aurora_fetch_sync__(String(url), method);
+                            var result = globalThis.__aurora_fetch_sync__(requestUrl, method, requestBody);
                             if (result.ok) {
                                 var responseText = result.body;
                                 var status = result.status;
+                                if (globalThis.__aurora_debug_youtube__) {
+                                    console.log('[yt-net] fetch-done status=' + status +
+                                        ' bytes=' + responseText.length + ' ' + requestUrl);
+                                }
                                 return Promise.resolve({
                                     ok: status >= 200 && status < 300,
                                     status: status,
                                     statusText: String(status),
-                                    url: String(url),
+                                    url: requestUrl,
                                     headers: new Headers(),
                                     text: function() { return Promise.resolve(responseText); },
                                     json: function() {
@@ -467,9 +601,16 @@ impl V8Runtime {
                                     clone: function() { return this; }
                                 });
                             } else {
+                                if (globalThis.__aurora_debug_youtube__) {
+                                    console.log('[yt-net] fetch-fail status=' + result.status +
+                                        ' error=' + (result.error || '') + ' ' + requestUrl);
+                                }
                                 return Promise.reject(new Error("HTTP " + result.status));
                             }
                         } catch(e) {
+                            if (globalThis.__aurora_debug_youtube__) {
+                                console.log('[yt-net] fetch-throw ' + requestUrl + ' ' + e);
+                            }
                             return Promise.reject(e);
                         }
                     };
@@ -520,8 +661,7 @@ impl V8Runtime {
                     log::warn!(target: "aurora::js", "[JS] bootstrap networking failed: {e}");
                 }
 
-                // Shared engine-agnostic polyfills (same files js_sm runs) plus
-                // V8-specific base/post shims. Order matters: v8_base defines
+                // V8-specific base/post shims plus shared polyfills. Order matters: v8_base defines
                 // HTMLElement/queueMicrotask that event_constructors and
                 // custom_elements build on; v8_post wires document-dependent
                 // pieces and primes the custom-element registry.
@@ -573,6 +713,34 @@ impl V8Runtime {
                     Ok("1") | Ok("true") | Ok("TRUE") | Ok("yes") | Ok("YES")
                 ) {
                     let _ = compile_and_run(scope, "globalThis.__aurora_debug_youtube__ = true;");
+                }
+                // Custom-element lifecycle tracer (see custom_elements.js). AURORA_TRACE_CE
+                // enables it; AURORA_TRACE_CE_FILTER (comma-separated name substrings) narrows
+                // output to specific elements, e.g. "ytd-app,ytd-topbar-logo-renderer".
+                if matches!(
+                    std::env::var("AURORA_TRACE_CE").as_deref(),
+                    Ok("1") | Ok("true") | Ok("TRUE") | Ok("yes") | Ok("YES")
+                ) {
+                    let _ = compile_and_run(scope, "globalThis.__aurora_ce_trace__ = true;");
+                    if let Ok(filter) = std::env::var("AURORA_TRACE_CE_FILTER") {
+                        let list = filter
+                            .split(',')
+                            .map(|s| s.trim())
+                            .filter(|s| !s.is_empty())
+                            .map(|s| format!("{s:?}"))
+                            .collect::<Vec<_>>()
+                            .join(",");
+                        let _ = compile_and_run(
+                            scope,
+                            &format!("globalThis.__aurora_ce_trace_filter__ = [{list}];"),
+                        );
+                    }
+                }
+                if matches!(
+                    std::env::var("AURORA_DEBUG_SHADYCSS").as_deref(),
+                    Ok("1") | Ok("true") | Ok("TRUE") | Ok("yes") | Ok("YES")
+                ) {
+                    let _ = compile_and_run(scope, "globalThis.__aurora_debug_shadycss__ = true;");
                 }
             }
 
@@ -841,7 +1009,12 @@ fn get_element_by_id(
     let doc_data_ptr = external.value() as *const DocumentData;
     let doc_data = unsafe { &*doc_data_ptr };
 
-    if let Some(node) = query::find_by_id(&doc_data.document, &id) {
+    let node = if doc_data.registry.has_render_document() {
+        doc_data.registry.get_element_by_id_dom(&id)
+    } else {
+        query::find_by_id(&doc_data.document, &id)
+    };
+    if let Some(node) = node {
         let js_node = create_js_node(scope, node, &doc_data.registry, &doc_data.document);
         retval.set(js_node.into());
     } else {
@@ -860,8 +1033,16 @@ fn get_elements_by_tag_name(
     let doc_data_ptr = external.value() as *const DocumentData;
     let doc_data = unsafe { &*doc_data_ptr };
 
-    let mut out = Vec::new();
-    query::collect_by_tag(&doc_data.document, &tag, &mut out);
+    let out = if doc_data.registry.has_render_document() {
+        doc_data
+            .registry
+            .collect_by_tag_dom(&tag, &doc_data.document)
+            .unwrap_or_default()
+    } else {
+        let mut out = Vec::new();
+        query::collect_by_tag(&doc_data.document, &tag, &mut out);
+        out
+    };
 
     let array = v8::Array::new(scope, out.len() as i32);
     for (i, node) in out.into_iter().enumerate() {
@@ -882,7 +1063,15 @@ fn query_selector(
     let doc_data_ptr = external.value() as *const DocumentData;
     let doc_data = unsafe { &*doc_data_ptr };
 
-    if let Some(node) = query::query_first(&doc_data.document, &selector, &doc_data.document) {
+    let node = if doc_data.registry.has_render_document() {
+        doc_data
+            .registry
+            .query_selector_all_dom(&selector, &doc_data.document)
+            .and_then(|nodes| nodes.into_iter().next())
+    } else {
+        query::query_first(&doc_data.document, &selector, &doc_data.document)
+    };
+    if let Some(node) = node {
         let js_node = create_js_node(scope, node, &doc_data.registry, &doc_data.document);
         retval.set(js_node.into());
     } else {
@@ -901,7 +1090,14 @@ fn query_selector_all(
     let doc_data_ptr = external.value() as *const DocumentData;
     let doc_data = unsafe { &*doc_data_ptr };
 
-    let found = query::query_all(&doc_data.document, &selector, &doc_data.document);
+    let found = if doc_data.registry.has_render_document() {
+        doc_data
+            .registry
+            .query_selector_all_dom(&selector, &doc_data.document)
+            .unwrap_or_default()
+    } else {
+        query::query_all(&doc_data.document, &selector, &doc_data.document)
+    };
     let array = v8::Array::new(scope, found.len() as i32);
     for (i, node) in found.into_iter().enumerate() {
         let js_node = create_js_node(scope, node, &doc_data.registry, &doc_data.document);
@@ -940,6 +1136,35 @@ fn create_text_node(
     let node = Node::text(text);
     let js_node = create_js_node(scope, node, &doc_data.registry, &doc_data.document);
     retval.set(js_node.into());
+}
+
+/// `document.elementFromPoint(x, y)` — hit-tests the Blitz layout (Phase 8.2
+/// follow-up). Returns the wrapper for the deepest element at the point, or
+/// `null` when there is no render document or nothing is hit.
+fn element_from_point(
+    scope: &mut v8::PinScope<'_, '_>,
+    args: v8::FunctionCallbackArguments,
+    mut retval: v8::ReturnValue,
+) {
+    let x = args.get(0).number_value(scope).unwrap_or(f64::NAN) as f32;
+    let y = args.get(1).number_value(scope).unwrap_or(f64::NAN) as f32;
+    let data = args.data();
+    let external = v8::Local::<v8::External>::try_from(data).unwrap();
+    let doc_data_ptr = external.value() as *const DocumentData;
+    let doc_data = unsafe { &*doc_data_ptr };
+
+    let hit = if x.is_finite() && y.is_finite() {
+        doc_data.registry.hit_test(x, y)
+    } else {
+        None
+    };
+    match hit {
+        Some(node) => {
+            let js_node = create_js_node(scope, node, &doc_data.registry, &doc_data.document);
+            retval.set(js_node.into());
+        }
+        None => retval.set(v8::null(scope).into()),
+    }
 }
 
 fn atob(
@@ -992,10 +1217,23 @@ fn aurora_fetch_sync(
     mut retval: v8::ReturnValue,
 ) {
     let url = args.get(0).to_rust_string_lossy(scope);
+    let method = args.get(1).to_rust_string_lossy(scope);
+    let body = args.get(2).to_rust_string_lossy(scope);
+    let body_arg = (!body.is_empty()).then_some(body.as_str());
+    let debug_net = matches!(
+        std::env::var("AURORA_DEBUG_YOUTUBE").as_deref(),
+        Ok("1") | Ok("true") | Ok("TRUE") | Ok("yes") | Ok("YES")
+    );
     let obj = v8::Object::new(scope);
 
-    match crate::fetch::http::fetch_string(&url) {
+    if debug_net {
+        log::info!(target: "aurora::net", "[NET] JS {method} {url} body={}B", body.len());
+    }
+    match crate::fetch::http::fetch_string_with_method(&url, &method, body_arg) {
         Ok(body) => {
+            if debug_net {
+                log::info!(target: "aurora::net", "[NET] JS {method} {url} -> 200 {}B", body.len());
+            }
             obj.set(
                 scope,
                 v8_str(scope, "ok").into(),
@@ -1013,6 +1251,9 @@ fn aurora_fetch_sync(
             );
         }
         Err(e) => {
+            if debug_net {
+                log::info!(target: "aurora::net", "[NET] JS {method} {url} -> error {e}");
+            }
             obj.set(
                 scope,
                 v8_str(scope, "ok").into(),
@@ -1156,7 +1397,7 @@ fn storage_key(
     }
 }
 
-// Base64 utilities copied from js_boa/utils.rs
+// Base64 utilities shared with the JS environment.
 fn base64_encode(input: &[u8]) -> String {
     const CHARS: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::with_capacity((input.len() + 2) / 3 * 4);
@@ -1274,6 +1515,13 @@ impl crate::js_engine::JsRuntime for V8Runtime {
             .set_shared_state(layout_tree, stylesheet, viewport, self.document.clone());
     }
 
+    fn set_render_document(
+        &mut self,
+        render_document: Option<Rc<RefCell<crate::blitz_document::BlitzDocument>>>,
+    ) {
+        self.registry.set_render_document(render_document);
+    }
+
     fn clear_dirty_bits(&mut self) {
         self.registry.clear_dirty_bits();
     }
@@ -1282,6 +1530,28 @@ impl crate::js_engine::JsRuntime for V8Runtime {
     }
     fn take_needs_reflow(&mut self) -> bool {
         self.registry.take_needs_reflow()
+    }
+
+    fn take_snapshot_rebuild_reason(&mut self) -> Option<SnapshotRebuildReason> {
+        self.registry.take_snapshot_rebuild_reason()
+    }
+
+    fn perform_style_and_layout(&mut self) -> bool {
+        if !self.registry.has_dirty_bits() {
+            return false;
+        }
+        let Some(doc) = self.registry.render_document() else {
+            return false;
+        };
+        if !self.registry.take_needs_reflow() {
+            return false;
+        }
+        doc.borrow_mut().perform_layout()
+    }
+
+    fn perform_paint(&mut self) -> bool {
+        // Paint acknowledge phase
+        true
     }
 
     fn tick(&mut self, now: Instant) -> bool {

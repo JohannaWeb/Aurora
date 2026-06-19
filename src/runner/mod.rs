@@ -1,6 +1,7 @@
 #![allow(dead_code, unused_imports)]
 
 mod cli;
+pub(crate) mod event_loop;
 mod fixtures;
 mod images;
 pub(crate) mod pipeline;

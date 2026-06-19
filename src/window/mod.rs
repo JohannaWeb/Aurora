@@ -9,6 +9,7 @@ mod open;
 mod screenshot;
 mod scroll_metrics;
 
+pub(crate) use input::SnapshotRebuildReason;
 pub use input::WindowInput;
 pub use open::open;
 

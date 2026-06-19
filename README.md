@@ -25,7 +25,19 @@ let png = page.render_png(800, 600).unwrap();
 std::fs::write("hello.png", png).unwrap();
 ```
 
-Under the hood: GPU rasterisation via **Vello + wgpu**, DOM/layout via the **blitz** crates and **taffy**, CSS via **stylo/cssparser/selectors**, text via **parley/rustybuzz**, HTTPS fetching via **reqwest/rustls**, and an embedded JavaScript runtime. JS engines are mutually-exclusive features; the default is **V8** (`v8`), with SpiderMonkey (`engine-sm`) and Boa (`engine-boa`) as alternatives.
+Under the hood: GPU rasterisation via **Vello + wgpu**, DOM/layout via the **blitz** crates and **taffy**, CSS via **stylo/cssparser/selectors**, text via **parley/rustybuzz**, HTTPS fetching via **reqwest/rustls**, and an embedded JavaScript runtime. Aurora currently ships with **V8** as the authoritative JS backend.
+
+## Architecture
+
+Aurora has consolidated around a single authoritative DOM and layout path driven by the **blitz-dom** and **stylo** crates. The legacy dual-path layout has been deprecated in favor of a unified engine that provides both visual rendering and layout metrics for JavaScript.
+
+The browser follows a canonical event-loop model where JS execution, style recomputation, layout, and painting are driven through explicit, ordered phases. This allows for reliable handling of modern SPA frameworks like Polymer while maintaining a testable execution model.
+
+## YouTube Benchmark
+
+Aurora targets YouTube as a hostile, modern-web integration benchmark. The current milestone is not full YouTube rendering or playback; it is proving that Aurora can bootstrap enough YouTube application data, DOM mutation, custom elements, style, and layout to render one real content-bearing route reliably.
+
+The benchmark is intentionally narrow. A reliable route with real content is the gate before broader YouTube navigation, media playback, account state, and performance work.
 
 ## Rendering Test
 
@@ -91,6 +103,7 @@ Aurora is an early engine prototype, not a production browser. It does not yet c
 * Complete layout correctness
 * Browser-grade JavaScript scheduling semantics
 * Full DOM, BOM, or Web API compliance
+* Full YouTube rendering, navigation, or playback
 * Spec compliance across standard browser test suites
 
 ## Run
@@ -151,13 +164,12 @@ See [docs/DOCKER.md](docs/DOCKER.md) for run examples.
 
 ## Roadmap
 
-1. Render YouTube homepage shell
-2. Search results page loads without JS fatal errors
-3. Video page renders title, player box, sidebar
-4. Basic playback path works
-5. Controls/input events work
-6. Enough scheduling/timers/fetch/XHR survival for YouTube scripts
-7. Performance pass
+1. Bootstrap YouTube without fatal JavaScript, custom-element, or DOM-mutation failures
+2. Extract enough real YouTube application data for a route that contains actual content
+3. Instantiate the route's content-bearing component tree through Aurora's DOM/custom-element path
+4. Apply enough scoped style and layout for that route to paint stable, inspectable content
+5. Make the route reliable in repeated windowed and screenshot runs
+6. Expand from that proven route toward broader YouTube navigation, media, input, and performance work
 
 ## License
 
