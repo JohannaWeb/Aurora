@@ -34,7 +34,15 @@
     });
 
     // Document factory and convenience shims over the native bridge.
-    document.createElementNS = function(ns, tag) { return document.createElement(tag); };
+    document.createElementNS = function(ns, tag) {
+        var el = document.createElement(tag);
+        var namespace = String(ns || '');
+        if (/svg/i.test(namespace)) {
+            try { el.namespaceURI = namespace; } catch (e) {}
+            try { Object.setPrototypeOf(el, SVGElement.prototype); } catch (e) {}
+        }
+        return el;
+    };
     // Comments become text nodes (no Comment node type in the DOM core).
     document.createComment = function(text) { return document.createTextNode(text); };
     document.createDocumentFragment = function() { return document.createElement('#document-fragment'); };
@@ -300,12 +308,19 @@
                     });
                 } catch (e) {}
             }
+            var zeroFallback = function() { return 0; };
             metric('clientWidth', widthFallback);
             metric('offsetWidth', widthFallback);
             metric('scrollWidth', widthFallback);
             metric('clientHeight', heightFallback);
             metric('offsetHeight', heightFallback);
             metric('scrollHeight', heightFallback);
+            // Position accessors read the Blitz/Stylo box origin (document-
+            // relative) via the same native bridge; __aurora_metric__ maps
+            // offsetTop→y and offsetLeft→x. scrollTop/scrollLeft stay plain
+            // settable data properties (element scroll offset, 0 until scrolled).
+            metric('offsetTop', zeroFallback);
+            metric('offsetLeft', zeroFallback);
         }
         el.animate = function() {
             var anim = {

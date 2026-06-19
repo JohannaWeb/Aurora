@@ -25,7 +25,13 @@ let png = page.render_png(800, 600).unwrap();
 std::fs::write("hello.png", png).unwrap();
 ```
 
-Under the hood: GPU rasterisation via **Vello + wgpu**, DOM/layout via the **blitz** crates and **taffy**, CSS via **stylo/cssparser/selectors**, text via **parley/rustybuzz**, HTTPS fetching via **reqwest/rustls**, and an embedded JavaScript runtime. JS engines are mutually-exclusive features; the default is **V8** (`v8`), with SpiderMonkey (`engine-sm`) and Boa (`engine-boa`) as alternatives.
+Under the hood: GPU rasterisation via **Vello + wgpu**, DOM/layout via the **blitz** crates and **taffy**, CSS via **stylo/cssparser/selectors**, text via **parley/rustybuzz**, HTTPS fetching via **reqwest/rustls**, and an embedded JavaScript runtime. Aurora currently ships with **V8** as the authoritative JS backend.
+
+## Architecture
+
+Aurora has consolidated around a single authoritative DOM and layout path driven by the **blitz-dom** and **stylo** crates. The legacy dual-path layout has been deprecated in favor of a unified engine that provides both visual rendering and layout metrics for JavaScript.
+
+The browser follows a canonical event-loop model where JS execution, style recomputation, layout, and painting are driven through explicit, ordered phases. This allows for reliable handling of modern SPA frameworks like Polymer while maintaining a testable execution model.
 
 ## YouTube Benchmark
 

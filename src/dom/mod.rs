@@ -11,8 +11,8 @@ pub use node::{
     DocumentMode, ElementNode, Node, NodePtr, clear_parent, parent_ptr, reparent_subtree,
     set_parent,
 };
-pub use shadow::{ShadowTreeBackend, SyntheticShadowTreeBackend};
 pub(crate) use serialize_html::serialize_outer_html;
+pub use shadow::{ShadowTreeBackend, SyntheticShadowTreeBackend};
 
 /// Serialize an SVG DOM node back to an SVG markup string.
 /// Used by the painter to render inline `<svg>` elements via usvg.

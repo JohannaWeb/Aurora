@@ -19,7 +19,7 @@ Aurora is an experimental, GPU-accelerated browser engine written in Rust. Its p
 | 2 | **GPU rendering performance** | Smooth, GPU-first rendering via Vello + WGPU |
 | 3 | **Security via capability model** | Resources mediated through explicit `Identity` + `Capability` checks |
 | 4 | **AI-native design** | First-class environment for AI agents, not a bolted-on afterthought |
-| 5 | **Sovereignty** | No dependency on Chromium, WebKit, or other opaque runtimes |
+| 5 | **Sovereignty** | Rust-native integration of best-in-class engines (V8, Stylo via blitz-dom, Vello) under one capability-gated, agent-controllable surface — not an opaque, telemetry-laden browser shell. Aurora is *not* an independent re-implementation of those engines. |
 
 ### 1.3 Stakeholders
 
@@ -35,8 +35,8 @@ Aurora is an experimental, GPU-accelerated browser engine written in Rust. Its p
 
 - Written entirely in **Rust** (stable toolchain, 2024 edition).
 - Must compile and run on Linux (primary target); macOS optional.
-- No dependency on Chromium, WebKit, Gecko, or Servo.
-- JavaScript must be handled by an engine with a real JIT for YouTube-scale bundled JavaScript.
+- Aurora integrates, rather than re-implements, the hard parts of a browser: JavaScript runs on **V8** (Chromium's engine, linked as a prebuilt library); DOM/CSS/layout come from **blitz-dom**, which uses **Stylo** (Firefox/Servo's style engine); painting is **Vello/anyrender** (Linebender). The Aurora-authored code is the integration layer, capability model, DOM bridge, and agent surface — not the engines themselves.
+- JavaScript must be handled by an engine with a real JIT for YouTube-scale bundled JavaScript (hence V8).
 - GPU rendering is non-negotiable — no software rasteriser fallback.
 
 ---
@@ -79,9 +79,7 @@ Aurora fetches HTML from the network or local filesystem, parses it, runs JavaSc
 | Painting | **blitz-paint** + **anyrender_vello** | GPU-first vector rendering via Vello |
 | Windowing | **winit** | Cross-platform, async-friendly event loop |
 | Text | **parley** | Full text layout with shaping |
-| JavaScript (primary) | **V8** (`v8`) | Default JIT engine for YouTube-scale bundled JavaScript and the live DOM/BOM bridge |
-| JavaScript (alternate) | **SpiderMonkey** (`engine-sm` feature) | Alternative JIT engine |
-| JavaScript (alternate) | **Boa** (`engine-boa` feature) | Pure Rust fallback for specific test scenarios |
+| JavaScript | **V8** (`v8` crate, default feature) | The only JS engine. JIT for YouTube-scale bundled JavaScript and the live DOM/BOM bridge. (Earlier SpiderMonkey and Boa experiments were removed; see `js_engine::JsRuntime`.) |
 | Networking | Custom fetch module | Capability-gated; supports `http`, `https`, `file://`, data URLs |
 | Identity | `Identity` + `Capability` structs | Fine-grained capability model for sovereign browsing |
 
@@ -100,8 +98,8 @@ Aurora fetches HTML from the network or local filesystem, parses it, runs JavaSc
 │  └──────────┘  └──────────┘  └──────────┘  └──────────────┘   │
 │                                                                  │
 │  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────────┐   │
-│  │  js_v8   │  │ js_boa   │  │  dom     │  │blitz_document│   │
-│  │(default) │  │ (feat.)  │  │(legacy)  │  │              │   │
+│  │  js_v8   │  │js_engine │  │  dom     │  │blitz_document│   │
+│  │ (only)   │  │ (trait)  │  │(legacy)  │  │              │   │
 │  └──────────┘  └──────────┘  └──────────┘  └──────────────┘   │
 │                                                                  │
 │  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────────┐   │
@@ -124,10 +122,8 @@ Aurora fetches HTML from the network or local filesystem, parses it, runs JavaSc
 | `blitz_document` | `BlitzDocument` wrapper — owns `blitz-dom` instance, paints via `blitz-paint` + `anyrender_vello` |
 | `fetch` | Capability-gated HTTP/HTTPS/file/data-URL fetching with TLS |
 | `identity` | `Identity` and `Capability` types for capability-gated access |
-| `js_v8` | V8 runtime, DOM/BOM bridge, `NodeRegistry`, custom-element and mutation integration |
-| `js_sm` | SpiderMonkey runtime (optional alternate engine) |
-| `js_boa` | Boa runtime (optional, `engine-boa` feature) |
-| `js_engine` | `JsRuntime` trait — unified interface over V8 / SpiderMonkey / Boa |
+| `js_v8` | V8 runtime, DOM/BOM bridge, `NodeRegistry`, custom-element and mutation integration — the only JS engine |
+| `js_engine` | `JsRuntime` trait + `create_runtime` factory. Abstracts the engine behind a trait (originally to host SpiderMonkey/Boa alternates, now V8-only) |
 | `dom` | Legacy hand-rolled DOM tree (`NodePtr`, `NodeRegistry`) — source of truth for JS and legacy tests |
 | `html` | Hand-rolled HTML tokeniser/parser feeding the legacy DOM |
 | `css` | CSS extraction and parsing from `<style>` tags |
@@ -287,12 +283,10 @@ Aurora currently maintains two parallel document representations:
 ```
 JsRuntime trait
      │
-     ├─── V8 runtime                ← default, JIT-backed, YouTube benchmark target
-     ├─── SmRuntime (SpiderMonkey)  ← engine-sm feature, alternate JIT runtime
-     └─── BoaRuntime (Boa)          ← engine-boa feature, pure Rust, specific tests
+     └─── V8 runtime                ← the only implementation; JIT-backed, YouTube benchmark target
 ```
 
-The `JsRuntime` trait abstracts over both engines so the rest of the codebase is engine-agnostic.
+The `JsRuntime` trait keeps the rest of the codebase engine-agnostic. It was introduced to host SpiderMonkey and Boa alternates; those were removed (V8 won — see ADR-002), but the trait boundary remains so a future engine swap stays localized.
 
 ### 8.4 Script Loading
 
@@ -323,9 +317,9 @@ An in-process `NET_CACHE` (BTreeMap behind a Mutex) deduplicates repeated fetche
 
 ### ADR-002: JIT JavaScript engine for the YouTube benchmark
 - **Status**: Adopted
-- **Context**: Boa (pure Rust) lacks a JIT and cannot run YouTube or modern bundled JS.
-- **Decision**: Use V8 as the default runtime; keep SpiderMonkey and Boa as optional feature-gated alternatives.
-- **Consequences**: YouTube-scale JavaScript is tractable; runtime integration complexity remains significant.
+- **Context**: Boa (pure Rust) lacks a JIT and cannot run YouTube or modern bundled JS. SpiderMonkey was prototyped but could not be statically linked alongside V8 (duplicate-symbol conflict) and was abandoned.
+- **Decision**: Use V8 as the sole runtime. Keep the `JsRuntime` trait boundary so an alternate engine could be reintroduced behind it, but ship only V8.
+- **Consequences**: YouTube-scale JavaScript is tractable; Aurora depends on a prebuilt V8 binary, and "no-Chromium" is explicitly *not* claimed (see Quality Goal 5).
 
 ### ADR-003: Capability-gated fetch
 - **Status**: Adopted

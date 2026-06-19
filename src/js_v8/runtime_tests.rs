@@ -1,7 +1,7 @@
 use super::V8Runtime;
 use crate::blitz_document::BlitzDocument;
-use crate::identity::{Capability, Identity, IdentityKind};
 use crate::html::Parser;
+use crate::identity::{Capability, Identity, IdentityKind};
 use crate::js_engine::{EngineKind, JsRuntime, create_runtime};
 use crate::window::SnapshotRebuildReason;
 use std::cell::RefCell;
@@ -1120,6 +1120,82 @@ fn v8_exposes_youtube_bootstrap_constructor_and_config_shape() {
 }
 
 #[test]
+fn v8_supports_svg_namespace_attribute_methods() {
+    let mut runtime = V8Runtime::new(blank_dom());
+
+    assert_eq!(
+        runtime.eval_to_string(
+            r#"
+            (() => {
+            const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+            path.setAttributeNS(null, 'd', 'M0 0L1 1');
+            path.setAttributeNS('http://www.w3.org/1999/xlink', 'href', '#icon');
+            const before = [
+                path.getAttribute('d'),
+                path.getAttributeNS(null, 'd'),
+                path.getAttributeNS('http://www.w3.org/1999/xlink', 'href'),
+                path.hasAttributeNS(null, 'd'),
+                typeof path.style.cssText
+            ].join('|');
+            path.removeAttributeNS(null, 'd');
+            return before + '|' + path.hasAttribute('d');
+            })()
+            "#
+        ),
+        Ok("M0 0L1 1|M0 0L1 1|#icon|true|string|false".to_string())
+    );
+}
+
+#[test]
+fn v8_create_element_ns_exposes_svg_shape() {
+    let mut runtime = V8Runtime::new(blank_dom());
+
+    assert_eq!(
+        runtime.eval_to_string(
+            r#"
+            (() => {
+                const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+                const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+                return [
+                    svg.namespaceURI,
+                    svg instanceof SVGElement,
+                    path.namespaceURI,
+                    path instanceof SVGElement
+                ].join('|');
+            })()
+            "#
+        ),
+        Ok("http://www.w3.org/2000/svg|true|http://www.w3.org/2000/svg|true".to_string())
+    );
+}
+
+#[test]
+fn v8_element_style_survives_custom_element_prototype_swap() {
+    let mut runtime = V8Runtime::new(blank_dom());
+
+    assert_eq!(
+        runtime.eval_to_string(
+            r#"
+            (() => {
+            class StyleProbe extends HTMLElement {
+                get style() { return undefined; }
+                connectedCallback() {
+                    this.style.cssText = 'color: red';
+                    this.__probe = this.getAttribute('style') + '|' + typeof this.style.cssText;
+                }
+            }
+            customElements.define('style-probe', StyleProbe);
+            const el = document.createElement('style-probe');
+            document.body.appendChild(el);
+            return el.__probe;
+            })()
+            "#
+        ),
+        Ok("color: red|string".to_string())
+    );
+}
+
+#[test]
 fn v8_exposes_common_element_metric_and_attribute_probes() {
     let dom = Parser::new("<html><body><div id='box' hidden data-token='abc'></div></body></html>")
         .parse_document();
@@ -1355,6 +1431,11 @@ fn v8_supports_document_structure_and_screen() {
         runtime.eval_to_string("document.defaultView === window"),
         Ok("true".to_string())
     );
+    assert_eq!(runtime.eval_to_string("document.nodeType"), Ok("9".to_string()));
+    assert_eq!(
+        runtime.eval_to_string("document.nodeName"),
+        Ok("#document".to_string())
+    );
 
     // screen stub — desktop dimensions (matches the 1440x1024 viewport the V8
     // bootstrap reports so sites like YouTube take their desktop layout path).
@@ -1365,6 +1446,25 @@ fn v8_supports_document_structure_and_screen() {
     assert_eq!(
         runtime.eval_to_string("screen.height"),
         Ok("1024".to_string())
+    );
+}
+
+#[test]
+fn v8_exposes_iframe_document_surface() {
+    let dom = Parser::new("<html><head></head><body></body></html>").parse_document();
+    let mut runtime = V8Runtime::new(dom);
+
+    assert_eq!(
+        runtime.eval_to_string(
+            "var iframe = document.createElement('iframe'); !!(iframe.contentDocument && iframe.contentDocument.documentElement && iframe.contentWindow && iframe.contentWindow.document)"
+        ),
+        Ok("true".to_string())
+    );
+    assert_eq!(
+        runtime.eval_to_string(
+            "var iframe = document.createElement('iframe'); iframe.contentDocument.documentElement.tagName"
+        ),
+        Ok("HTML".to_string())
     );
 }
 
@@ -1424,8 +1524,7 @@ fn v8_failed_render_sync_does_not_deliver_observer_records() {
     let identity = test_identity();
     let render_doc = BlitzDocument::try_from_dom(&dom, None, &identity, 800, 600)
         .expect("render document should build");
-    let mut runtime =
-        V8Runtime::with_render_document(dom, Some(Rc::new(RefCell::new(render_doc))));
+    let mut runtime = V8Runtime::with_render_document(dom, Some(Rc::new(RefCell::new(render_doc))));
 
     runtime
         .execute(
@@ -1440,7 +1539,10 @@ fn v8_failed_render_sync_does_not_deliver_observer_records() {
         .unwrap();
 
     assert!(!runtime.deliver_mutation_records());
-    assert_eq!(runtime.eval_to_string("globalThis.hits"), Ok("0".to_string()));
+    assert_eq!(
+        runtime.eval_to_string("globalThis.hits"),
+        Ok("0".to_string())
+    );
     assert_eq!(
         runtime.take_snapshot_rebuild_reason(),
         Some(SnapshotRebuildReason::SyncOperationFailed)
@@ -1501,6 +1603,27 @@ fn v8_layout_accessors_read_blitz_layout() {
             })()"#
         ),
         Ok("200|50|200|50".to_string())
+    );
+}
+
+#[test]
+fn v8_offset_position_accessors_read_blitz_layout() {
+    // The `offsetTop`/`offsetLeft` getters (installed in v8_post.js) read the
+    // real Blitz/Stylo box origin via __aurora_metric__ instead of the old
+    // static 0 data property. Position is document-relative.
+    let dom = Parser::new(
+        "<html><body style='margin:0'><div id='box' style='position:absolute;left:40px;top:60px;width:100px;height:20px'></div></body></html>",
+    )
+    .parse_document();
+    let mut runtime = runtime_with_render_doc(dom);
+    assert_eq!(
+        runtime.eval_to_string(
+            r#"(() => {
+                const el = document.getElementById('box');
+                return [el.offsetLeft, el.offsetTop].join('|');
+            })()"#
+        ),
+        Ok("40|60".to_string())
     );
 }
 
@@ -1729,9 +1852,6 @@ fn v8_shadycss_emits_once_per_page_warning() {
 }
 
 #[test]
-#[ignore = "slot distribution is unsupported: synthetic shadow flattens light \
-            children into the host instead of distributing them to <slot> \
-            outlets. Tracked for native shadow semantics (Phase 4 follow-up)."]
 fn v8_shadow_slot_distribution_assigns_light_children_to_slots() {
     let mut runtime = V8Runtime::new(blank_dom());
     // Intended native behavior: light children are distributed to matching

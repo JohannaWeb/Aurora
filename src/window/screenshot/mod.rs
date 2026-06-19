@@ -129,7 +129,9 @@ fn flush_ready_frame_tasks(input: &mut WindowInput, width: u32, height: u32) {
             };
             let now = Instant::now();
             runtime.tick(now)
-                | runtime.drain_animation_frame_callbacks(Instant::now())
+                | runtime.drain_animation_frame_callbacks(now)
+                | runtime.deliver_mutation_records()
+                | runtime.perform_style_and_layout()
                 | runtime.take_needs_reflow()
         };
         if needs_reflow {

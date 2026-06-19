@@ -270,7 +270,10 @@ fn style_text_stays_inside_style_element() {
         let b = node.borrow();
         match &*b {
             Node::Text(t) if t.content.contains('{') => {
-                found.push(format!("{path}: {:?}", &t.content[..t.content.len().min(60)]));
+                found.push(format!(
+                    "{path}: {:?}",
+                    &t.content[..t.content.len().min(60)]
+                ));
             }
             Node::Element(el) => {
                 let new_path = format!("{path}/<{}>", el.tag_name);

@@ -117,9 +117,7 @@ mod tests {
     #[test]
     fn run_event_loop_turn_reports_only_phases_that_did_work_in_order() {
         use EventLoopPhase::*;
-        let fired = run_event_loop_turn(|phase| {
-            matches!(phase, RunTask | RequestAnimationFrame)
-        });
+        let fired = run_event_loop_turn(|phase| matches!(phase, RunTask | RequestAnimationFrame));
         // A task does not starve rendering: rAF still runs in the same turn, and
         // the reported phases preserve canonical order.
         assert_eq!(fired, vec![RunTask, RequestAnimationFrame]);

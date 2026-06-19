@@ -255,6 +255,10 @@ impl BlitzDocument {
         self.legacy_to_blitz.get(&legacy_node_key(node)).copied()
     }
 
+    pub fn perform_layout(&mut self) -> bool {
+        self.resolve_inner()
+    }
+
     pub fn last_mirror_mutation_trace(&self) -> Option<&MirrorMutationTrace> {
         self.last_mirror_mutation.as_ref()
     }
@@ -731,7 +735,9 @@ impl BlitzDocument {
         let (mut x, mut y) = (0.0_f32, 0.0_f32);
         let mut current = Some(node_id);
         while let Some(id) = current {
-            let Some(n) = self.inner.get_node(id) else { break };
+            let Some(n) = self.inner.get_node(id) else {
+                break;
+            };
             x += n.final_layout.location.x;
             y += n.final_layout.location.y;
             current = n.parent;
@@ -1085,7 +1091,16 @@ impl BlitzDocument {
         };
         drop(node_borrow);
         let updated = catch_stylo_panic("replacing DOM attributes in Blitz document", || {
-            let existing_names = self
+            // Diff existing Blitz attributes against the desired DOM attributes
+            // and apply only real changes. A blanket clear-all-then-set-all
+            // churns every attribute; in particular clearing `href` on a
+            // `<link>` whose stylesheet has not finished its async load makes
+            // blitz-dom panic in `unload_stylesheet` (`unreachable!()` at
+            // mutator.rs), which we catch but only by forcing a full snapshot
+            // rebuild. Polymer re-stamps already-present attributes constantly,
+            // so diffing keeps those as in-place value updates (set_attribute)
+            // instead of a remove+add that trips the stylesheet-unload path.
+            let existing: Vec<(QualName, String)> = self
                 .inner
                 .get_node(node_id)
                 .and_then(|node| node.data.downcast_element())
@@ -1093,16 +1108,30 @@ impl BlitzDocument {
                     element
                         .attrs
                         .iter()
-                        .map(|attr| attr.name.clone())
-                        .collect::<Vec<_>>()
+                        .map(|attr| (attr.name.clone(), attr.value.clone()))
+                        .collect()
                 })
                 .unwrap_or_default();
+            let desired: Vec<(QualName, String)> = attrs
+                .iter()
+                .map(|(name, value)| (attr_qual_name_from_str(name), value.clone()))
+                .collect();
+
             let mut mutator = self.inner.mutate();
-            for name in existing_names {
-                mutator.clear_attribute(node_id, name);
+            // Remove attributes that are no longer present in the DOM.
+            for (name, _) in &existing {
+                if !desired.iter().any(|(dname, _)| dname == name) {
+                    mutator.clear_attribute(node_id, name.clone());
+                }
             }
-            for (name, value) in attrs {
-                mutator.set_attribute(node_id, attr_qual_name_from_str(&name), &value);
+            // Add new attributes and update those whose value changed.
+            for (name, value) in &desired {
+                let unchanged = existing
+                    .iter()
+                    .any(|(ename, evalue)| ename == name && evalue == value);
+                if !unchanged {
+                    mutator.set_attribute(node_id, name.clone(), value);
+                }
             }
             true
         })
@@ -1585,22 +1614,9 @@ fn blitz_ids_for_dom_child(
 }
 
 fn child_nodes_for_blitz(node: &NodePtr) -> Vec<NodePtr> {
-    match &*node.borrow() {
-        Node::Document { children, .. } => children.clone(),
-        Node::Element(el) => {
-            let mut children = el.children.clone();
-            if el.tag_name.eq_ignore_ascii_case("template") {
-                if let Some(content) = &el.template_contents {
-                    children.extend(child_nodes_for_blitz(content));
-                }
-            }
-            if let Some(shadow_root) = &el.shadow_root {
-                children.push(shadow_root.clone());
-            }
-            children
-        }
-        Node::Text(_) => Vec::new(),
-    }
+    let backend = crate::dom::SyntheticShadowTreeBackend;
+    backend.distribute_slots(node);
+    backend.composed_children(node)
 }
 
 fn is_element_node(node: &NodePtr) -> bool {
@@ -1926,6 +1942,59 @@ mod tests {
         crate::dom::clear_parent(&appended);
         assert!(blitz_doc.sync_remove_child(&appended));
         blitz_doc.validate_mirror_integrity().unwrap();
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    fn sync_all_attributes_diffs_add_update_and_remove() {
+        // Regression: `sync_all_attributes` used to clear every attribute and
+        // re-add it. Clearing `href` on a `<link>` whose stylesheet had not
+        // finished loading panicked inside blitz-dom (`unload_stylesheet`),
+        // forcing a snapshot rebuild on every Polymer attribute re-stamp. The
+        // diffing path must keep unchanged/updated attributes as in-place sets
+        // and only clear attributes that the DOM actually dropped.
+        let _guard = BLITZ_DOCUMENT_TEST_LOCK.lock().unwrap();
+        let mut starting = BTreeMap::new();
+        starting.insert("rel".to_string(), "stylesheet".to_string());
+        starting.insert("href".to_string(), "/a.css".to_string());
+        starting.insert("data-stale".to_string(), "1".to_string());
+        let link = Node::element_with_attributes("link", starting, Vec::new());
+        let document = document_with_body_children(vec![link.clone()]);
+        // A real base URL lets the `<link href>` resolve; the fetch is async so
+        // the stylesheet's `special_data` stays unloaded — exactly the window
+        // where a blanket clear of `href` would panic in `unload_stylesheet`.
+        let mut blitz_doc = BlitzDocument::try_from_dom(
+            &document,
+            Some("https://example.com/"),
+            &test_identity(),
+            800,
+            600,
+        )
+        .expect("Blitz document should build");
+
+        // Polymer-style re-stamp: keep `rel`, change `href`, drop `data-stale`,
+        // add `data-fresh`.
+        if let Node::Element(link_el) = &mut *link.borrow_mut() {
+            link_el.attributes.remove("data-stale");
+            link_el
+                .attributes
+                .insert("href".to_string(), "/b.css".to_string());
+            link_el
+                .attributes
+                .insert("data-fresh".to_string(), "1".to_string());
+        }
+        assert!(blitz_doc.sync_all_attributes(&link));
+        blitz_doc.validate_mirror_integrity().unwrap();
+
+        let node_id = blitz_doc
+            .blitz_node_id_for_dom(&link)
+            .expect("link should be mapped");
+        let element = blitz_doc.inner.get_node(node_id).unwrap();
+        let blitz_attrs = blitz_attrs_to_map(element.data.downcast_element().unwrap());
+        assert_eq!(blitz_attrs.get("rel").map(String::as_str), Some("stylesheet"));
+        assert_eq!(blitz_attrs.get("href").map(String::as_str), Some("/b.css"));
+        assert_eq!(blitz_attrs.get("data-fresh").map(String::as_str), Some("1"));
+        assert!(!blitz_attrs.contains_key("data-stale"));
     }
 
     #[cfg(debug_assertions)]

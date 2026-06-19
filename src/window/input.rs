@@ -87,6 +87,7 @@ impl WindowInput {
         let content_h = content_viewport.height as u32;
         if let Some(blitz_doc) = self.blitz_doc.as_ref() {
             blitz_doc.borrow_mut().set_viewport(content_w, content_h);
+            blitz_doc.borrow_mut().perform_layout();
         }
         if let Some(runtime) = self.runtime.as_mut()
             && let Some(reason) = runtime.take_snapshot_rebuild_reason()
@@ -95,11 +96,10 @@ impl WindowInput {
         }
         self.sync_blitz_snapshot(content_w, content_h);
 
-        let sync_legacy_layout = self.blitz_doc.is_none()
-            || matches!(
-                std::env::var("AURORA_LEGACY_LAYOUT_SYNC").as_deref(),
-                Ok("1") | Ok("true") | Ok("TRUE") | Ok("yes") | Ok("YES")
-            );
+        let sync_legacy_layout = matches!(
+            std::env::var("AURORA_LEGACY_LAYOUT_SYNC").as_deref(),
+            Ok("1") | Ok("true") | Ok("TRUE") | Ok("yes") | Ok("YES")
+        );
         if sync_legacy_layout {
             let style_tree = StyleTree::from_dom(&self.dom, &self.stylesheet.borrow());
             *self.layout.borrow_mut() =

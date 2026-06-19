@@ -161,33 +161,49 @@ impl V8Runtime {
 
             let document_obj = document_template.new_instance(scope).unwrap();
             global.set(scope, v8_str(scope, "document").into(), document_obj.into());
+            document_obj.set(
+                scope,
+                v8_str(scope, "nodeType").into(),
+                v8::Integer::new(scope, 9).into(),
+            );
+            document_obj.set(
+                scope,
+                v8_str(scope, "nodeName").into(),
+                v8_str(scope, "#document").into(),
+            );
 
             // Set document structure fields
-            let bodies = registry.collect_by_tag_dom("body", &document).unwrap_or_else(|| {
-                let mut bodies = Vec::new();
-                query::collect_by_tag(&document, "body", &mut bodies);
-                bodies
-            });
+            let bodies = registry
+                .collect_by_tag_dom("body", &document)
+                .unwrap_or_else(|| {
+                    let mut bodies = Vec::new();
+                    query::collect_by_tag(&document, "body", &mut bodies);
+                    bodies
+                });
             if let Some(body_node) = bodies.first() {
                 let js_body = create_js_node(scope, body_node.clone(), &registry, &document);
                 document_obj.set(scope, v8_str(scope, "body").into(), js_body.into());
             }
 
-            let heads = registry.collect_by_tag_dom("head", &document).unwrap_or_else(|| {
-                let mut heads = Vec::new();
-                query::collect_by_tag(&document, "head", &mut heads);
-                heads
-            });
+            let heads = registry
+                .collect_by_tag_dom("head", &document)
+                .unwrap_or_else(|| {
+                    let mut heads = Vec::new();
+                    query::collect_by_tag(&document, "head", &mut heads);
+                    heads
+                });
             if let Some(head_node) = heads.first() {
                 let js_head = create_js_node(scope, head_node.clone(), &registry, &document);
                 document_obj.set(scope, v8_str(scope, "head").into(), js_head.into());
             }
 
-            let htmls = registry.collect_by_tag_dom("html", &document).unwrap_or_else(|| {
-                let mut htmls = Vec::new();
-                query::collect_by_tag(&document, "html", &mut htmls);
-                htmls
-            });
+            let htmls = registry
+                .collect_by_tag_dom("html", &document)
+                .unwrap_or_else(|| {
+                    let mut htmls = Vec::new();
+                    query::collect_by_tag(&document, "html", &mut htmls);
+                    htmls
+                });
             if let Some(html_node) = htmls.first() {
                 let js_html = create_js_node(scope, html_node.clone(), &registry, &document);
                 document_obj.set(
@@ -207,11 +223,13 @@ impl V8Runtime {
             document_obj.set(scope, v8_str(scope, "defaultView").into(), global.into());
 
             // document.title
-            let titles = registry.collect_by_tag_dom("title", &document).unwrap_or_else(|| {
-                let mut titles = Vec::new();
-                query::collect_by_tag(&document, "title", &mut titles);
-                titles
-            });
+            let titles = registry
+                .collect_by_tag_dom("title", &document)
+                .unwrap_or_else(|| {
+                    let mut titles = Vec::new();
+                    query::collect_by_tag(&document, "title", &mut titles);
+                    titles
+                });
             if let Some(title_node) = titles.first() {
                 let text = mutation::collect_text(title_node);
                 document_obj.set(
@@ -438,6 +456,25 @@ impl V8Runtime {
             {
                 v8::tc_scope!(let scope, scope);
                 let polyfill = r#"
+                    function __aurora_request_url__(input) {
+                        var raw = input;
+                        if (input && typeof input === 'object' && typeof input.url === 'string') {
+                            raw = input.url;
+                        }
+                        raw = String(raw || '');
+                        try {
+                            return new URL(raw, (globalThis.location && globalThis.location.href) || 'https://www.youtube.com/').href;
+                        } catch (e) {
+                            if (raw.indexOf('//') === 0) {
+                                return ((globalThis.location && globalThis.location.protocol) || 'https:') + raw;
+                            }
+                            if (raw.charAt(0) === '/') {
+                                return ((globalThis.location && globalThis.location.origin) || 'https://www.youtube.com') + raw;
+                            }
+                            return raw;
+                        }
+                    }
+
                     globalThis.XMLHttpRequest = function() {
                         this.readyState = 0;
                         this.status = 0;
@@ -447,25 +484,81 @@ impl V8Runtime {
                         this.onreadystatechange = null;
                         this.onload = null;
                         this.onerror = null;
+                        this._listeners = {};
                     };
                     globalThis.XMLHttpRequest.prototype.open = function(method, url) {
                         this._method = method;
                         this._url = url;
                         this.readyState = 1;
                     };
-                    globalThis.XMLHttpRequest.prototype.send = function() {
+                    globalThis.XMLHttpRequest.prototype._emit = function(type) {
+                        var evt = { type: type, target: this, currentTarget: this };
+                        var listeners = this._listeners && this._listeners[type] ? this._listeners[type].slice() : [];
+                        for (var i = 0; i < listeners.length; i++) {
+                            try { listeners[i].call(this, evt); } catch (e) {}
+                        }
+                        var handler = this['on' + type];
+                        if (typeof handler === 'function') {
+                            try { handler.call(this, evt); } catch (e) {}
+                        }
+                    };
+                    globalThis.XMLHttpRequest.prototype.send = function(body) {
+                        var method = (this._method || 'GET').toUpperCase();
+                        var url = __aurora_request_url__(this._url || '');
+                        if (globalThis.__aurora_debug_youtube__) {
+                            console.log('[yt-net] xhr ' + method + ' ' + url);
+                        }
+                        var result = null;
+                        try {
+                            result = globalThis.__aurora_fetch_sync__(url, method, body == null ? '' : String(body));
+                        } catch (e) {
+                            if (globalThis.__aurora_debug_youtube__) {
+                                console.log('[yt-net] xhr-throw ' + method + ' ' + url + ' ' + e);
+                            }
+                        }
                         this.readyState = 4;
-                        this.status = 0;
-                        this.responseText = "";
-                        if (typeof this.onreadystatechange === 'function') this.onreadystatechange();
-                        if (typeof this.onerror === 'function') this.onerror();
+                        if (result && result.ok) {
+                            this.status = result.status || 200;
+                            this.responseText = String(result.body || "");
+                            if (this.responseType === "json") {
+                                try { this.response = JSON.parse(this.responseText || "null"); }
+                                catch (e) { this.response = null; }
+                            } else {
+                                this.response = this.responseText;
+                            }
+                            if (globalThis.__aurora_debug_youtube__) {
+                                console.log('[yt-net] xhr-done status=' + this.status +
+                                    ' bytes=' + this.responseText.length + ' ' + url);
+                            }
+                            this._emit('readystatechange');
+                            this._emit('load');
+                            this._emit('loadend');
+                        } else {
+                            this.status = result && result.status ? result.status : 0;
+                            this.responseText = "";
+                            this.response = null;
+                            if (globalThis.__aurora_debug_youtube__) {
+                                console.log('[yt-net] xhr-fail status=' + this.status +
+                                    ' error=' + (result && result.error ? result.error : '') + ' ' + url);
+                            }
+                            this._emit('readystatechange');
+                            this._emit('error');
+                            this._emit('loadend');
+                        }
                     };
                     globalThis.XMLHttpRequest.prototype.setRequestHeader = function() {};
                     globalThis.XMLHttpRequest.prototype.getResponseHeader = function() { return null; };
                     globalThis.XMLHttpRequest.prototype.getAllResponseHeaders = function() { return ""; };
                     globalThis.XMLHttpRequest.prototype.abort = function() {};
-                    globalThis.XMLHttpRequest.prototype.addEventListener = function() {};
-                    globalThis.XMLHttpRequest.prototype.removeEventListener = function() {};
+                    globalThis.XMLHttpRequest.prototype.addEventListener = function(type, listener) {
+                        if (typeof listener !== 'function') return;
+                        (this._listeners[type] || (this._listeners[type] = [])).push(listener);
+                    };
+                    globalThis.XMLHttpRequest.prototype.removeEventListener = function(type, listener) {
+                        var list = this._listeners && this._listeners[type];
+                        if (!list) return;
+                        this._listeners[type] = list.filter(function(fn) { return fn !== listener; });
+                    };
                     globalThis.XMLHttpRequest.UNSENT = 0;
                     globalThis.XMLHttpRequest.OPENED = 1;
                     globalThis.XMLHttpRequest.HEADERS_RECEIVED = 2;
@@ -473,17 +566,30 @@ impl V8Runtime {
                     globalThis.XMLHttpRequest.DONE = 4;
 
                     globalThis.fetch = function(url, options) {
-                        var method = (options && options.method) ? options.method.toUpperCase() : 'GET';
+                        var method = (options && options.method)
+                            ? options.method.toUpperCase()
+                            : (url && typeof url === 'object' && url.method ? String(url.method).toUpperCase() : 'GET');
+                        var requestUrl = __aurora_request_url__(url);
+                        var requestBody = options && options.body != null
+                            ? String(options.body)
+                            : (url && typeof url === 'object' && url.body != null ? String(url.body) : '');
+                        if (globalThis.__aurora_debug_youtube__) {
+                            console.log('[yt-net] fetch ' + method + ' ' + requestUrl);
+                        }
                         try {
-                            var result = globalThis.__aurora_fetch_sync__(String(url), method);
+                            var result = globalThis.__aurora_fetch_sync__(requestUrl, method, requestBody);
                             if (result.ok) {
                                 var responseText = result.body;
                                 var status = result.status;
+                                if (globalThis.__aurora_debug_youtube__) {
+                                    console.log('[yt-net] fetch-done status=' + status +
+                                        ' bytes=' + responseText.length + ' ' + requestUrl);
+                                }
                                 return Promise.resolve({
                                     ok: status >= 200 && status < 300,
                                     status: status,
                                     statusText: String(status),
-                                    url: String(url),
+                                    url: requestUrl,
                                     headers: new Headers(),
                                     text: function() { return Promise.resolve(responseText); },
                                     json: function() {
@@ -495,9 +601,16 @@ impl V8Runtime {
                                     clone: function() { return this; }
                                 });
                             } else {
+                                if (globalThis.__aurora_debug_youtube__) {
+                                    console.log('[yt-net] fetch-fail status=' + result.status +
+                                        ' error=' + (result.error || '') + ' ' + requestUrl);
+                                }
                                 return Promise.reject(new Error("HTTP " + result.status));
                             }
                         } catch(e) {
+                            if (globalThis.__aurora_debug_youtube__) {
+                                console.log('[yt-net] fetch-throw ' + requestUrl + ' ' + e);
+                            }
                             return Promise.reject(e);
                         }
                     };
@@ -1082,10 +1195,23 @@ fn aurora_fetch_sync(
     mut retval: v8::ReturnValue,
 ) {
     let url = args.get(0).to_rust_string_lossy(scope);
+    let method = args.get(1).to_rust_string_lossy(scope);
+    let body = args.get(2).to_rust_string_lossy(scope);
+    let body_arg = (!body.is_empty()).then_some(body.as_str());
+    let debug_net = matches!(
+        std::env::var("AURORA_DEBUG_YOUTUBE").as_deref(),
+        Ok("1") | Ok("true") | Ok("TRUE") | Ok("yes") | Ok("YES")
+    );
     let obj = v8::Object::new(scope);
 
-    match crate::fetch::http::fetch_string(&url) {
+    if debug_net {
+        log::info!(target: "aurora::net", "[NET] JS {method} {url} body={}B", body.len());
+    }
+    match crate::fetch::http::fetch_string_with_method(&url, &method, body_arg) {
         Ok(body) => {
+            if debug_net {
+                log::info!(target: "aurora::net", "[NET] JS {method} {url} -> 200 {}B", body.len());
+            }
             obj.set(
                 scope,
                 v8_str(scope, "ok").into(),
@@ -1103,6 +1229,9 @@ fn aurora_fetch_sync(
             );
         }
         Err(e) => {
+            if debug_net {
+                log::info!(target: "aurora::net", "[NET] JS {method} {url} -> error {e}");
+            }
             obj.set(
                 scope,
                 v8_str(scope, "ok").into(),
@@ -1383,6 +1512,24 @@ impl crate::js_engine::JsRuntime for V8Runtime {
 
     fn take_snapshot_rebuild_reason(&mut self) -> Option<SnapshotRebuildReason> {
         self.registry.take_snapshot_rebuild_reason()
+    }
+
+    fn perform_style_and_layout(&mut self) -> bool {
+        if !self.registry.has_dirty_bits() {
+            return false;
+        }
+        let Some(doc) = self.registry.render_document() else {
+            return false;
+        };
+        if !self.registry.take_needs_reflow() {
+            return false;
+        }
+        doc.borrow_mut().perform_layout()
+    }
+
+    fn perform_paint(&mut self) -> bool {
+        // Paint acknowledge phase
+        true
     }
 
     fn tick(&mut self, now: Instant) -> bool {

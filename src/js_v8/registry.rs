@@ -136,6 +136,25 @@ impl NodeRegistry {
         self.render_document.borrow().is_some()
     }
 
+    pub(super) fn has_render_mapping(&self, node: &NodePtr) -> bool {
+        self.render_document
+            .borrow()
+            .as_ref()
+            .cloned()
+            .is_some_and(|render_document| {
+                render_document
+                    .borrow()
+                    .blitz_node_id_for_dom(node)
+                    .is_some()
+            })
+    }
+
+    pub(super) fn render_document(
+        &self,
+    ) -> Option<Rc<RefCell<crate::blitz_document::BlitzDocument>>> {
+        self.render_document.borrow().clone()
+    }
+
     /// Hit-test content coordinates against the Blitz layout, returning the
     /// deepest mapped DOM node at that point. Backs `document.elementFromPoint`.
     pub(super) fn hit_test(&self, x: f32, y: f32) -> Option<NodePtr> {

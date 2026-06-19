@@ -1611,6 +1611,31 @@
                             el.__ce_connected__ = true;
                             return;
                         }
+                        if (name === 'ytd-app') {
+                            try {
+                                el.__dataEnabled = true;
+                            } catch (e) {
+                                el.__dataEnabled = true;
+                            }
+                        }
+                        if (name === 'ytd-app' && typeof el.enable === 'function' && !el.__aurora_enable_called__) {
+                            try {
+                                el.__aurora_enable_called__ = true;
+                            } catch (e) {
+                                el.__aurora_enable_called__ = true;
+                            }
+                            if (shouldTraceName(name)) trace('enable ' + name);
+                            try { el.enable(); } catch (e) { traceError('enable ' + name, e); }
+                        }
+                        if (name === 'ytd-app' && typeof el.stamp === 'function' && !el.__aurora_stamp_called__) {
+                            try {
+                                el.__aurora_stamp_called__ = true;
+                            } catch (e) {
+                                el.__aurora_stamp_called__ = true;
+                            }
+                            if (shouldTraceName(name)) trace('stamp ' + name);
+                            try { el.stamp(); } catch (e) { traceError('stamp ' + name, e); }
+                        }
                         el.__ce_connected__ = true;
                         rebuildPolymerIdMap(el);
                     }

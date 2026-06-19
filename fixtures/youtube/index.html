@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>YouTube - Aurora Regression Target</title>
+    <style>
+        body { margin: 0; padding: 0; background: #0f0f0f; color: #f1f1f1; font-family: "Roboto", "Arial", sans-serif; }
+        ytd-app { display: block; height: 100vh; display: flex; flex-direction: column; }
+        ytd-masthead { display: block; height: 56px; background: #0f0f0f; border-bottom: 1px solid rgba(255,255,255,0.1); padding: 0 16px; display: flex; align-items: center; }
+        #logo { width: 90px; height: 20px; background: #ff0000; border-radius: 4px; }
+        
+        #content { display: flex; flex: 1; overflow: hidden; }
+        ytd-guide-renderer { width: 240px; background: #0f0f0f; border-right: 1px solid rgba(255,255,255,0.1); }
+        ytd-page-manager { flex: 1; padding: 24px; overflow-y: auto; }
+        
+        ytd-watch-flexy { display: block; max-width: 1280px; margin: 0 auto; }
+        #player { width: 100%; aspect-ratio: 16/9; background: #000; border-radius: 12px; margin-bottom: 12px; position: relative; }
+        #player::after { content: "▶"; position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); font-size: 64px; color: white; }
+        
+        h1 { font-size: 20px; font-weight: 600; margin: 0 0 8px 0; }
+        #meta { display: flex; align-items: center; margin-top: 12px; }
+        #owner-avatar { width: 40px; height: 40px; border-radius: 50%; background: #333; margin-right: 12px; }
+        #owner-name { font-weight: 500; }
+        
+        ytd-comments { display: block; margin-top: 24px; border-top: 1px solid rgba(255,255,255,0.1); padding-top: 24px; }
+        .comment { display: flex; margin-bottom: 16px; }
+        .comment-avatar { width: 40px; height: 40px; border-radius: 50%; background: #222; margin-right: 12px; }
+        .comment-text { flex: 1; }
+        .comment-author { font-size: 13px; font-weight: 500; margin-bottom: 4px; }
+        .comment-body { font-size: 14px; }
+    </style>
+</head>
+<body>
+    <ytd-app>
+        <ytd-masthead>
+            <div id="logo"></div>
+        </ytd-masthead>
+        <div id="content">
+            <ytd-guide-renderer></ytd-guide-renderer>
+            <ytd-page-manager>
+                <ytd-watch-flexy>
+                    <div id="player"></div>
+                    <h1>Aurora Engine: The Brutal Take Implementation</h1>
+                    <div id="meta">
+                        <div id="owner-avatar"></div>
+                        <div id="owner-name">Aurora Dev Team</div>
+                    </div>
+                    <ytd-comments>
+                        <div class="comment">
+                            <div class="comment-avatar"></div>
+                            <div class="comment-text">
+                                <div class="comment-author">Platform Engineer</div>
+                                <div class="comment-body">Finally wiring the event loop correctly. No more compatibility theater!</div>
+                            </div>
+                        </div>
+                    </ytd-comments>
+                </ytd-watch-flexy>
+            </ytd-page-manager>
+        </div>
+    </ytd-app>
+
+    <script>
+        // Custom Element Shim Test
+        customElements.define('ytd-app', class extends HTMLElement {
+            constructor() { super(); }
+        });
+        customElements.define('ytd-masthead', class extends HTMLElement {
+            constructor() { super(); }
+        });
+        customElements.define('ytd-guide-renderer', class extends HTMLElement {
+            constructor() { super(); }
+        });
+        customElements.define('ytd-page-manager', class extends HTMLElement {
+            constructor() { super(); }
+        });
+        customElements.define('ytd-watch-flexy', class extends HTMLElement {
+            constructor() { super(); }
+        });
+        customElements.define('ytd-comments', class extends HTMLElement {
+            constructor() { super(); }
+        });
+    </script>
+</body>
+</html>

@@ -120,8 +120,22 @@ pub(super) fn create_js_node<'s>(
     install_method(
         scope,
         template,
+        "getAttributeNS",
+        get_attribute_ns,
+        node_external,
+    );
+    install_method(
+        scope,
+        template,
         "setAttribute",
         set_attribute,
+        node_external,
+    );
+    install_method(
+        scope,
+        template,
+        "setAttributeNS",
+        set_attribute_ns,
         node_external,
     );
     install_method(
@@ -134,8 +148,22 @@ pub(super) fn create_js_node<'s>(
     install_method(
         scope,
         template,
+        "removeAttributeNS",
+        remove_attribute_ns,
+        node_external,
+    );
+    install_method(
+        scope,
+        template,
         "hasAttribute",
         has_attribute,
+        node_external,
+    );
+    install_method(
+        scope,
+        template,
+        "hasAttributeNS",
+        has_attribute_ns,
         node_external,
     );
     install_method(
@@ -234,8 +262,7 @@ pub(super) fn create_js_node<'s>(
         node_external,
     );
 
-    // style and classList
-    install_readonly_accessor(scope, template, "style", get_style, node_external);
+    // classList
     install_readonly_accessor(scope, template, "classList", get_classlist, node_external);
     install_readonly_accessor(scope, template, "attributes", get_attributes, node_external);
 
@@ -371,6 +398,18 @@ pub(super) fn create_js_node<'s>(
         node_external,
     );
 
+    if let Node::Element(el) = &*node.borrow() {
+        if el.tag_name.eq_ignore_ascii_case("slot") {
+            install_method(
+                scope,
+                template,
+                "assignedNodes",
+                assigned_nodes,
+                node_external,
+            );
+        }
+    }
+
     let obj = template.new_instance(scope).unwrap();
 
     obj.set(
@@ -378,13 +417,50 @@ pub(super) fn create_js_node<'s>(
         v8_str(scope, "__aurora_node_id").into(),
         v8::Integer::new(scope, node_id as i32).into(),
     );
+    if node_type(&node) == 1 {
+        let node_data = unsafe { &*(node_external.value() as *const NodeData) };
+        let style_obj = style::build_style_object(scope, node_data);
+        obj.set(scope, v8_str(scope, "style").into(), style_obj.into());
+    }
 
     // Give the wrapper the DOM prototype chain so it inherits real `EventTarget`
     // methods (Node/Element/HTMLElement → EventTarget). Custom-element upgrade may
     // later swap this for the element's class prototype, which itself chains back
     // to HTMLElement.prototype, so EventTarget stays reachable either way.
     let proto_name = match &*node.borrow() {
-        Node::Element(el) if el.tag_name != "#document-fragment" => "HTMLElement",
+        Node::Element(el) if el.tag_name != "#document-fragment" => {
+            if matches!(
+                el.tag_name.as_str(),
+                "svg"
+                    | "path"
+                    | "g"
+                    | "circle"
+                    | "rect"
+                    | "line"
+                    | "polyline"
+                    | "polygon"
+                    | "ellipse"
+                    | "text"
+                    | "use"
+                    | "defs"
+                    | "symbol"
+                    | "clipPath"
+                    | "linearGradient"
+                    | "radialGradient"
+                    | "stop"
+                    | "mask"
+                    | "pattern"
+                    | "marker"
+                    | "foreignObject"
+                    | "feGaussianBlur"
+                    | "feOffset"
+                    | "feColorMatrix"
+            ) {
+                "SVGElement"
+            } else {
+                "HTMLElement"
+            }
+        }
         Node::Element(_) => "DocumentFragment",
         _ => "Node",
     };
@@ -393,11 +469,13 @@ pub(super) fn create_js_node<'s>(
     let mut is_custom_element = false;
     let mut is_canvas = false;
     let mut is_media = false;
+    let mut is_iframe = false;
     let mut template_content: Option<NodePtr> = None;
     if let Node::Element(el) = &*node.borrow() {
         is_canvas = el.tag_name.eq_ignore_ascii_case("canvas");
         is_media =
             el.tag_name.eq_ignore_ascii_case("video") || el.tag_name.eq_ignore_ascii_case("audio");
+        is_iframe = el.tag_name.eq_ignore_ascii_case("iframe");
         if el.tag_name != "#document-fragment" {
             obj.set(
                 scope,
@@ -409,6 +487,39 @@ pub(super) fn create_js_node<'s>(
                 v8_str(scope, "localName").into(),
                 v8_str(scope, &el.tag_name.to_lowercase()).into(),
             );
+            if matches!(
+                el.tag_name.as_str(),
+                "svg"
+                    | "path"
+                    | "g"
+                    | "circle"
+                    | "rect"
+                    | "line"
+                    | "polyline"
+                    | "polygon"
+                    | "ellipse"
+                    | "text"
+                    | "use"
+                    | "defs"
+                    | "symbol"
+                    | "clipPath"
+                    | "linearGradient"
+                    | "radialGradient"
+                    | "stop"
+                    | "mask"
+                    | "pattern"
+                    | "marker"
+                    | "foreignObject"
+                    | "feGaussianBlur"
+                    | "feOffset"
+                    | "feColorMatrix"
+            ) {
+                obj.set(
+                    scope,
+                    v8_str(scope, "namespaceURI").into(),
+                    v8_str(scope, "http://www.w3.org/2000/svg").into(),
+                );
+            }
             // Initial attribute snapshot for wrapper props.
             for attr in ["href", "src", "type", "name", "value"] {
                 let val = el.attributes.get(attr).cloned().unwrap_or_default();
@@ -473,6 +584,19 @@ pub(super) fn create_js_node<'s>(
         }
     }
 
+    if is_iframe {
+        let context = scope.get_current_context();
+        let global = context.global(scope);
+        if let Some(document_value) = global.get(scope, v8_str(scope, "document").into()) {
+            obj.set(
+                scope,
+                v8_str(scope, "contentDocument").into(),
+                document_value,
+            );
+        }
+        obj.set(scope, v8_str(scope, "contentWindow").into(), global.into());
+    }
+
     if let Some(content) = template_content {
         // Persist so later innerHTML writes land in the same fragment this
         // JS `content` object wraps (script-created templates start empty).
@@ -515,6 +639,30 @@ fn call_global_hook(scope: &mut v8::PinScope<'_, '_>, name: &str, arg: v8::Local
             let _ = hook.call(scope, global.into(), &[arg.into()]);
         }
     }
+}
+
+fn assigned_nodes(
+    scope: &mut v8::PinScope<'_, '_>,
+    args: v8::FunctionCallbackArguments,
+    mut retval: v8::ReturnValue,
+) {
+    let external = v8::Local::<v8::External>::try_from(args.data()).unwrap();
+    let node_data = unsafe { &*(external.value() as *const NodeData) };
+
+    let backend = crate::dom::shadow::SyntheticShadowTreeBackend;
+    if let Some(shadow_root) = backend.nearest_shadow_root(&node_data.node) {
+        if let Some(host) = backend.host_for_shadow_root(&shadow_root) {
+            backend.distribute_slots(&host);
+        }
+    }
+
+    let nodes = backend.assigned_nodes(&node_data.node);
+    let result_array = v8::Array::new(scope, nodes.len() as i32);
+    for (i, node) in nodes.into_iter().enumerate() {
+        let js_node = create_js_node(scope, node, &node_data.registry, &node_data.document);
+        result_array.set_index(scope, i as u32, js_node.into());
+    }
+    retval.set(result_array.into());
 }
 
 fn v8_str<'s>(scope: &v8::PinScope<'s, '_, ()>, s: &str) -> v8::Local<'s, v8::String> {
@@ -1093,6 +1241,25 @@ fn get_attribute(
     retval.set(v8::null(scope).into());
 }
 
+fn get_attribute_ns(
+    scope: &mut v8::PinScope<'_, '_>,
+    args: v8::FunctionCallbackArguments,
+    mut retval: v8::ReturnValue,
+) {
+    let name = args.get(1).to_rust_string_lossy(scope);
+    let data = args.data();
+    let external = v8::Local::<v8::External>::try_from(data).unwrap();
+    let node_data = unsafe { &*(external.value() as *const NodeData) };
+
+    if let Node::Element(el) = &*node_data.node.borrow() {
+        if let Some(val) = el.attributes.get(&name) {
+            retval.set(v8_str(scope, val).into());
+            return;
+        }
+    }
+    retval.set(v8::null(scope).into());
+}
+
 fn set_attribute(
     scope: &mut v8::PinScope<'_, '_>,
     args: v8::FunctionCallbackArguments,
@@ -1100,6 +1267,27 @@ fn set_attribute(
 ) {
     let name = args.get(0).to_rust_string_lossy(scope);
     let value = args.get(1).to_rust_string_lossy(scope);
+    let data = args.data();
+    let external = v8::Local::<v8::External>::try_from(data).unwrap();
+    let node_data = unsafe { &*(external.value() as *const NodeData) };
+
+    let _mutation_result = mutation::apply_dom_mutation(
+        &node_data.registry,
+        mutation::DomMutation::SetAttribute {
+            node: &node_data.node,
+            name: &name,
+            value: &value,
+        },
+    );
+}
+
+fn set_attribute_ns(
+    scope: &mut v8::PinScope<'_, '_>,
+    args: v8::FunctionCallbackArguments,
+    mut _retval: v8::ReturnValue,
+) {
+    let name = args.get(1).to_rust_string_lossy(scope);
+    let value = args.get(2).to_rust_string_lossy(scope);
     let data = args.data();
     let external = v8::Local::<v8::External>::try_from(data).unwrap();
     let node_data = unsafe { &*(external.value() as *const NodeData) };
@@ -1133,12 +1321,48 @@ fn remove_attribute(
     );
 }
 
+fn remove_attribute_ns(
+    scope: &mut v8::PinScope<'_, '_>,
+    args: v8::FunctionCallbackArguments,
+    mut _retval: v8::ReturnValue,
+) {
+    let name = args.get(1).to_rust_string_lossy(scope);
+    let data = args.data();
+    let external = v8::Local::<v8::External>::try_from(data).unwrap();
+    let node_data = unsafe { &*(external.value() as *const NodeData) };
+
+    let _mutation_result = mutation::apply_dom_mutation(
+        &node_data.registry,
+        mutation::DomMutation::RemoveAttribute {
+            node: &node_data.node,
+            name: &name,
+        },
+    );
+}
+
 fn has_attribute(
     scope: &mut v8::PinScope<'_, '_>,
     args: v8::FunctionCallbackArguments,
     mut retval: v8::ReturnValue,
 ) {
     let name = args.get(0).to_rust_string_lossy(scope);
+    let data = args.data();
+    let external = v8::Local::<v8::External>::try_from(data).unwrap();
+    let node_data = unsafe { &*(external.value() as *const NodeData) };
+
+    if let Node::Element(el) = &*node_data.node.borrow() {
+        retval.set(v8::Boolean::new(scope, el.attributes.contains_key(&name)).into());
+    } else {
+        retval.set(v8::Boolean::new(scope, false).into());
+    }
+}
+
+fn has_attribute_ns(
+    scope: &mut v8::PinScope<'_, '_>,
+    args: v8::FunctionCallbackArguments,
+    mut retval: v8::ReturnValue,
+) {
+    let name = args.get(1).to_rust_string_lossy(scope);
     let data = args.data();
     let external = v8::Local::<v8::External>::try_from(data).unwrap();
     let node_data = unsafe { &*(external.value() as *const NodeData) };
@@ -1702,19 +1926,6 @@ fn get_outer_html(
 
     let html = crate::dom::serialize_outer_html(&node_data.node);
     retval.set(v8_str(scope, &html).into());
-}
-
-fn get_style(
-    scope: &mut v8::PinScope<'_, '_>,
-    _name: v8::Local<v8::Name>,
-    args: v8::PropertyCallbackArguments,
-    mut retval: v8::ReturnValue,
-) {
-    let external = v8::Local::<v8::External>::try_from(args.data()).unwrap();
-    let node_data = unsafe { &*(external.value() as *const NodeData) };
-
-    let obj = style::build_style_object(scope, node_data);
-    retval.set(obj.into());
 }
 
 fn get_classlist(

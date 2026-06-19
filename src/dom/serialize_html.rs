@@ -106,6 +106,7 @@ mod tests {
             children: vec![],
             template_contents: Some(content_fragment),
             shadow_root: None,
+            assigned_nodes: vec![],
             parent: Default::default(),
         })));
         let doc = Node::document(vec![tpl]);

@@ -48,6 +48,12 @@ pub trait ShadowTreeBackend {
     /// a host (light children plus the synthetic shadow container).
     fn composed_children(&self, node: &NodePtr) -> Vec<NodePtr>;
 
+    /// Distribute light-DOM children of `host` into its shadow tree's slots.
+    fn distribute_slots(&self, host: &NodePtr);
+
+    /// The light-DOM nodes assigned to `slot`.
+    fn assigned_nodes(&self, slot: &NodePtr) -> Vec<NodePtr>;
+
     /// The host element that owns `shadow_root`, if `shadow_root` is a shadow
     /// root.
     fn host_for_shadow_root(&self, shadow_root: &NodePtr) -> Option<NodePtr>;
@@ -75,6 +81,18 @@ fn is_document_fragment(node: &NodePtr) -> bool {
     matches!(&*node.borrow(), Node::Element(el) if el.tag_name == "#document-fragment")
 }
 
+fn find_slots(root: &NodePtr, out: &mut Vec<NodePtr>) {
+    let node = root.borrow();
+    if let Node::Element(el) = &*node {
+        if el.tag_name == "slot" {
+            out.push(root.clone());
+        }
+        for child in &el.children {
+            find_slots(child, out);
+        }
+    }
+}
+
 impl ShadowTreeBackend for SyntheticShadowTreeBackend {
     fn attach_shadow(&self, host: &NodePtr, _mode: &str) -> NodePtr {
         let shadow_root = match &mut *host.borrow_mut() {
@@ -96,17 +114,105 @@ impl ShadowTreeBackend for SyntheticShadowTreeBackend {
     }
 
     fn composed_children(&self, node: &NodePtr) -> Vec<NodePtr> {
-        match &*node.borrow() {
-            Node::Element(el) => {
-                let mut children = el.children.clone();
-                if let Some(shadow_root) = &el.shadow_root {
-                    children.push(shadow_root.clone());
-                }
-                children
+        let (tag_name, shadow_root, template_contents, children, assigned_nodes) = {
+            let node_borrow = node.borrow();
+            match &*node_borrow {
+                Node::Element(el) => (
+                    Some(el.tag_name.clone()),
+                    el.shadow_root.clone(),
+                    el.template_contents.clone(),
+                    el.children.clone(),
+                    Some(el.assigned_nodes.clone()),
+                ),
+                Node::Document { children, .. } => (None, None, None, children.clone(), None),
+                Node::Text(_) => return Vec::new(),
             }
-            Node::Document { children, .. } => children.clone(),
-            Node::Text(_) => Vec::new(),
+        };
+
+        if let Some(shadow_root) = shadow_root {
+            // Host element: the shadow root itself is the single composed child.
+            // Its own children (with slots expanded) are computed when
+            // composed_children is called on the shadow root fragment.
+            return vec![shadow_root];
         }
+        if tag_name.as_deref() == Some("slot") {
+            return assigned_nodes.unwrap_or_default();
+        }
+
+        // Normal element or shadow root: collect children
+        let base_children = children;
+
+        base_children
+            .into_iter()
+            .flat_map(|c| {
+                let is_slot = c
+                    .borrow()
+                    .as_element()
+                    .is_some_and(|e| e.tag_name == "slot");
+                if is_slot {
+                    self.composed_children(&c)
+                } else {
+                    vec![c]
+                }
+            })
+            .collect()
+    }
+
+    fn distribute_slots(&self, host: &NodePtr) {
+        let shadow_root = match &*host.borrow() {
+            Node::Element(el) => el.shadow_root.clone(),
+            _ => return,
+        };
+        let Some(shadow_root) = shadow_root else {
+            return;
+        };
+
+        let mut slots = Vec::new();
+        find_slots(&shadow_root, &mut slots);
+
+        let light_children = match &*host.borrow() {
+            Node::Element(el) => el.children.clone(),
+            _ => Vec::new(),
+        };
+
+        for slot in &slots {
+            if let Some(el) = slot.borrow_mut().as_element_mut() {
+                el.assigned_nodes.clear();
+            }
+        }
+
+        for child in light_children {
+            let slot_name = child
+                .borrow()
+                .as_element()
+                .and_then(|el| el.attributes.get("slot").cloned());
+
+            let target_slot = slots.iter().find(|slot| {
+                let slot_borrow = slot.borrow();
+                let slot_el = slot_borrow.as_element().unwrap();
+                let name = slot_el.attributes.get("name");
+                match (slot_name.as_deref(), name.map(|s| s.as_str())) {
+                    (Some(sn), Some(n)) => sn == n,
+                    (None, None) | (None, Some("")) => true,
+                    _ => false,
+                }
+            });
+
+            if let Some(slot) = target_slot {
+                slot.borrow_mut()
+                    .as_element_mut()
+                    .unwrap()
+                    .assigned_nodes
+                    .push(child);
+            }
+        }
+    }
+
+    fn assigned_nodes(&self, slot: &NodePtr) -> Vec<NodePtr> {
+        slot.borrow()
+            .as_element()
+            .map(|el| el.assigned_nodes.clone())
+            .unwrap_or_default()
     }
 
     fn host_for_shadow_root(&self, shadow_root: &NodePtr) -> Option<NodePtr> {
@@ -165,7 +271,11 @@ mod tests {
         let Node::Element(el) = &*host_ref else {
             panic!("expected element host");
         };
-        assert!(el.shadow_root.as_ref().is_some_and(|sr| Rc::ptr_eq(sr, &root)));
+        assert!(
+            el.shadow_root
+                .as_ref()
+                .is_some_and(|sr| Rc::ptr_eq(sr, &root))
+        );
         drop(host_ref);
         assert!(parent_ptr(&root).is_some_and(|p| Rc::ptr_eq(&p, &host)));
 
@@ -198,9 +308,11 @@ mod tests {
     fn host_for_shadow_root_resolves_only_for_roots() {
         let host = Node::element("my-el", Vec::new());
         let root = backend().attach_shadow(&host, "open");
-        assert!(backend()
-            .host_for_shadow_root(&root)
-            .is_some_and(|h| Rc::ptr_eq(&h, &host)));
+        assert!(
+            backend()
+                .host_for_shadow_root(&root)
+                .is_some_and(|h| Rc::ptr_eq(&h, &host))
+        );
 
         // A plain detached fragment is not a shadow root.
         let stray = Node::document_fragment(Vec::new());
@@ -221,26 +333,29 @@ mod tests {
         }
         set_parent(&leaf, &mid);
 
-        assert!(backend()
-            .nearest_shadow_root(&leaf)
-            .is_some_and(|r| Rc::ptr_eq(&r, &root)));
-        assert!(backend()
-            .nearest_shadow_root(&root)
-            .is_some_and(|r| Rc::ptr_eq(&r, &root)));
+        assert!(
+            backend()
+                .nearest_shadow_root(&leaf)
+                .is_some_and(|r| Rc::ptr_eq(&r, &root))
+        );
+        assert!(
+            backend()
+                .nearest_shadow_root(&root)
+                .is_some_and(|r| Rc::ptr_eq(&r, &root))
+        );
         // A light-DOM node outside any shadow tree has none.
         assert!(backend().nearest_shadow_root(&host).is_none());
     }
 
     #[test]
-    fn composed_children_appends_shadow_root_after_light_children() {
+    fn composed_children_returns_shadow_root_as_sole_child_of_host() {
         let light = Node::element("p", Vec::new());
         let host = Node::element("my-el", vec![light.clone()]);
         let root = backend().attach_shadow(&host, "open");
 
         let composed = backend().composed_children(&host);
-        assert_eq!(composed.len(), 2);
-        assert!(Rc::ptr_eq(&composed[0], &light));
-        assert!(Rc::ptr_eq(&composed[1], &root));
+        assert_eq!(composed.len(), 1);
+        assert!(Rc::ptr_eq(&composed[0], &root));
 
         // A host without a shadow root composes to just its light children.
         let plain = Node::element("div", vec![Node::element("b", Vec::new())]);

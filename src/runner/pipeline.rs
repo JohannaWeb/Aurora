@@ -1,5 +1,5 @@
 use super::cli::{CliOptions, env_f32};
-use super::event_loop::{run_event_loop_turn, EventLoopPhase};
+use super::event_loop::{EventLoopPhase, run_event_loop_turn};
 use super::fixtures::demo_html;
 use super::images::{load_images, load_svgs};
 use super::scripts::extract_scripts;
@@ -213,12 +213,16 @@ fn run_scripts(
         runtime.set_current_script(None);
         pump_ready_work(runtime.as_mut());
     }
+    log_youtube_debug_state(runtime.as_mut(), "after-scripts");
     runtime.fire_dom_content_loaded();
     pump_ready_work(runtime.as_mut());
+    log_youtube_debug_state(runtime.as_mut(), "after-domcontentloaded");
     runtime.fire_load();
     pump_ready_work(runtime.as_mut());
+    log_youtube_debug_state(runtime.as_mut(), "after-load");
     apply_polymer_bindings(runtime.as_mut());
     pump_ready_work(runtime.as_mut());
+    log_youtube_debug_state(runtime.as_mut(), "after-polymer-bindings");
     Some(runtime)
 }
 
@@ -260,7 +264,8 @@ fn pump_ready_work(runtime: &mut dyn crate::js_engine::JsRuntime) {
             EventLoopPhase::RequestAnimationFrame => {
                 raf_due && runtime.drain_animation_frame_callbacks(now)
             }
-            EventLoopPhase::StyleAndLayout | EventLoopPhase::Paint => false,
+            EventLoopPhase::StyleAndLayout => runtime.perform_style_and_layout(),
+            EventLoopPhase::Paint => runtime.perform_paint(),
             EventLoopPhase::IdleCallbacks => false,
         });
         if raf_due {
@@ -317,6 +322,55 @@ fn apply_polymer_bindings(runtime: &mut dyn crate::js_engine::JsRuntime) {
         })();
         "#,
     );
+}
+
+fn log_youtube_debug_state(runtime: &mut dyn crate::js_engine::JsRuntime, label: &str) {
+    if !matches!(
+        env::var("AURORA_DEBUG_YOUTUBE").as_deref(),
+        Ok("1") | Ok("true") | Ok("TRUE") | Ok("yes") | Ok("YES")
+    ) {
+        return;
+    }
+
+    let _ = runtime.execute(&format!(
+        r#"
+        (function() {{
+            function bool(v) {{ return v ? 'yes' : 'no'; }}
+            function count(n) {{ return n && n.childNodes ? n.childNodes.length : 'n/a'; }}
+            function keys(o) {{
+                try {{ return o ? Object.keys(o).slice(0, 12).join(',') : ''; }}
+                catch (e) {{ return 'err:' + e; }}
+            }}
+            function nodeState(selector) {{
+                var el = document.querySelector(selector);
+                if (!el) return selector + '=missing';
+                return selector +
+                    '=exists upgraded=' + bool(el.__ce_upgraded__) +
+                    ' connected=' + bool(el.__ce_connected__) +
+                    ' connectFailed=' + bool(el.__ce_connect_failed__) +
+                    ' children=' + count(el) +
+                    ' shadowChildren=' + count(el.shadowRoot) +
+                    ' dataKeys=' + keys(el.data || el.__data || el.__dataHost || null);
+            }}
+            var pr = globalThis.ytInitialPlayerResponse;
+            var ytcfgType = typeof globalThis.ytcfg;
+            console.log('[yt-probe] {label} ytInitialPlayerResponse=' + bool(pr) +
+                ' type=' + typeof pr +
+                ' videoDetails=' + bool(pr && pr.videoDetails) +
+                ' playability=' + (pr && pr.playabilityStatus ? pr.playabilityStatus.status : 'n/a') +
+                ' keys=' + keys(pr));
+            console.log('[yt-probe] {label} ytcfg=' + ytcfgType +
+                ' app=' + nodeState('ytd-app'));
+            console.log('[yt-probe] {label} flexy=' + nodeState('ytd-watch-flexy'));
+            console.log('[yt-probe] {label} stamped player=' +
+                bool(document.querySelector('ytd-player,#movie_player,ytw-player-with-controls')) +
+                ' metadata=' + bool(document.querySelector('ytd-watch-metadata')) +
+                ' primary=' + bool(document.querySelector('#primary,ytd-watch-grid')) +
+                ' secondary=' + bool(document.querySelector('ytd-watch-next-secondary-results-renderer,#secondary')) +
+                ' comments=' + bool(document.querySelector('ytd-comments,ytd-comments-entry-point-header-renderer')));
+        }})();
+        "#
+    ));
 }
 
 pub fn fetch_script(

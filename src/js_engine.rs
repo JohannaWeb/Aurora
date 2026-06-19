@@ -90,6 +90,18 @@ pub(crate) trait JsRuntime {
     fn tick(&mut self, now: Instant) -> bool;
     fn drain_animation_frame_callbacks(&mut self, now: Instant) -> bool;
 
+    /// Recompute style and layout for the current document.
+    /// Returns true if any work was performed.
+    fn perform_style_and_layout(&mut self) -> bool {
+        false
+    }
+
+    /// Paint the current frame.
+    /// Returns true if any work was performed.
+    fn perform_paint(&mut self) -> bool {
+        false
+    }
+
     /// Deliver any pending `MutationObserver` records to their callbacks.
     /// Returns true if any were delivered (so the event-loop pump keeps going).
     /// Backends that drain observers internally (or lack them) keep the default.

@@ -50,13 +50,12 @@ impl AuroraApp {
         let mut runtime_dirtied_blitz = false;
 
         if let Some(runtime) = self.input.runtime.as_mut() {
-            let runtime_needs_reflow =
-                runtime.tick(now) | runtime.drain_animation_frame_callbacks(now);
+            let runtime_needs_reflow = runtime.tick(now)
+                | runtime.drain_animation_frame_callbacks(now)
+                | runtime.deliver_mutation_records()
+                | runtime.perform_style_and_layout()
+                | runtime.take_needs_reflow();
             if runtime_needs_reflow {
-                runtime_dirtied_blitz = true;
-                needs_reflow = true;
-            }
-            if runtime.take_needs_reflow() {
                 runtime_dirtied_blitz = true;
                 needs_reflow = true;
             }

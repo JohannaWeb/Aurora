@@ -6,8 +6,9 @@ use std::sync::{LazyLock, Mutex};
 use std::time::{Duration, Instant};
 
 use super::FetchError;
+use reqwest::Method;
 use reqwest::blocking::Client;
-use reqwest::header::{ACCEPT, USER_AGENT};
+use reqwest::header::{ACCEPT, CONTENT_TYPE, USER_AGENT};
 use url::Url;
 
 /// Spoofed Chrome UA: sites gate their modern bundles on UA sniffing —
@@ -92,11 +93,26 @@ fn client() -> &'static Client {
 /// Fetch a URL and return the body as bytes.
 /// Follows redirects automatically (reqwest handles this natively).
 pub fn fetch_bytes(url: &str) -> Result<Vec<u8>, FetchError> {
+    fetch_bytes_with_method(url, "GET", None)
+}
+
+pub fn fetch_bytes_with_method(
+    url: &str,
+    method: &str,
+    body: Option<&str>,
+) -> Result<Vec<u8>, FetchError> {
     pace(url);
-    let response = client()
-        .get(url)
+    let method = Method::from_bytes(method.as_bytes()).unwrap_or(Method::GET);
+    let mut request = client()
+        .request(method, url)
         .header(ACCEPT, "text/html, text/css, */*")
-        .header(USER_AGENT, ua_for(url))
+        .header(USER_AGENT, ua_for(url));
+    if let Some(body) = body {
+        request = request
+            .header(CONTENT_TYPE, "application/json")
+            .body(body.to_string());
+    }
+    let response = request
         .send()
         .map_err(|e| FetchError::Network(e.to_string()))?;
 
@@ -121,5 +137,14 @@ pub fn fetch_bytes(url: &str) -> Result<Vec<u8>, FetchError> {
 /// Fetch a URL and return the body as a UTF-8 string.
 pub fn fetch_string(url: &str) -> Result<String, FetchError> {
     let bytes = fetch_bytes(url)?;
+    Ok(String::from_utf8_lossy(&bytes).into_owned())
+}
+
+pub fn fetch_string_with_method(
+    url: &str,
+    method: &str,
+    body: Option<&str>,
+) -> Result<String, FetchError> {
+    let bytes = fetch_bytes_with_method(url, method, body)?;
     Ok(String::from_utf8_lossy(&bytes).into_owned())
 }

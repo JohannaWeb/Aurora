@@ -309,7 +309,8 @@ fn prune_whitespace_text(node: &NodePtr, preserve_text_whitespace: bool) {
     };
 
     children.retain(|child| {
-        preserve_children || !matches!(&*child.borrow(), Node::Text(text) if text.content.trim().is_empty())
+        preserve_children
+            || !matches!(&*child.borrow(), Node::Text(text) if text.content.trim().is_empty())
     });
 
     for child in children {
