@@ -625,7 +625,22 @@ pub(crate) fn clone_node(node: &NodePtr, deep: bool) -> NodePtr {
                 } else {
                     vec![]
                 };
-                Node::element_with_attributes(el.tag_name.clone(), el.attributes.clone(), children)
+                let cloned = Node::element_with_attributes(
+                    el.tag_name.clone(),
+                    el.attributes.clone(),
+                    children,
+                );
+                // Template children live in a separate inert content fragment,
+                // not in the element's regular child list. A deep clone must
+                // clone that fragment as well; otherwise Polymer stamps an empty
+                // template even though the source template is populated.
+                if deep
+                    && let Some(template_contents) = &el.template_contents
+                    && let Node::Element(cloned_el) = &mut *cloned.borrow_mut()
+                {
+                    cloned_el.template_contents = Some(clone_node(template_contents, true));
+                }
+                cloned
             }
             Node::Document { children, mode } => {
                 let children = if deep {
@@ -980,9 +995,10 @@ mod tests {
 
 /// Whether `node` is reachable from `document` by walking parent pointers.
 ///
-/// Walks up via `find_parent` (which uses the O(depth) parent back-pointer with
-/// a self-healing scan fallback) instead of scanning the whole document subtree
-/// downward, which made `isConnected` an O(N)-per-call hot spot during boot.
+/// Walks the authoritative parent back-pointers directly. A registered shadow
+/// root deliberately is not in its host's light `children` list, so the normal
+/// `find_parent` relation (which implements `parentNode`) must not be used for
+/// connectivity across that boundary.
 pub(crate) fn is_connected_to(document: &NodePtr, node: &NodePtr) -> bool {
     let mut current = node.clone();
     // Bounded to guard against a cycle introduced by a stale parent pointer.
@@ -990,7 +1006,7 @@ pub(crate) fn is_connected_to(document: &NodePtr, node: &NodePtr) -> bool {
         if Rc::ptr_eq(&current, document) {
             return true;
         }
-        match crate::js_v8::selectors::query::find_parent(document, &current) {
+        match crate::dom::parent_ptr(&current) {
             Some(parent) => current = parent,
             None => return false,
         }

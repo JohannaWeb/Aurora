@@ -12,6 +12,7 @@ use crate::identity::Identity;
 
 use std::collections::BTreeMap;
 use std::panic::{self, AssertUnwindSafe};
+use std::rc::Rc;
 use std::sync::{Mutex, OnceLock};
 
 static NET_CACHE: OnceLock<Mutex<BTreeMap<String, Vec<u8>>>> = OnceLock::new();
@@ -235,6 +236,11 @@ impl BlitzDocument {
     }
 
     pub fn set_viewport(&mut self, width: u32, height: u32) -> bool {
+        // See resolve_inner: once unhealthy, skip the Stylo call so a resize
+        // storm cannot re-trigger the upstream invalidation panic every frame.
+        if !self.healthy {
+            return false;
+        }
         let updated = catch_stylo_panic("updating Blitz viewport", || {
             self.inner
                 .set_viewport(Viewport::new(width, height, 1.0, ColorScheme::Light));
@@ -1201,52 +1207,60 @@ impl BlitzDocument {
             );
             return false;
         };
-        if self.blitz_node_id_for_dom(shadow_root).is_some() {
-            self.record_mirror_mutation(
-                op_name,
-                Some(legacy_node_key(shadow_root)),
-                self.blitz_node_id_for_dom(shadow_root),
-                Some(legacy_node_key(host)),
-                Some(legacy_node_key(shadow_root)),
-                true,
-                MirrorMutationResult::Succeeded,
-                None,
-            );
-            return true;
-        }
         let host_ns = self.node_namespace(host_id).unwrap_or_else(|| ns!(html));
-        let host_tag = host
-            .try_borrow()
-            .ok()
-            .and_then(|node| match &*node {
-                Node::Element(el) => Some(el.tag_name.clone()),
-                _ => None,
-            })
-            .unwrap_or_default();
         let updated = catch_stylo_panic("attaching ShadowRoot in Blitz document", || {
-            let attrs = vec![
-                Attribute {
-                    name: attr_qual_name_from_str("data-aurora-shadow-root"),
-                    value: "true".to_string(),
-                },
-                Attribute {
-                    name: attr_qual_name_from_str("data-aurora-shadow-mode"),
-                    value: mode.to_string(),
-                },
-                Attribute {
-                    name: attr_qual_name_from_str("data-aurora-shadow-host"),
-                    value: host_tag.clone(),
-                },
-            ];
-            let shadow_id = {
+            // Attaching a shadow root changes the host's *entire composed child
+            // list*: light children that were previously rendered are replaced
+            // by the synthetic shadow container. Appending the container while
+            // retaining those old Blitz children leaves the two trees divergent.
+            let existing_child_ids = self
+                .inner
+                .get_node(host_id)
+                .map(|node| node.children.clone())
+                .unwrap_or_default();
+            for child_id in existing_child_ids {
+                remove_blitz_subtree_mapping(
+                    child_id,
+                    &mut self.legacy_to_blitz,
+                    &mut self.blitz_to_legacy,
+                );
+            }
+            {
                 let mut mutator = self.inner.mutate();
-                mutator.create_element(element_qual_name_from_str("div", &host_ns), attrs)
+                mutator.remove_and_drop_all_children(host_id);
+            }
+
+            let child_ids = {
+                let mut maps = BlitzNodeMaps {
+                    legacy_to_blitz: &mut self.legacy_to_blitz,
+                    blitz_to_legacy: &mut self.blitz_to_legacy,
+                };
+                let mut mutator = self.inner.mutate();
+                let mut ids = Vec::new();
+                for child in child_nodes_for_blitz(host) {
+                    if Rc::ptr_eq(&child, shadow_root) {
+                        ids.push(create_shadow_root_node(
+                            &mut mutator,
+                            &child,
+                            &host_ns,
+                            mode,
+                            &mut maps,
+                        ));
+                    } else {
+                        ids.extend(blitz_ids_for_dom_child(
+                            &mut mutator,
+                            &child,
+                            &host_ns,
+                            &mut maps,
+                        ));
+                    }
+                }
+                ids
             };
-            self.legacy_to_blitz
-                .insert(legacy_node_key(shadow_root), shadow_id);
-            self.blitz_to_legacy.insert(shadow_id, shadow_root.clone());
-            let mut mutator = self.inner.mutate();
-            mutator.append_children(host_id, &[shadow_id]);
+            if !child_ids.is_empty() {
+                let mut mutator = self.inner.mutate();
+                mutator.append_children(host_id, &child_ids);
+            }
             true
         })
         .unwrap_or(false);
@@ -1516,6 +1530,18 @@ impl BlitzDocument {
     }
 
     fn resolve_inner(&mut self) -> bool {
+        // Once the Stylo circuit breaker has tripped, stop re-attempting the
+        // resolve. The panic it guards against is an upstream Stylo bug
+        // (servo/stylo#387, fixed on `main` but unreleased): an element reaches
+        // style invalidation with `ElementStyles` allocated but no primary
+        // computed style, and `ElementStyles::primary()` unwraps `None`. The
+        // tree state is persistent, so every retry re-panics, and in the
+        // windowed app each resize/redraw drives another resolve that would
+        // otherwise spin on the panic forever. Skipping keeps the last
+        // successfully resolved styles and layout (the last good frame).
+        if !self.healthy {
+            return false;
+        }
         let resolved = catch_stylo_panic("resolving Blitz document", || {
             self.inner.resolve(0.0);
         })
@@ -1561,6 +1587,10 @@ fn create_dom_node(
         return existing;
     }
 
+    if is_shadow_root_node(node) {
+        return create_shadow_root_node(mutator, node, parent_ns, "open", maps);
+    }
+
     match &*node.borrow() {
         Node::Text(text) => {
             let id = mutator.create_text_node(&text.content);
@@ -1597,13 +1627,53 @@ fn create_dom_node(
     }
 }
 
+fn create_shadow_root_node(
+    mutator: &mut DocumentMutator<'_>,
+    shadow_root: &NodePtr,
+    parent_ns: &markup5ever::Namespace,
+    mode: &str,
+    maps: &mut BlitzNodeMaps<'_>,
+) -> usize {
+    if let Some(&existing) = maps.legacy_to_blitz.get(&legacy_node_key(shadow_root)) {
+        return existing;
+    }
+    let host_tag = crate::dom::parent_ptr(shadow_root)
+        .and_then(|host| {
+            host.try_borrow().ok().and_then(|node| match &*node {
+                Node::Element(el) => Some(el.tag_name.clone()),
+                _ => None,
+            })
+        })
+        .unwrap_or_default();
+    let attrs = vec![
+        Attribute {
+            name: attr_qual_name_from_str("data-aurora-shadow-root"),
+            value: "true".to_string(),
+        },
+        Attribute {
+            name: attr_qual_name_from_str("data-aurora-shadow-mode"),
+            value: mode.to_string(),
+        },
+        Attribute {
+            name: attr_qual_name_from_str("data-aurora-shadow-host"),
+            value: host_tag,
+        },
+    ];
+    let id = mutator.create_element(element_qual_name_from_str("div", parent_ns), attrs);
+    maps.legacy_to_blitz
+        .insert(legacy_node_key(shadow_root), id);
+    maps.blitz_to_legacy.insert(id, shadow_root.clone());
+    append_dom_children(mutator, id, shadow_root, parent_ns, maps);
+    id
+}
+
 fn blitz_ids_for_dom_child(
     mutator: &mut DocumentMutator<'_>,
     child: &NodePtr,
     parent_ns: &markup5ever::Namespace,
     maps: &mut BlitzNodeMaps<'_>,
 ) -> Vec<usize> {
-    if is_document_fragment(child) {
+    if is_document_fragment(child) && !is_shadow_root_node(child) {
         child_nodes_for_blitz(child)
             .into_iter()
             .map(|child| create_dom_node(mutator, &child, parent_ns, maps))
@@ -1991,7 +2061,10 @@ mod tests {
             .expect("link should be mapped");
         let element = blitz_doc.inner.get_node(node_id).unwrap();
         let blitz_attrs = blitz_attrs_to_map(element.data.downcast_element().unwrap());
-        assert_eq!(blitz_attrs.get("rel").map(String::as_str), Some("stylesheet"));
+        assert_eq!(
+            blitz_attrs.get("rel").map(String::as_str),
+            Some("stylesheet")
+        );
         assert_eq!(blitz_attrs.get("href").map(String::as_str), Some("/b.css"));
         assert_eq!(blitz_attrs.get("data-fresh").map(String::as_str), Some("1"));
         assert!(!blitz_attrs.contains_key("data-stale"));
@@ -2018,6 +2091,51 @@ mod tests {
         assert!(blitz_doc.sync_attach_shadow_root(&host, &shadow_root, "open"));
         blitz_doc.validate_mirror_integrity().unwrap();
         assert!(blitz_doc.blitz_node_id_for_dom(&shadow_root).is_some());
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    fn sync_shadow_root_replaces_previously_mirrored_light_children() {
+        let _guard = BLITZ_DOCUMENT_TEST_LOCK.lock().unwrap();
+        let light = Node::element("span", vec![Node::text("light")]);
+        let host = Node::element("x-host", vec![light.clone()]);
+        let document = document_with_body_children(vec![host.clone()]);
+        let mut blitz_doc =
+            BlitzDocument::try_from_dom(&document, None, &test_identity(), 800, 600)
+                .expect("Blitz document should build");
+
+        assert!(blitz_doc.blitz_node_id_for_dom(&light).is_some());
+        let shadow_root =
+            Node::document_fragment(vec![Node::element("strong", vec![Node::text("shadow")])]);
+        if let Node::Element(host_el) = &mut *host.borrow_mut() {
+            host_el.shadow_root = Some(shadow_root.clone());
+        }
+        set_parent(&shadow_root, &host);
+        crate::dom::reparent_subtree(&shadow_root);
+
+        assert!(blitz_doc.sync_attach_shadow_root(&host, &shadow_root, "open"));
+        blitz_doc.validate_mirror_integrity().unwrap();
+        assert!(blitz_doc.blitz_node_id_for_dom(&light).is_none());
+        assert!(blitz_doc.blitz_node_id_for_dom(&shadow_root).is_some());
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    fn initial_snapshot_uses_synthetic_container_for_existing_shadow_root() {
+        let _guard = BLITZ_DOCUMENT_TEST_LOCK.lock().unwrap();
+        let host = Node::element("x-host", Vec::new());
+        let shadow_root =
+            Node::document_fragment(vec![Node::element("span", vec![Node::text("shadow")])]);
+        if let Node::Element(host_el) = &mut *host.borrow_mut() {
+            host_el.shadow_root = Some(shadow_root.clone());
+        }
+        set_parent(&shadow_root, &host);
+        crate::dom::reparent_subtree(&shadow_root);
+        let document = document_with_body_children(vec![host]);
+
+        let blitz_doc = BlitzDocument::try_from_dom(&document, None, &test_identity(), 800, 600)
+            .expect("Blitz document should build");
+        blitz_doc.validate_mirror_integrity().unwrap();
     }
 
     #[cfg(debug_assertions)]

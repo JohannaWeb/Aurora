@@ -6,6 +6,11 @@
             var originalCreateElement = null;
             var hasOwn = Object.prototype.hasOwnProperty;
             var suppressTrackedConnect = 0;
+            var trackedCustomElements = [];
+            var logicalHostCache = typeof WeakMap === 'function' ? new WeakMap() : null;
+            var tracedUnresolvedRoots = typeof WeakSet === 'function' ? new WeakSet() : null;
+            var activeLifecycleHost = null;
+            var fragmentTraceCounter = 0;
             // Genuine Object.prototype methods that prop bags may legitimately
             // expose; everything else inherited-and-callable (our fallback
             // `style`/`__shady_*` shims) is treated as a stray signal value.
@@ -186,7 +191,6 @@
             // Wrap `_enableProperties`/`_flushProperties` on an instance to log when the
             // property system runs relative to children/shadow/template appearing.
             function ceWrapPropMethods(el, name) {
-                if (!ceOn() || !ceWant(name)) return;
                 try {
                     if (el.__ce_prop_wrapped__) return;
                     Object.defineProperty(el, '__ce_prop_wrapped__', { value: true, configurable: true });
@@ -196,8 +200,13 @@
                     if (typeof orig !== 'function') return;
                     el[m] = function() {
                         ceLog('before-' + m, el, ceContent(el));
+                        var previousHost = activeLifecycleHost;
+                        activeLifecycleHost = this;
                         try { return orig.apply(this, arguments); }
-                        finally { ceLog('after-' + m, el, ceContent(el)); }
+                        finally {
+                            activeLifecycleHost = previousHost;
+                            ceLog('after-' + m, el, ceContent(el));
+                        }
                     };
                 });
             }
@@ -254,6 +263,144 @@
                 return '';
             }
 
+            function trackCustomElement(el) {
+                if (!el) return;
+                try {
+                    if (el.__aurora_ce_tracked__) return;
+                    Object.defineProperty(el, '__aurora_ce_tracked__', {
+                        value: true,
+                        configurable: true
+                    });
+                } catch (e) {
+                    if (trackedCustomElements.indexOf(el) >= 0) return;
+                }
+                trackedCustomElements.push(el);
+            }
+
+            function logicalRootForHost(host) {
+                var candidates = [];
+                // Prefer the actual registered render root. Polymer's `root`
+                // may be a separate ShadyDOM logical facade; adopting that over
+                // an existing native root strands the old mirror mapping.
+                try { candidates.push(host.shadowRoot); } catch (e) {}
+                try { candidates.push(host.__shady_shadowRoot); } catch (e) {}
+                try { candidates.push(host.root); } catch (e) {}
+                try { candidates.push(host.__shady && host.__shady.root); } catch (e) {}
+                try {
+                    if (globalThis.ShadyDOM && typeof ShadyDOM.wrap === 'function') {
+                        var wrapped = ShadyDOM.wrap(host);
+                        if (wrapped && wrapped !== host) candidates.push(wrapped.shadowRoot);
+                    }
+                } catch (e) {}
+                for (var i = 0; i < candidates.length; i++) {
+                    if (candidates[i] && candidates[i] !== host) return candidates[i];
+                }
+                return null;
+            }
+
+            // ShadyDOM's logical roots are ordinary detached DocumentFragments.
+            // Recover their host from the component property that exposes the
+            // root, then ask the native bridge to adopt that exact fragment.
+            // Link a logical fragment to a specific host: adopt it through the
+            // native bridge and mirror the host<->root references both ways.
+            function adoptRootToHost(root, host, via) {
+                if (!host || typeof host.__aurora_adoptShadowRoot !== 'function') return false;
+                try {
+                    if (!host.__aurora_adoptShadowRoot(root, 'open')) return false;
+                } catch (e) { return false; }
+                try { Object.defineProperty(host, 'shadowRoot', { value: root, configurable: true, writable: false }); } catch (e) {}
+                try { Object.defineProperty(host, '__shady_shadowRoot', { value: root, configurable: true, writable: false }); } catch (e) {}
+                try { Object.defineProperty(root, 'host', { value: host, configurable: true, writable: false }); } catch (e) {}
+                try { Object.defineProperty(root, '__aurora_registered_shadow_root__', { value: true, configurable: true }); } catch (e) {}
+                if (logicalHostCache) logicalHostCache.set(root, host);
+                ceLog('logical-root-adopted', host,
+                    (via ? 'via=' + via + ' ' : '') + 'rootKids=' + (root.childNodes ? root.childNodes.length : '?'));
+                return true;
+            }
+
+            function adoptLogicalShadowRoot(root) {
+                if (!root) return null;
+                try { if (root.nodeType !== 11) return null; } catch (e) { return null; }
+                if (logicalHostCache) {
+                    try {
+                        var cached = logicalHostCache.get(root);
+                        if (cached) return cached;
+                    } catch (e) {}
+                }
+                // Fast path: the fragment records the host that stamped it
+                // (__aurora_fragment_owner__, set at stamp time). On real YouTube
+                // the reverse lookup below matches nothing (0/78 adopted) because
+                // ShadyDOM never exposes the logical root on the host the way
+                // logicalRootForHost expects — but the owner backref is reliable
+                // (the detached-stamp path already trusts it). Only adopt when the
+                // owner has not already claimed a different root.
+                try {
+                    var owner = root.__aurora_fragment_owner__;
+                    if (owner) {
+                        var ownerRoot = logicalRootForHost(owner);
+                        if ((!ownerRoot || ownerRoot === root) && adoptRootToHost(root, owner, 'owner')) {
+                            return owner;
+                        }
+                    }
+                } catch (e) {}
+                for (var i = trackedCustomElements.length - 1; i >= 0; i--) {
+                    var host = trackedCustomElements[i];
+                    if (!host) continue;
+                    var candidate = logicalRootForHost(host);
+                    if (candidate !== root) continue;
+                    if (adoptRootToHost(root, host)) {
+                        return host;
+                    }
+                }
+                if (ceOn()) {
+                    var alreadyTraced = false;
+                    try {
+                        alreadyTraced = tracedUnresolvedRoots && tracedUnresolvedRoots.has(root);
+                        if (tracedUnresolvedRoots) tracedUnresolvedRoots.add(root);
+                    } catch (e) {}
+                    if (!alreadyTraced) {
+                        try {
+                            var own = Object.getOwnPropertyNames(root).slice(0, 80);
+                            var proto = Object.getPrototypeOf(root);
+                            var protoOwn = proto ? Object.getOwnPropertyNames(proto).slice(0, 80) : [];
+                            var shady = root.__shady;
+                            var shadyOwn = shady && typeof shady === 'object'
+                                ? Object.getOwnPropertyNames(shady).slice(0, 80)
+                                : [];
+                            console.log('[ce] logical-root-unresolved own=' + own.join(',') +
+                                ' proto=' + protoOwn.join(',') +
+                                ' shady=' + shadyOwn.join(','));
+                        } catch (e) {}
+                    }
+                }
+                return null;
+            }
+
+            function parentOrShadowHost(node) {
+                var next = null;
+                try { next = node.parentNode || null; } catch (e) {}
+                if (next) return next;
+                try { next = node.host || null; } catch (e) {}
+                if (next) {
+                    try {
+                        if (node.nodeType === 11 && !node.__aurora_registered_shadow_root__ &&
+                            typeof next.__aurora_adoptShadowRoot === 'function') {
+                            if (next.__aurora_adoptShadowRoot(node, 'open')) {
+                                Object.defineProperty(node, '__aurora_registered_shadow_root__', {
+                                    value: true,
+                                    configurable: true
+                                });
+                                if (logicalHostCache) logicalHostCache.set(node, next);
+                                ceLog('logical-root-adopted', next,
+                                    'rootKids=' + (node.childNodes ? node.childNodes.length : '?'));
+                            }
+                        }
+                    } catch (e) {}
+                    return next;
+                }
+                return adoptLogicalShadowRoot(node);
+            }
+
             // Trace helper: walk parentNode (falling back to .host across shadow
             // boundaries) and report each hop, so we can see exactly where connectivity
             // to the document breaks for an element whose connectedCallback never fires.
@@ -264,12 +411,48 @@
                     try { tag = node.nodeType === 9 ? '#document' : (node.localName || node.nodeName || ('nt' + node.nodeType)); } catch (e) {}
                     parts.push(tag);
                     if (node === document || node.nodeType === 9) break;
-                    var next = null;
-                    try { next = node.parentNode || null; } catch (e) {}
-                    if (!next) { try { next = node.host || null; } catch (e) {} parts[parts.length - 1] += '(viaHost:' + !!next + ')'; }
+                    var next = parentOrShadowHost(node);
+                    if (!node.parentNode) parts[parts.length - 1] += '(viaHost:' + !!next + ')';
                     node = next;
                 }
                 return parts.join(' < ');
+            }
+
+            function ceOwnerHints(el) {
+                var parts = [], node = el, guard = 0;
+                var keys = ['__dataHost', 'dataHost', '_methodHost', '__templatizeOwner', '__host'];
+                while (node && guard++ < 40) {
+                    for (var i = 0; i < keys.length; i++) {
+                        try {
+                            var owner = node[keys[i]];
+                            if (owner && owner !== node) {
+                                parts.push((node.localName || node.nodeName || '?') + '.' + keys[i] +
+                                    '=' + (owner.localName || owner.nodeName || typeof owner));
+                            }
+                        } catch (e) {}
+                    }
+                    var next = null;
+                    try { next = node.parentNode || null; } catch (e) {}
+                    if (!next) {
+                        try {
+                            var fragmentOwner = node.__aurora_fragment_owner__;
+                            if (fragmentOwner) {
+                                parts.push('#fragment.__aurora_fragment_owner__=' +
+                                    (fragmentOwner.localName || fragmentOwner.nodeName || typeof fragmentOwner));
+                            }
+                            if (node.__aurora_fragment_trace_id__) {
+                                parts.push('#fragment.id=' + node.__aurora_fragment_trace_id__);
+                            }
+                            if (node.__aurora_fragment_creation_stack__) {
+                                parts.push('#fragment.stack=' +
+                                    String(node.__aurora_fragment_creation_stack__).replace(/\n/g, '>'));
+                            }
+                        } catch (e) {}
+                        break;
+                    }
+                    node = next;
+                }
+                return parts.length ? parts.join(',') : '-';
             }
 
             function isActuallyConnected(el) {
@@ -284,12 +467,87 @@
                     try {
                         if (node.nodeType === 9) return true;
                     } catch (e2) {}
-                    var next = null;
-                    try { next = node.parentNode || null; } catch (e3) {}
-                    if (!next) {
-                        try { next = node.host || null; } catch (e4) {}
+                    node = parentOrShadowHost(node);
+                }
+                return false;
+            }
+
+            function detachedFragmentFor(el) {
+                var node = el, last = el, guard = 0;
+                while (node && guard++ < 1000) {
+                    last = node;
+                    var parent = null;
+                    try { parent = node.parentNode || null; } catch (e) {}
+                    if (!parent) break;
+                    node = parent;
+                }
+                try { return last && last.nodeType === 11 ? last : null; }
+                catch (e) { return null; }
+            }
+
+            // Polymer annotates nodes cloned from a template with their data
+            // host. When a ShadyDOM append is missed, the whole stamped subtree
+            // remains inside the temporary clone fragment. Recover the intended
+            // composition by moving that fragment into the owner's render root;
+            // native DocumentFragment insertion consumes its children.
+            function composeDetachedStamp(el) {
+                var fragment = detachedFragmentFor(el);
+                if (!fragment) return false;
+                var ownerKeys = ['__dataHost', 'dataHost', '_methodHost', '__templatizeOwner', '__host'];
+                var node = el, owners = [], guard = 0;
+                try {
+                    if (fragment.__aurora_fragment_owner__) {
+                        owners.push(fragment.__aurora_fragment_owner__);
                     }
-                    node = next;
+                } catch (e) {}
+                while (node && guard++ < 80) {
+                    for (var i = 0; i < ownerKeys.length; i++) {
+                        try {
+                            var owner = node[ownerKeys[i]];
+                            if (owner && owner !== node && owners.indexOf(owner) < 0) owners.push(owner);
+                        } catch (e) {}
+                    }
+                    var parent = null;
+                    try { parent = node.parentNode || null; } catch (e) {}
+                    if (!parent) break;
+                    node = parent;
+                }
+
+                for (var oi = 0; oi < owners.length; oi++) {
+                    var host = owners[oi];
+                    try {
+                        if (fragment.contains && fragment.contains(host)) continue;
+                    } catch (e) {}
+                    var target = logicalRootForHost(host);
+                    try {
+                        if (target === fragment) {
+                            if (typeof host.__aurora_adoptShadowRoot === 'function' &&
+                                host.__aurora_adoptShadowRoot(fragment, 'open')) {
+                                Object.defineProperty(fragment, 'host', {
+                                    value: host, configurable: true, writable: false
+                                });
+                                Object.defineProperty(fragment, '__aurora_registered_shadow_root__', {
+                                    value: true, configurable: true
+                                });
+                                ceLog('logical-root-adopted', host,
+                                    'via=data-host rootKids=' + (fragment.childNodes ? fragment.childNodes.length : '?'));
+                                return true;
+                            }
+                            continue;
+                        }
+                        if (target && target.nodeType === 11) {
+                            if (!target.__aurora_registered_shadow_root__ &&
+                                typeof host.__aurora_adoptShadowRoot === 'function') {
+                                host.__aurora_adoptShadowRoot(target, 'open');
+                            }
+                            target.appendChild(fragment);
+                            ceLog('detached-stamp-composed', host,
+                                'target=shadow-root');
+                            return true;
+                        }
+                    } catch (e) {
+                        ceLog('detached-stamp-compose-failed', host, String(e));
+                    }
                 }
                 return false;
             }
@@ -1580,6 +1838,14 @@
                 if (!definition) return;
                 var ctor = definition.ctor;
                 if (!ctor) return;
+                var registeredLifecycle = {};
+                ['connectedCallback', 'disconnectedCallback', 'adoptedCallback', 'attributeChangedCallback']
+                    .forEach(function(key) {
+                        try {
+                            var fn = ctor.prototype && ctor.prototype[key];
+                            if (typeof fn === 'function') registeredLifecycle[key] = fn;
+                        } catch (e) {}
+                    });
                 if (el.__ce_upgraded__) {
                     connectUpgraded(el, name, connect);
                     return;
@@ -1660,11 +1926,27 @@
                 } catch (e) {
                     traceError('constructor ' + name, e);
                 }
+                // ES5 adapters and proxy constructors can replace the instance
+                // prototype during `super()`. The registered definition remains
+                // the lifecycle authority; preserve callbacks that were present
+                // at define/upgrade time but disappeared during construction.
+                Object.keys(registeredLifecycle).forEach(function(key) {
+                    try {
+                        if (typeof el[key] !== 'function') {
+                            Object.defineProperty(el, key, {
+                                value: registeredLifecycle[key],
+                                configurable: true,
+                                writable: true
+                            });
+                        }
+                    } catch (e) {}
+                });
                 ceWrapPropMethods(el, name);
                 ceLog('post-construct', el, 'instChain=' + ceChain(Object.getPrototypeOf(el)) +
                     ' instIsCtorProto=' + (Object.getPrototypeOf(el) === ctor.prototype) +
                     ' ctorProtoAfter=' + ceChain(ctor.prototype) +
-                    ' own=' + ceOwnStamp(el) + ' ' + ceContent(el));
+                    ' own=' + ceOwnStamp(el) +
+                    ' connectedType=' + typeof el.connectedCallback + ' ' + ceContent(el));
                 maybeCallCreated(el, name);
                 readyUpgraded(el, name);
                 if (globalThis.__aurora_debug_youtube__ && debugProbeName(name)) {
@@ -1687,7 +1969,10 @@
                 installPolymerIdMapHooks(el);
                 installInstanceTemplateIdAccessors(el, el.__aurora_ce_ctor__ || el.constructor);
                 rebuildPolymerIdMap(el);
-                el.ready();
+                var previousHost = activeLifecycleHost;
+                activeLifecycleHost = el;
+                try { el.ready(); }
+                finally { activeLifecycleHost = previousHost; }
                 rebuildPolymerIdMap(el);
                 installBindingHooks(el);
                 wireEventHandlers(el);
@@ -1700,9 +1985,13 @@
                 if (connect === false) return;
                 try {
                     if (el.__ce_connect_failed__) return;
-                    if (!isActuallyConnected(el)) {
+                    var connectedNow = isActuallyConnected(el);
+                    if (!connectedNow && composeDetachedStamp(el)) {
+                        connectedNow = isActuallyConnected(el);
+                    }
+                    if (!connectedNow) {
                         ceLog('connect-bail-disconnected', el, 'retry=' + (el.__ce_connect_retry__ || 0) +
-                            ' ancestry=' + ceAncestry(el));
+                            ' ancestry=' + ceAncestry(el) + ' owners=' + ceOwnerHints(el));
                         if (!el.__ce_connect_retry__) {
                             el.__ce_connect_retry__ = 1;
                             setTimeout(function() {
@@ -1745,7 +2034,10 @@
                             if (shouldTraceName(name)) trace('connectedCallback ' + name);
                             ceLog('pre-connectedCallback', el, 'chain=' + ceChain(Object.getPrototypeOf(el)) +
                                 ' own=' + ceOwnStamp(el) + ' ' + ceContent(el));
-                            el.connectedCallback();
+                            var previousHost = activeLifecycleHost;
+                            activeLifecycleHost = el;
+                            try { el.connectedCallback(); }
+                            finally { activeLifecycleHost = previousHost; }
                             ceLog('post-connectedCallback', el, 'chain=' + ceChain(Object.getPrototypeOf(el)) +
                                 ' own=' + ceOwnStamp(el) + ' ' + ceContent(el));
                         } else if (typeof el.attached === 'function') {
@@ -1810,6 +2102,7 @@
                 if (!el || el.nodeType !== 1) return;
                 var name = el.localName || (el.tagName ? el.tagName.toLowerCase() : '');
                 if (!shouldTrack(name)) return;
+                trackCustomElement(el);
                 if (getDefinition(name)) {
                     tryUpgrade(el, suppressTrackedConnect ? false : true);
                     return;
@@ -1869,7 +2162,11 @@
                 define: function(name, ctor, opts) {
                 if (shouldTraceName(name)) trace('define ' + name);
                 ceLogName('define', name, 'defineCtor=' + ceCtorTag(ctor) +
-                    ' ctorChain=' + ceChain(ctor && ctor.prototype));
+                    ' ctorChain=' + ceChain(ctor && ctor.prototype) +
+                    ' connectedType=' + (function() {
+                        try { return typeof (ctor && ctor.prototype && ctor.prototype.connectedCallback); }
+                        catch (e) { return 'threw'; }
+                    })());
                 var definition = ensureDefinitionMetadata(name, ctor);
                 attachDefinitionMetadata(ctor, definition);
                 invokeBeforeRegister(ctor, name);
@@ -1937,6 +2234,36 @@
 
             globalThis.__aurora_init_custom_elements__ = function() { ensureCreateElementPatch(); };
             globalThis.__aurora_track_custom_element__ = function(el) { rememberPending(el); };
+            globalThis.__aurora_track_fragment__ = function(fragment) {
+                try { if (!fragment || fragment.nodeType !== 11) return fragment; }
+                catch (e) { return fragment; }
+                if (ceOn()) {
+                    try {
+                        if (!fragment.__aurora_fragment_trace_id__) {
+                            Object.defineProperty(fragment, '__aurora_fragment_trace_id__', {
+                                value: ++fragmentTraceCounter,
+                                configurable: true
+                            });
+                            Object.defineProperty(fragment, '__aurora_fragment_creation_stack__', {
+                                value: new Error('fragment-created').stack || '',
+                                configurable: true
+                            });
+                        }
+                    } catch (e) {}
+                }
+                var owner = upgradeStack.length
+                    ? upgradeStack[upgradeStack.length - 1]
+                    : activeLifecycleHost;
+                if (fragment && owner) {
+                    try {
+                        Object.defineProperty(fragment, '__aurora_fragment_owner__', {
+                            value: owner,
+                            configurable: true
+                        });
+                    } catch (e) { fragment.__aurora_fragment_owner__ = owner; }
+                }
+                return fragment;
+            };
             globalThis.__aurora_apply_stamped_bindings__ = applyStampedBindings;
 
             // Walk a subtree (light DOM + shadow roots) and install binding hooks

@@ -324,6 +324,23 @@
         };
     };
 
+    // VisualViewport: ytd-app.attached() does
+    // `window.visualViewport.addEventListener('resize'|'scroll', ...)`; without
+    // this the attached callback throws "Cannot read properties of undefined
+    // (reading 'addEventListener')" and ytd-app never connects, so navigation
+    // and page-content instantiation never run. Built on the real EventTarget
+    // so listeners register (we never fire resize/scroll, which is fine).
+    globalThis.visualViewport = (function() {
+        var vv = new globalThis.EventTarget();
+        vv.width = globalThis.innerWidth || 1200;
+        vv.height = globalThis.innerHeight || 1024;
+        vv.offsetLeft = 0; vv.offsetTop = 0;
+        vv.pageLeft = 0; vv.pageTop = 0;
+        vv.scale = 1;
+        vv.onresize = null; vv.onscroll = null;
+        return vv;
+    })();
+
     globalThis.history = {
         length: 1, state: null, scrollRestoration: 'auto',
         pushState: function(state) { this.state = state; },

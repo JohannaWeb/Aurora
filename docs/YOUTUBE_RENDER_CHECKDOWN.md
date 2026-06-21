@@ -179,8 +179,15 @@ architecture.
 
 ## One-line status
 
-Local fixture: **renders.** Live YouTube: **masthead bar + icon buttons paint; logo and
-search box hydrate but collapse to 0×0 (shadow-scoped CSS gap); feed is empty (needs
-network continuation).** Engine stability improved — the 5 per-load mutator panics are
-gone. The next visible YouTube win is **Tier 3 native shadow styling** (logo + search
-box); the next *content* win is **Tier 0 data**.
+*Updated 2026-06-20, branch `feature/youtube-polymer-shim-expanded`.*
+
+Local fixture: **renders.** Live YouTube: **masthead bar + icon buttons paint; the
+topbar logo now stamps and lays out at 123×112** (was 0×0) after the ShadyDOM
+logical-tree composition landed — paint paths **~286 → 471**. Feed is still empty (needs
+network continuation). Engine stability: the 5 per-load mutator panics remain gone, but
+the now-larger stamped tree exposes a recurring **Tier-2 `MirrorIntegrity` "child mapping
+mismatch"** (stable off-by-one, blitz `1762` vs expected `1761`) that floods the log on
+every `sync_*`. Next *render* win is **stabilizing the two-DOM mirror** under the larger
+tree; next *content* win is still **Tier 0 data**. See the 2026-06-20 update in
+`docs/YOUTUBE_HYDRATION_INVESTIGATION-2026-06-18.md` for the root-cause writeup
+(`query::find_parent` was severing adopted shadow-root host links).

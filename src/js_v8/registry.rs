@@ -7,46 +7,50 @@ use crate::dom::NodePtr;
 use crate::window::SnapshotRebuildReason;
 
 pub(super) struct NodeRegistry {
-    pub(super) nodes: Rc<RefCell<BTreeMap<u32, NodePtr>>>,
+    pub(super) nodes: RefCell<BTreeMap<u32, NodePtr>>,
     /// Reverse map: Rc pointer address → node ID.
-    reverse_nodes: Rc<RefCell<BTreeMap<usize, u32>>>,
-    wrappers: Rc<RefCell<BTreeMap<u32, v8::Global<v8::Object>>>>,
-    pub(super) next_id: Rc<RefCell<u32>>,
-    dirty: Rc<RefCell<DirtyState>>,
-    pub(super) layout_tree: Rc<RefCell<Option<Rc<RefCell<crate::layout::LayoutTree>>>>>,
-    pub(super) stylesheet: Rc<RefCell<Option<Rc<RefCell<crate::css::Stylesheet>>>>>,
-    pub(super) viewport: Rc<RefCell<Option<Rc<RefCell<crate::layout::ViewportSize>>>>>,
-    render_document: Rc<RefCell<Option<Rc<RefCell<crate::blitz_document::BlitzDocument>>>>>,
-    pub(super) document: Rc<RefCell<Option<NodePtr>>>,
+    reverse_nodes: RefCell<BTreeMap<usize, u32>>,
+    wrappers: RefCell<BTreeMap<u32, v8::Global<v8::Object>>>,
+    pub(super) next_id: RefCell<u32>,
+    dirty: RefCell<DirtyState>,
+    // Outer `RefCell` (not `Rc<RefCell>`): the whole registry is already shared
+    // as `Rc<NodeRegistry>`, so a per-field `Rc` adds nothing. The *inner*
+    // `Rc<RefCell<T>>` is the genuinely shared handle (set via `set_shared_state`
+    // from the pipeline, which keeps its own clone).
+    pub(super) layout_tree: RefCell<Option<Rc<RefCell<crate::layout::LayoutTree>>>>,
+    pub(super) stylesheet: RefCell<Option<Rc<RefCell<crate::css::Stylesheet>>>>,
+    pub(super) viewport: RefCell<Option<Rc<RefCell<crate::layout::ViewportSize>>>>,
+    render_document: RefCell<Option<Rc<RefCell<crate::blitz_document::BlitzDocument>>>>,
+    pub(super) document: RefCell<Option<NodePtr>>,
     pub(super) listeners:
-        Rc<RefCell<BTreeMap<u32, BTreeMap<String, Vec<v8::Global<v8::Function>>>>>>,
+        RefCell<BTreeMap<u32, BTreeMap<String, Vec<v8::Global<v8::Function>>>>>,
     /// `MutationObserver` instances by observer id (callback + observer object).
-    pub(super) mo_observers: Rc<RefCell<BTreeMap<u32, super::mutation_observer::MoObserver>>>,
+    pub(super) mo_observers: RefCell<BTreeMap<u32, super::mutation_observer::MoObserver>>,
     /// Active `observe()` registrations and their pending records.
-    pub(super) mo_entries: Rc<RefCell<Vec<super::mutation_observer::MoEntry>>>,
+    pub(super) mo_entries: RefCell<Vec<super::mutation_observer::MoEntry>>,
     /// Monotonic id source for MutationObservers (kept separate from node ids).
-    mo_next: Rc<RefCell<u32>>,
-    snapshot_rebuild_reason: Rc<RefCell<Option<SnapshotRebuildReason>>>,
+    mo_next: RefCell<u32>,
+    snapshot_rebuild_reason: RefCell<Option<SnapshotRebuildReason>>,
 }
 
 impl NodeRegistry {
     pub(super) fn new() -> Self {
         Self {
-            nodes: Rc::new(RefCell::new(BTreeMap::new())),
-            reverse_nodes: Rc::new(RefCell::new(BTreeMap::new())),
-            wrappers: Rc::new(RefCell::new(BTreeMap::new())),
-            next_id: Rc::new(RefCell::new(1)),
-            dirty: Rc::new(RefCell::new(DirtyState::default())),
-            layout_tree: Rc::new(RefCell::new(None)),
-            stylesheet: Rc::new(RefCell::new(None)),
-            viewport: Rc::new(RefCell::new(None)),
-            render_document: Rc::new(RefCell::new(None)),
-            document: Rc::new(RefCell::new(None)),
-            listeners: Rc::new(RefCell::new(BTreeMap::new())),
-            mo_observers: Rc::new(RefCell::new(BTreeMap::new())),
-            mo_entries: Rc::new(RefCell::new(Vec::new())),
-            mo_next: Rc::new(RefCell::new(1)),
-            snapshot_rebuild_reason: Rc::new(RefCell::new(None)),
+            nodes: RefCell::new(BTreeMap::new()),
+            reverse_nodes: RefCell::new(BTreeMap::new()),
+            wrappers: RefCell::new(BTreeMap::new()),
+            next_id: RefCell::new(1),
+            dirty: RefCell::new(DirtyState::default()),
+            layout_tree: RefCell::new(None),
+            stylesheet: RefCell::new(None),
+            viewport: RefCell::new(None),
+            render_document: RefCell::new(None),
+            document: RefCell::new(None),
+            listeners: RefCell::new(BTreeMap::new()),
+            mo_observers: RefCell::new(BTreeMap::new()),
+            mo_entries: RefCell::new(Vec::new()),
+            mo_next: RefCell::new(1),
+            snapshot_rebuild_reason: RefCell::new(None),
         }
     }
 

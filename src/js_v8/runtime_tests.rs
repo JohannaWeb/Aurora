@@ -1354,8 +1354,18 @@ fn v8_supports_storage_and_fetch() {
         runtime.eval_to_string("typeof fetch"),
         Ok("function".to_string())
     );
-    // We can't easily test actual network without mocking fetch_string,
-    // but we can check if it returns a Promise.
+    // Keep this deterministic: the bridge itself has a transport-level test,
+    // while this checks the browser-facing Promise surface.
+    runtime
+        .execute(
+            r#"
+            globalThis.__aurora_fetch_start__ = function() { return 1; };
+            globalThis.__aurora_fetch_poll__ = function() {
+                return { ok: true, status: 200, statusText: 'OK', body: '', headers: '' };
+            };
+            "#,
+        )
+        .unwrap();
     runtime
         .execute("globalThis.p = fetch('https://google.com')")
         .unwrap();
@@ -1372,6 +1382,84 @@ fn v8_supports_storage_and_fetch() {
     assert_eq!(
         runtime.eval_to_string("atob('aGVsbG8=')"),
         Ok("hello".to_string())
+    );
+}
+
+#[test]
+fn v8_fetch_and_xhr_forward_headers_and_preserve_http_status() {
+    let mut runtime = V8Runtime::new(blank_dom());
+
+    runtime
+        .execute(
+            r#"
+            globalThis.__networkCalls = [];
+            globalThis.__networkResult = {
+                ok: true,
+                status: 418,
+                statusText: "I'm a teapot",
+                body: '{"error":"teapot"}',
+                headers: 'content-type=application%2Fjson&x-test=present'
+            };
+            globalThis.__recordNetworkCall = function(url, method, body, headers) {
+                __networkCalls.push([url, method, body, headers].join('|'));
+                return __networkResult;
+            };
+            globalThis.__aurora_fetch_sync__ = __recordNetworkCall;
+            globalThis.__aurora_fetch_start__ = function(url, method, body, headers) {
+                __recordNetworkCall(url, method, body, headers);
+                return 7;
+            };
+            globalThis.__aurora_fetch_poll__ = function() { return __networkResult; };
+
+            var request = new Request('/youtubei/v1/browse', {
+                method: 'POST',
+                body: '{"browseId":"FEwhat_to_watch"}',
+                headers: { 'X-Youtube-Client-Name': '1' }
+            });
+            globalThis.__fetchPromise = fetch(request, {
+                headers: new Headers([['X-Youtube-Client-Version', '2.20260619']])
+            });
+
+            var xhr = new XMLHttpRequest();
+            xhr.open('POST', '/youtubei/v1/next', false);
+            xhr.setRequestHeader('Content-Type', 'application/json+protobuf');
+            xhr.setRequestHeader('X-Goog-Visitor-Id', 'visitor token');
+            xhr.send('{}');
+            globalThis.__xhrSummary = [
+                xhr.status,
+                xhr.responseText,
+                xhr.getResponseHeader('content-type'),
+                xhr.getResponseHeader('x-test'),
+                xhr.getAllResponseHeaders().indexOf('x-test: present') >= 0
+            ].join('|');
+            __fetchPromise.then(function(response) {
+                globalThis.__fetchSummary = [
+                    response.status,
+                    response.statusText,
+                    response.ok,
+                    response.headers.get('content-type')
+                ].join('|');
+            });
+            "#,
+        )
+        .unwrap();
+    runtime.tick(std::time::Instant::now() + std::time::Duration::from_millis(1));
+
+    assert_eq!(
+        runtime.eval_to_string("__networkCalls[0]"),
+        Ok("about:/youtubei/v1/browse|POST|{\"browseId\":\"FEwhat_to_watch\"}|x-youtube-client-name=1&x-youtube-client-version=2.20260619".to_string())
+    );
+    assert_eq!(
+        runtime.eval_to_string("__networkCalls[1]"),
+        Ok("about:/youtubei/v1/next|POST|{}|content-type=application%2Fjson%2Bprotobuf&x-goog-visitor-id=visitor%20token".to_string())
+    );
+    assert_eq!(
+        runtime.eval_to_string("__xhrSummary"),
+        Ok("418|{\"error\":\"teapot\"}|application/json|present|true".to_string())
+    );
+    assert_eq!(
+        runtime.eval_to_string("__fetchSummary"),
+        Ok("418|I'm a teapot|false|application/json".to_string())
     );
 }
 
@@ -1431,7 +1519,10 @@ fn v8_supports_document_structure_and_screen() {
         runtime.eval_to_string("document.defaultView === window"),
         Ok("true".to_string())
     );
-    assert_eq!(runtime.eval_to_string("document.nodeType"), Ok("9".to_string()));
+    assert_eq!(
+        runtime.eval_to_string("document.nodeType"),
+        Ok("9".to_string())
+    );
     assert_eq!(
         runtime.eval_to_string("document.nodeName"),
         Ok("#document".to_string())
@@ -1688,12 +1779,14 @@ fn v8_attach_shadow_creates_distinct_shadow_root() {
                     root !== host,                 // distinct object
                     host.shadowRoot === root,      // host points back at root
                     root.host === host,            // root points back at host
+                    root.parentNode === null,      // shadow root is not a light child
+                    root.host === host,            // parentNode read preserved host link
                     root.nodeType === 11,          // DocumentFragment node type
                     root.mode === 'open',
                 ].join('|');
             })()"#
         ),
-        Ok("true|true|true|true|true".to_string())
+        Ok("true|true|true|true|true|true|true".to_string())
     );
 }
 
@@ -1727,9 +1820,9 @@ fn v8_shadow_children_are_not_light_dom_children() {
 
 #[test]
 fn v8_query_selector_respects_shadow_boundary() {
-    // With a render document attached, selector queries go through Blitz and
-    // honor shadow boundaries: a document/host query sees only light-DOM matches,
-    // and a shadow-root query sees only its own shadow matches.
+    // DOM selector queries use the logical DOM even when a composed Blitz tree
+    // is attached: a document/host query sees light-DOM matches, and a
+    // shadow-root query sees only its own shadow matches.
     let mut runtime = runtime_with_render_doc(blank_dom());
     assert_eq!(
         runtime.eval_to_string(
@@ -1751,6 +1844,193 @@ fn v8_query_selector_respects_shadow_boundary() {
             })()"#
         ),
         Ok("1|1|1".to_string())
+    );
+}
+
+#[test]
+fn v8_adopts_shadydom_logical_root_and_connects_lite_children() {
+    let dom = blank_dom();
+    let identity = test_identity();
+    let render_doc = Rc::new(RefCell::new(
+        BlitzDocument::try_from_dom(&dom, None, &identity, 800, 600)
+            .expect("render document should build"),
+    ));
+    let mut runtime = V8Runtime::with_render_document(dom, Some(render_doc.clone()));
+
+    assert_eq!(
+        runtime.eval_to_string(
+            r#"(() => {
+                let connected = 0;
+                class XLite extends HTMLElement {
+                    connectedCallback() {
+                        connected++;
+                        this.textContent = 'connected';
+                    }
+                }
+                customElements.define('x-lite', XLite);
+
+                // This is the shape produced by ShadyDOM useNativeShadow=false:
+                // an ordinary detached fragment exposed as the component root.
+                const host = document.createElement('x-host');
+                const logicalRoot = document.createDocumentFragment();
+                const child = document.createElement('x-lite');
+                logicalRoot.appendChild(child);
+                host.root = logicalRoot;
+                document.body.appendChild(host);
+
+                // Stamping discovers the already-upgraded child after the host
+                // exposes its logical root. The connect gate must adopt the root
+                // and cross to the connected host.
+                customElements.__aurora_track_custom_element__(child);
+                return [
+                    connected,
+                    child.isConnected,
+                    logicalRoot.host === host,
+                    host.shadowRoot === logicalRoot,
+                    child.textContent,
+                ].join('|');
+            })()"#,
+        ),
+        Ok("1|true|true|true|connected".to_string())
+    );
+
+    render_doc.borrow().validate_mirror_integrity().unwrap();
+}
+
+#[test]
+fn v8_composes_polymer_owned_detached_stamp_into_host_root() {
+    let dom = blank_dom();
+    let identity = test_identity();
+    let render_doc = Rc::new(RefCell::new(
+        BlitzDocument::try_from_dom(&dom, None, &identity, 800, 600)
+            .expect("render document should build"),
+    ));
+    let mut runtime = V8Runtime::with_render_document(dom, Some(render_doc.clone()));
+
+    assert_eq!(
+        runtime.eval_to_string(
+            r#"(() => {
+                let connected = 0;
+                class XOwnedLite extends HTMLElement {
+                    connectedCallback() {
+                        connected++;
+                        this.textContent = 'composed';
+                    }
+                }
+                customElements.define('x-owned-lite', XOwnedLite);
+
+                const host = document.createElement('x-owner');
+                document.body.appendChild(host);
+                const root = host.attachShadow({ mode: 'open' });
+                const stamp = document.createDocumentFragment();
+                const child = document.createElement('x-owned-lite');
+                child.__dataHost = host;
+                stamp.appendChild(child);
+
+                customElements.__aurora_track_custom_element__(child);
+                return [
+                    connected,
+                    child.isConnected,
+                    child.parentNode === root,
+                    root.childNodes.length,
+                    stamp.childNodes.length,
+                    child.textContent,
+                ].join('|');
+            })()"#,
+        ),
+        Ok("1|true|true|1|0|composed".to_string())
+    );
+    render_doc.borrow().validate_mirror_integrity().unwrap();
+}
+
+#[test]
+fn v8_tracks_fragment_owner_during_custom_element_lifecycle() {
+    let dom = blank_dom();
+    let identity = test_identity();
+    let render_doc = Rc::new(RefCell::new(
+        BlitzDocument::try_from_dom(&dom, None, &identity, 800, 600)
+            .expect("render document should build"),
+    ));
+    let mut runtime = V8Runtime::with_render_document(dom, Some(render_doc.clone()));
+
+    assert_eq!(
+        runtime.eval_to_string(
+            r#"(() => {
+                let childConnected = 0;
+                const source = document.createDocumentFragment();
+                source.appendChild(document.createElement('x-tracked-child'));
+                class XTrackedChild extends HTMLElement {
+                    connectedCallback() { childConnected++; }
+                }
+                class XTrackedOwner extends HTMLElement {
+                    connectedCallback() {
+                        const root = this.attachShadow({ mode: 'open' });
+                        const stamp = source.cloneNode(true);
+                        const child = stamp.firstChild;
+                        customElements.__aurora_track_custom_element__(child);
+                        this.result = [
+                            stamp.__aurora_fragment_owner__ === this,
+                            child.parentNode === root,
+                            stamp.childNodes.length,
+                        ].join('|');
+                    }
+                }
+                customElements.define('x-tracked-child', XTrackedChild);
+                customElements.define('x-tracked-owner', XTrackedOwner);
+                const owner = document.createElement('x-tracked-owner');
+                document.body.appendChild(owner);
+                customElements.__aurora_track_custom_element__(owner);
+                return owner.result + '|' + childConnected;
+            })()"#,
+        ),
+        Ok("true|true|0|1".to_string())
+    );
+    render_doc.borrow().validate_mirror_integrity().unwrap();
+}
+
+#[test]
+fn v8_preserves_registered_lifecycle_after_constructor_replaces_prototype() {
+    let mut runtime = V8Runtime::new(blank_dom());
+    assert_eq!(
+        runtime.eval_to_string(
+            r#"(() => {
+                let connected = 0;
+                class XProtoSwap extends HTMLElement {
+                    constructor() {
+                        super();
+                        Object.setPrototypeOf(this, HTMLElement.prototype);
+                    }
+                    connectedCallback() { connected++; }
+                }
+                customElements.define('x-proto-swap', XProtoSwap);
+                const el = document.createElement('x-proto-swap');
+                document.body.appendChild(el);
+                customElements.__aurora_track_custom_element__(el);
+                return [connected, typeof el.connectedCallback, el.isConnected].join('|');
+            })()"#,
+        ),
+        Ok("1|function|true".to_string())
+    );
+}
+
+#[test]
+fn v8_deep_clone_preserves_template_content() {
+    let mut runtime = V8Runtime::new(blank_dom());
+    assert_eq!(
+        runtime.eval_to_string(
+            r#"(() => {
+                const template = document.createElement('template');
+                template.innerHTML = '<section><span>inside</span></section>';
+                const clone = template.cloneNode(true);
+                return [
+                    template.content.childNodes.length,
+                    clone.content.childNodes.length,
+                    clone.content.firstChild.localName,
+                    clone.content.firstChild.textContent,
+                ].join('|');
+            })()"#,
+        ),
+        Ok("1|1|section|inside".to_string())
     );
 }
 

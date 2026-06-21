@@ -133,6 +133,15 @@ pub(crate) fn find_parent(root: &NodePtr, target: &NodePtr) -> Option<NodePtr> {
     if is_direct_child(&parent, target) {
         return Some(parent);
     }
+    // A shadow root (and a template's content fragment) is retained on its host
+    // via a dedicated field — `el.shadow_root` / `el.template_contents` — and is
+    // intentionally absent from the light `children` list. Its back-pointer is
+    // still authoritative; treating it as "stale" here would `clear_parent` the
+    // host link that connectivity (`isConnected`) and the `.host` accessor rely
+    // on. Honor it without scanning.
+    if is_retained_subtree_root(&parent, target) {
+        return Some(parent);
+    }
     // Safety net: the pointer is set but no longer lists `target` (a move that
     // missed a maintenance site). Scan once and repair so we self-correct.
     let found = find_parent_scan(root, target);
@@ -141,6 +150,24 @@ pub(crate) fn find_parent(root: &NodePtr, target: &NodePtr) -> Option<NodePtr> {
         None => crate::dom::clear_parent(target),
     }
     found
+}
+
+/// True when `target` is `parent`'s shadow root or template content fragment —
+/// retained via a dedicated field rather than the light `children` list, but a
+/// legitimate (non-stale) parent relationship.
+fn is_retained_subtree_root(parent: &NodePtr, target: &NodePtr) -> bool {
+    match &*parent.borrow() {
+        Node::Element(el) => {
+            el.shadow_root
+                .as_ref()
+                .is_some_and(|root| Rc::ptr_eq(root, target))
+                || el
+                    .template_contents
+                    .as_ref()
+                    .is_some_and(|content| Rc::ptr_eq(content, target))
+        }
+        _ => false,
+    }
 }
 
 fn is_direct_child(parent: &NodePtr, target: &NodePtr) -> bool {
