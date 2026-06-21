@@ -8,6 +8,7 @@ use v8;
 
 pub(super) struct NodeData {
     pub node: NodePtr,
+    #[allow(dead_code)]
     pub blitz_node_id: Option<usize>,
     pub registry: Rc<NodeRegistry>,
     pub document: NodePtr,
@@ -2054,6 +2055,7 @@ fn get_owner_document(
     }
 }
 
+#[allow(dead_code)]
 fn node_add_event_listener(
     scope: &mut v8::PinScope<'_, '_>,
     args: v8::FunctionCallbackArguments,
@@ -2074,6 +2076,7 @@ fn node_add_event_listener(
         .add_event_listener(node_id, event_type, callback_global);
 }
 
+#[allow(dead_code)]
 fn node_remove_event_listener(
     scope: &mut v8::PinScope<'_, '_>,
     args: v8::FunctionCallbackArguments,

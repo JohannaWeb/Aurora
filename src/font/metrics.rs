@@ -4,6 +4,7 @@ pub fn get_glyph_metrics(ch: char) -> Option<crate::atlas::GlyphMetrics> {
     get_glyph_atlas().get_glyph(ch)
 }
 
+#[allow(dead_code)]
 pub fn measure_text(text: &str, font_size: f32) -> f32 {
     text.chars().count() as f32 * font_size
 }

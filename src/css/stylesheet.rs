@@ -83,6 +83,7 @@ impl Stylesheet {
         )
     }
 
+    #[allow(dead_code)]
     pub fn parse(source: &str) -> Self {
         Self::parse_with_origin(source, Origin::Author)
     }

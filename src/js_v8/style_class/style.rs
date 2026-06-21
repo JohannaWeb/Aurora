@@ -1,6 +1,6 @@
 use crate::css::parse_style_text;
 use crate::dom::{Node, NodePtr};
-use crate::js_v8::node_create::{NodeData, create_js_node};
+use crate::js_v8::node_create::NodeData;
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::rc::Rc;
@@ -261,7 +261,7 @@ fn install_style_property_accessor<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     template: v8::Local<v8::ObjectTemplate>,
     js_name: &str,
-    css_name: &'static str,
+    _css_name: &'static str,
     data: v8::Local<'s, v8::External>,
 ) {
     // V8 accessors don't easily support capturing extra data like the property name

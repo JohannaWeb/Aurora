@@ -99,6 +99,7 @@ pub(crate) fn collect_by_tag(node: &NodePtr, tag: &str, out: &mut Vec<NodePtr>) 
     }
 }
 
+#[allow(dead_code)]
 pub(crate) fn collect_by_class(node: &NodePtr, class: &str, out: &mut Vec<NodePtr>) {
     let b = node.borrow();
     match &*b {

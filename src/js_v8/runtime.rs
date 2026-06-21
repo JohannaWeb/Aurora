@@ -123,6 +123,7 @@ struct DocumentData {
 }
 
 impl V8Runtime {
+    #[allow(dead_code)]
     pub(crate) fn new(document: NodePtr) -> Self {
         Self::with_render_document(document, None)
     }

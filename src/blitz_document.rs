@@ -117,6 +117,49 @@ pub struct MirrorMutationTrace {
     pub failure: Option<MirrorMutationFailure>,
 }
 
+/// The descriptive fields a mirror sync op records the same way on both its
+/// failure and success paths. Built once per op instead of being threaded
+/// through two eight-argument telemetry calls. The reported `blitz_node` is
+/// passed separately at each call site because it differs by phase (absent on a
+/// missing-mapping failure) and by op (e.g. `sync_insert_before` resolves the
+/// parent's id but reports the inserted child's). A few ops also record a
+/// different `legacy_node` subject on failure than on success; those override
+/// just that field on the failure path via `MirrorOp { legacy_node, ..op }`.
+#[derive(Clone, Copy)]
+struct MirrorOp {
+    op_name: &'static str,
+    legacy_node: Option<usize>,
+    parent: Option<usize>,
+    child: Option<usize>,
+    shadow_root: bool,
+}
+
+impl MirrorOp {
+    /// A mutation on a single node (attribute/text ops): the node is the
+    /// subject, its parent is recorded for context, no `child`.
+    fn for_node(op_name: &'static str, node: &NodePtr) -> Self {
+        MirrorOp {
+            op_name,
+            legacy_node: Some(legacy_node_key(node)),
+            parent: crate::dom::parent_ptr(node).map(|p| legacy_node_key(&p)),
+            child: None,
+            shadow_root: is_shadow_root_node(node),
+        }
+    }
+
+    /// A mutation on a parent's whole child list (clear/replace children): the
+    /// parent is both subject and parent context.
+    fn for_parent(op_name: &'static str, parent: &NodePtr) -> Self {
+        MirrorOp {
+            op_name,
+            legacy_node: Some(legacy_node_key(parent)),
+            parent: Some(legacy_node_key(parent)),
+            child: None,
+            shadow_root: is_shadow_root_node(parent),
+        }
+    }
+}
+
 /// Border-box geometry of a DOM node from the Blitz/Stylo layout, in
 /// document-relative (pre-scroll) coordinates. Backs the JS layout accessors.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
@@ -270,6 +313,7 @@ impl BlitzDocument {
     }
 
     #[cfg(debug_assertions)]
+    #[allow(dead_code)]
     pub fn validate_mirror_integrity(&self) -> Result<(), MirrorIntegrityError> {
         self.validate_mirror_integrity_for("manual validation")
     }
@@ -564,26 +608,21 @@ impl BlitzDocument {
         Ok(())
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn record_mirror_mutation(
         &mut self,
-        op_name: &'static str,
-        legacy_node: Option<usize>,
+        op: &MirrorOp,
         blitz_node: Option<usize>,
-        parent: Option<usize>,
-        child: Option<usize>,
-        shadow_root: bool,
         result: MirrorMutationResult,
         failure: Option<MirrorMutationFailure>,
     ) {
         let trace = MirrorMutationTrace {
             op_id: self.next_mirror_op_id,
-            op_name,
-            legacy_node,
+            op_name: op.op_name,
+            legacy_node: op.legacy_node,
             blitz_node,
-            parent,
-            child,
-            shadow_root,
+            parent: op.parent,
+            child: op.child,
+            shadow_root: op.shadow_root,
             result,
             failure,
         };
@@ -597,27 +636,17 @@ impl BlitzDocument {
         self.last_mirror_mutation = Some(trace);
     }
 
-    #[allow(clippy::too_many_arguments)]
-    fn finish_mirror_mutation(
-        &mut self,
-        op_name: &'static str,
-        legacy_node: Option<usize>,
-        blitz_node: Option<usize>,
-        parent: Option<usize>,
-        child: Option<usize>,
-        shadow_root: bool,
-        updated: bool,
-    ) {
+    fn record_mirror_failure(&mut self, op: &MirrorOp, failure: MirrorMutationFailure) {
+        self.record_mirror_mutation(op, None, MirrorMutationResult::Failed, Some(failure));
+    }
+
+    fn finish_mirror_mutation(&mut self, op: &MirrorOp, blitz_node: Option<usize>, updated: bool) {
         if updated {
             self.consecutive_panics = 0;
-            let validation_failed = self.debug_validate_mirror_after(op_name).is_err();
+            let validation_failed = self.debug_validate_mirror_after(op.op_name).is_err();
             self.record_mirror_mutation(
-                op_name,
-                legacy_node,
+                op,
                 blitz_node,
-                parent,
-                child,
-                shadow_root,
                 if validation_failed {
                     MirrorMutationResult::Failed
                 } else {
@@ -627,12 +656,8 @@ impl BlitzDocument {
             );
         } else {
             self.record_mirror_mutation(
-                op_name,
-                legacy_node,
+                op,
                 blitz_node,
-                parent,
-                child,
-                shadow_root,
                 MirrorMutationResult::Failed,
                 Some(MirrorMutationFailure::SyncOperationFailed),
             );
@@ -643,6 +668,7 @@ impl BlitzDocument {
         self.blitz_to_legacy.get(&node_id).cloned()
     }
 
+    #[allow(dead_code)]
     pub fn query_selector_dom(&self, selector: &str, start: &NodePtr) -> Option<NodePtr> {
         let start_id = self.blitz_node_id_for_dom(start)?;
         self.inner
@@ -654,6 +680,7 @@ impl BlitzDocument {
             .find(|node| is_element_node(node) && query_can_see(start, node))
     }
 
+    #[allow(dead_code)]
     pub fn query_selector_all_dom(&self, selector: &str, start: &NodePtr) -> Option<Vec<NodePtr>> {
         let start_id = self.blitz_node_id_for_dom(start)?;
         let nodes = self
@@ -668,6 +695,7 @@ impl BlitzDocument {
         Some(nodes)
     }
 
+    #[allow(dead_code)]
     pub fn get_element_by_id_dom(&self, id: &str) -> Option<NodePtr> {
         self.inner
             .get_element_by_id(id)
@@ -682,6 +710,7 @@ impl BlitzDocument {
         Some(out)
     }
 
+    #[allow(dead_code)]
     pub fn selector_matches_dom(&self, node: &NodePtr, selector: &str) -> Option<bool> {
         let node_id = self.blitz_node_id_for_dom(node)?;
         Some(
@@ -693,6 +722,7 @@ impl BlitzDocument {
         )
     }
 
+    #[allow(dead_code)]
     pub fn closest_dom(&self, node: &NodePtr, selector: &str) -> Option<Option<NodePtr>> {
         let mut current = self.blitz_node_id_for_dom(node)?;
         let matches = self.inner.query_selector_all(selector).ok()?;
@@ -756,6 +786,7 @@ impl BlitzDocument {
         })
     }
 
+    #[allow(dead_code)]
     fn blitz_is_descendant_or_self(&self, mut node_id: usize, ancestor_id: usize) -> bool {
         loop {
             if node_id == ancestor_id {
@@ -793,18 +824,19 @@ impl BlitzDocument {
         }
     }
 
+    #[allow(dead_code)]
     pub fn sync_append_child(&mut self, parent: &NodePtr, child: &NodePtr) -> bool {
-        let op_name = "sync_append_child";
+        let op = MirrorOp {
+            op_name: "sync_append_child",
+            legacy_node: Some(legacy_node_key(child)),
+            parent: Some(legacy_node_key(parent)),
+            child: Some(legacy_node_key(child)),
+            shadow_root: is_shadow_root_node(child),
+        };
         let Some(parent_id) = self.blitz_node_id_for_dom(parent) else {
-            self.record_mirror_mutation(
-                op_name,
-                Some(legacy_node_key(parent)),
-                None,
-                Some(legacy_node_key(parent)),
-                Some(legacy_node_key(child)),
-                is_shadow_root_node(child),
-                MirrorMutationResult::Failed,
-                Some(MirrorMutationFailure::MissingMapping),
+            self.record_mirror_failure(
+                &MirrorOp { legacy_node: Some(legacy_node_key(parent)), ..op },
+                MirrorMutationFailure::MissingMapping,
             );
             return false;
         };
@@ -827,15 +859,7 @@ impl BlitzDocument {
         })
         .unwrap_or(false);
         let child_id = self.blitz_node_id_for_dom(child);
-        self.finish_mirror_mutation(
-            op_name,
-            Some(legacy_node_key(child)),
-            child_id,
-            Some(legacy_node_key(parent)),
-            Some(legacy_node_key(child)),
-            is_shadow_root_node(child),
-            updated,
-        );
+        self.finish_mirror_mutation(&op, child_id, updated);
         updated
     }
 
@@ -845,17 +869,17 @@ impl BlitzDocument {
         new_child: &NodePtr,
         ref_child: Option<&NodePtr>,
     ) -> bool {
-        let op_name = "sync_insert_before";
+        let op = MirrorOp {
+            op_name: "sync_insert_before",
+            legacy_node: Some(legacy_node_key(new_child)),
+            parent: Some(legacy_node_key(parent)),
+            child: Some(legacy_node_key(new_child)),
+            shadow_root: is_shadow_root_node(new_child),
+        };
         let Some(parent_id) = self.blitz_node_id_for_dom(parent) else {
-            self.record_mirror_mutation(
-                op_name,
-                Some(legacy_node_key(parent)),
-                None,
-                Some(legacy_node_key(parent)),
-                Some(legacy_node_key(new_child)),
-                is_shadow_root_node(new_child),
-                MirrorMutationResult::Failed,
-                Some(MirrorMutationFailure::MissingMapping),
+            self.record_mirror_failure(
+                &MirrorOp { legacy_node: Some(legacy_node_key(parent)), ..op },
+                MirrorMutationFailure::MissingMapping,
             );
             return false;
         };
@@ -883,34 +907,22 @@ impl BlitzDocument {
         })
         .unwrap_or(false);
         let child_id = self.blitz_node_id_for_dom(new_child);
-        self.finish_mirror_mutation(
-            op_name,
-            Some(legacy_node_key(new_child)),
-            child_id,
-            Some(legacy_node_key(parent)),
-            Some(legacy_node_key(new_child)),
-            is_shadow_root_node(new_child),
-            updated,
-        );
+        self.finish_mirror_mutation(&op, child_id, updated);
         updated
     }
 
     pub fn sync_remove_child(&mut self, child: &NodePtr) -> bool {
-        let op_name = "sync_remove_child";
+        let op = MirrorOp {
+            op_name: "sync_remove_child",
+            legacy_node: Some(legacy_node_key(child)),
+            parent: crate::dom::parent_ptr(child).map(|parent| legacy_node_key(&parent)),
+            child: Some(legacy_node_key(child)),
+            shadow_root: is_shadow_root_node(child),
+        };
         let Some(child_id) = self.blitz_node_id_for_dom(child) else {
-            self.record_mirror_mutation(
-                op_name,
-                Some(legacy_node_key(child)),
-                None,
-                crate::dom::parent_ptr(child).map(|parent| legacy_node_key(&parent)),
-                Some(legacy_node_key(child)),
-                is_shadow_root_node(child),
-                MirrorMutationResult::Failed,
-                Some(MirrorMutationFailure::MissingMapping),
-            );
+            self.record_mirror_failure(&op, MirrorMutationFailure::MissingMapping);
             return false;
         };
-        let parent_key = crate::dom::parent_ptr(child).map(|parent| legacy_node_key(&parent));
         let updated = catch_stylo_panic("removing DOM mutation from Blitz document", || {
             let mut mutator = self.inner.mutate();
             mutator.remove_node(child_id);
@@ -920,35 +932,28 @@ impl BlitzDocument {
         if updated {
             remove_subtree_mapping(child, &mut self.legacy_to_blitz, &mut self.blitz_to_legacy);
         }
-        self.finish_mirror_mutation(
-            op_name,
-            Some(legacy_node_key(child)),
-            Some(child_id),
-            parent_key,
-            Some(legacy_node_key(child)),
-            is_shadow_root_node(child),
-            updated,
-        );
+        self.finish_mirror_mutation(&op, Some(child_id), updated);
         updated
     }
 
+    #[allow(dead_code)]
     pub fn sync_replace_child(
         &mut self,
         parent: &NodePtr,
         new_child: &NodePtr,
         old_child: &NodePtr,
     ) -> bool {
-        let op_name = "sync_replace_child";
+        let op = MirrorOp {
+            op_name: "sync_replace_child",
+            legacy_node: Some(legacy_node_key(new_child)),
+            parent: Some(legacy_node_key(parent)),
+            child: Some(legacy_node_key(new_child)),
+            shadow_root: is_shadow_root_node(new_child) || is_shadow_root_node(old_child),
+        };
         let Some(old_id) = self.blitz_node_id_for_dom(old_child) else {
-            self.record_mirror_mutation(
-                op_name,
-                Some(legacy_node_key(old_child)),
-                None,
-                Some(legacy_node_key(parent)),
-                Some(legacy_node_key(new_child)),
-                is_shadow_root_node(new_child) || is_shadow_root_node(old_child),
-                MirrorMutationResult::Failed,
-                Some(MirrorMutationFailure::MissingMapping),
+            self.record_mirror_failure(
+                &MirrorOp { legacy_node: Some(legacy_node_key(old_child)), ..op },
+                MirrorMutationFailure::MissingMapping,
             );
             return false;
         };
@@ -981,31 +986,14 @@ impl BlitzDocument {
             );
         }
         let new_id = self.blitz_node_id_for_dom(new_child);
-        self.finish_mirror_mutation(
-            op_name,
-            Some(legacy_node_key(new_child)),
-            new_id.or(Some(old_id)),
-            Some(legacy_node_key(parent)),
-            Some(legacy_node_key(new_child)),
-            is_shadow_root_node(new_child) || is_shadow_root_node(old_child),
-            updated,
-        );
+        self.finish_mirror_mutation(&op, new_id.or(Some(old_id)), updated);
         updated
     }
 
     pub fn sync_set_attribute(&mut self, node: &NodePtr, name: &str, value: &str) -> bool {
-        let op_name = "sync_set_attribute";
+        let op = MirrorOp::for_node("sync_set_attribute", node);
         let Some(node_id) = self.blitz_node_id_for_dom(node) else {
-            self.record_mirror_mutation(
-                op_name,
-                Some(legacy_node_key(node)),
-                None,
-                crate::dom::parent_ptr(node).map(|parent| legacy_node_key(&parent)),
-                None,
-                is_shadow_root_node(node),
-                MirrorMutationResult::Failed,
-                Some(MirrorMutationFailure::MissingMapping),
-            );
+            self.record_mirror_failure(&op, MirrorMutationFailure::MissingMapping);
             return false;
         };
         let updated = catch_stylo_panic("setting DOM attribute in Blitz document", || {
@@ -1014,31 +1002,14 @@ impl BlitzDocument {
             true
         })
         .unwrap_or(false);
-        self.finish_mirror_mutation(
-            op_name,
-            Some(legacy_node_key(node)),
-            Some(node_id),
-            crate::dom::parent_ptr(node).map(|parent| legacy_node_key(&parent)),
-            None,
-            is_shadow_root_node(node),
-            updated,
-        );
+        self.finish_mirror_mutation(&op, Some(node_id), updated);
         updated
     }
 
     pub fn sync_remove_attribute(&mut self, node: &NodePtr, name: &str) -> bool {
-        let op_name = "sync_remove_attribute";
+        let op = MirrorOp::for_node("sync_remove_attribute", node);
         let Some(node_id) = self.blitz_node_id_for_dom(node) else {
-            self.record_mirror_mutation(
-                op_name,
-                Some(legacy_node_key(node)),
-                None,
-                crate::dom::parent_ptr(node).map(|parent| legacy_node_key(&parent)),
-                None,
-                is_shadow_root_node(node),
-                MirrorMutationResult::Failed,
-                Some(MirrorMutationFailure::MissingMapping),
-            );
+            self.record_mirror_failure(&op, MirrorMutationFailure::MissingMapping);
             return false;
         };
         let updated = catch_stylo_panic("removing DOM attribute from Blitz document", || {
@@ -1047,41 +1018,20 @@ impl BlitzDocument {
             true
         })
         .unwrap_or(false);
-        self.finish_mirror_mutation(
-            op_name,
-            Some(legacy_node_key(node)),
-            Some(node_id),
-            crate::dom::parent_ptr(node).map(|parent| legacy_node_key(&parent)),
-            None,
-            is_shadow_root_node(node),
-            updated,
-        );
+        self.finish_mirror_mutation(&op, Some(node_id), updated);
         updated
     }
 
     pub fn sync_all_attributes(&mut self, node: &NodePtr) -> bool {
-        let op_name = "sync_all_attributes";
+        let op = MirrorOp::for_node("sync_all_attributes", node);
         let Some(node_id) = self.blitz_node_id_for_dom(node) else {
-            self.record_mirror_mutation(
-                op_name,
-                Some(legacy_node_key(node)),
-                None,
-                crate::dom::parent_ptr(node).map(|parent| legacy_node_key(&parent)),
-                None,
-                is_shadow_root_node(node),
-                MirrorMutationResult::Failed,
-                Some(MirrorMutationFailure::MissingMapping),
-            );
+            self.record_mirror_failure(&op, MirrorMutationFailure::MissingMapping);
             return false;
         };
         let Ok(node_borrow) = node.try_borrow() else {
             self.record_mirror_mutation(
-                op_name,
-                Some(legacy_node_key(node)),
+                &op,
                 Some(node_id),
-                crate::dom::parent_ptr(node).map(|parent| legacy_node_key(&parent)),
-                None,
-                is_shadow_root_node(node),
                 MirrorMutationResult::Failed,
                 Some(MirrorMutationFailure::SyncOperationFailed),
             );
@@ -1142,31 +1092,14 @@ impl BlitzDocument {
             true
         })
         .unwrap_or(false);
-        self.finish_mirror_mutation(
-            op_name,
-            Some(legacy_node_key(node)),
-            Some(node_id),
-            crate::dom::parent_ptr(node).map(|parent| legacy_node_key(&parent)),
-            None,
-            is_shadow_root_node(node),
-            updated,
-        );
+        self.finish_mirror_mutation(&op, Some(node_id), updated);
         updated
     }
 
     pub fn sync_text_node(&mut self, node: &NodePtr, text: &str) -> bool {
-        let op_name = "sync_text_node";
+        let op = MirrorOp::for_node("sync_text_node", node);
         let Some(node_id) = self.blitz_node_id_for_dom(node) else {
-            self.record_mirror_mutation(
-                op_name,
-                Some(legacy_node_key(node)),
-                None,
-                crate::dom::parent_ptr(node).map(|parent| legacy_node_key(&parent)),
-                None,
-                is_shadow_root_node(node),
-                MirrorMutationResult::Failed,
-                Some(MirrorMutationFailure::MissingMapping),
-            );
+            self.record_mirror_failure(&op, MirrorMutationFailure::MissingMapping);
             return false;
         };
         let updated = catch_stylo_panic("setting DOM text in Blitz document", || {
@@ -1175,15 +1108,7 @@ impl BlitzDocument {
             true
         })
         .unwrap_or(false);
-        self.finish_mirror_mutation(
-            op_name,
-            Some(legacy_node_key(node)),
-            Some(node_id),
-            crate::dom::parent_ptr(node).map(|parent| legacy_node_key(&parent)),
-            None,
-            is_shadow_root_node(node),
-            updated,
-        );
+        self.finish_mirror_mutation(&op, Some(node_id), updated);
         updated
     }
 
@@ -1193,18 +1118,15 @@ impl BlitzDocument {
         shadow_root: &NodePtr,
         mode: &str,
     ) -> bool {
-        let op_name = "sync_attach_shadow_root";
+        let op = MirrorOp {
+            op_name: "sync_attach_shadow_root",
+            legacy_node: Some(legacy_node_key(shadow_root)),
+            parent: Some(legacy_node_key(host)),
+            child: Some(legacy_node_key(shadow_root)),
+            shadow_root: true,
+        };
         let Some(host_id) = self.blitz_node_id_for_dom(host) else {
-            self.record_mirror_mutation(
-                op_name,
-                Some(legacy_node_key(shadow_root)),
-                None,
-                Some(legacy_node_key(host)),
-                Some(legacy_node_key(shadow_root)),
-                true,
-                MirrorMutationResult::Failed,
-                Some(MirrorMutationFailure::MissingMapping),
-            );
+            self.record_mirror_failure(&op, MirrorMutationFailure::MissingMapping);
             return false;
         };
         let host_ns = self.node_namespace(host_id).unwrap_or_else(|| ns!(html));
@@ -1265,31 +1187,14 @@ impl BlitzDocument {
         })
         .unwrap_or(false);
         let shadow_id = self.blitz_node_id_for_dom(shadow_root);
-        self.finish_mirror_mutation(
-            op_name,
-            Some(legacy_node_key(shadow_root)),
-            shadow_id,
-            Some(legacy_node_key(host)),
-            Some(legacy_node_key(shadow_root)),
-            true,
-            updated,
-        );
+        self.finish_mirror_mutation(&op, shadow_id, updated);
         updated
     }
 
     pub fn sync_clear_children(&mut self, parent: &NodePtr) -> bool {
-        let op_name = "sync_clear_children";
+        let op = MirrorOp::for_parent("sync_clear_children", parent);
         let Some(parent_id) = self.blitz_node_id_for_dom(parent) else {
-            self.record_mirror_mutation(
-                op_name,
-                Some(legacy_node_key(parent)),
-                None,
-                Some(legacy_node_key(parent)),
-                None,
-                is_shadow_root_node(parent),
-                MirrorMutationResult::Failed,
-                Some(MirrorMutationFailure::MissingMapping),
-            );
+            self.record_mirror_failure(&op, MirrorMutationFailure::MissingMapping);
             return false;
         };
         remove_subtree_mappings_for_children(
@@ -1303,31 +1208,14 @@ impl BlitzDocument {
             true
         })
         .unwrap_or(false);
-        self.finish_mirror_mutation(
-            op_name,
-            Some(legacy_node_key(parent)),
-            Some(parent_id),
-            Some(legacy_node_key(parent)),
-            None,
-            is_shadow_root_node(parent),
-            updated,
-        );
+        self.finish_mirror_mutation(&op, Some(parent_id), updated);
         updated
     }
 
     pub fn sync_replace_children(&mut self, parent: &NodePtr) -> bool {
-        let op_name = "sync_replace_children";
+        let op = MirrorOp::for_parent("sync_replace_children", parent);
         let Some(parent_id) = self.blitz_node_id_for_dom(parent) else {
-            self.record_mirror_mutation(
-                op_name,
-                Some(legacy_node_key(parent)),
-                None,
-                Some(legacy_node_key(parent)),
-                None,
-                is_shadow_root_node(parent),
-                MirrorMutationResult::Failed,
-                Some(MirrorMutationFailure::MissingMapping),
-            );
+            self.record_mirror_failure(&op, MirrorMutationFailure::MissingMapping);
             return false;
         };
         let parent_ns = self.node_namespace(parent_id).unwrap_or_else(|| ns!(html));
@@ -1373,15 +1261,7 @@ impl BlitzDocument {
             true
         })
         .unwrap_or(false);
-        self.finish_mirror_mutation(
-            op_name,
-            Some(legacy_node_key(parent)),
-            Some(parent_id),
-            Some(legacy_node_key(parent)),
-            None,
-            is_shadow_root_node(parent),
-            updated,
-        );
+        self.finish_mirror_mutation(&op, Some(parent_id), updated);
         updated
     }
 

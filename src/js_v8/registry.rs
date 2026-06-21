@@ -181,6 +181,7 @@ impl NodeRegistry {
             .and_then(|doc| doc.borrow().dom_node_for_blitz_id(node_id))
     }
 
+    #[allow(dead_code)]
     pub(super) fn query_selector_dom(&self, selector: &str, start: &NodePtr) -> Option<NodePtr> {
         self.render_document
             .borrow()
@@ -188,6 +189,7 @@ impl NodeRegistry {
             .and_then(|doc| doc.borrow().query_selector_dom(selector, start))
     }
 
+    #[allow(dead_code)]
     pub(super) fn query_selector_all_dom(
         &self,
         selector: &str,
@@ -199,6 +201,7 @@ impl NodeRegistry {
             .and_then(|doc| doc.borrow().query_selector_all_dom(selector, start))
     }
 
+    #[allow(dead_code)]
     pub(super) fn get_element_by_id_dom(&self, id: &str) -> Option<NodePtr> {
         self.render_document
             .borrow()
@@ -213,6 +216,7 @@ impl NodeRegistry {
             .and_then(|doc| doc.borrow().collect_by_tag_dom(tag, start))
     }
 
+    #[allow(dead_code)]
     pub(super) fn selector_matches_dom(&self, node: &NodePtr, selector: &str) -> Option<bool> {
         self.render_document
             .borrow()
@@ -220,6 +224,7 @@ impl NodeRegistry {
             .and_then(|doc| doc.borrow().selector_matches_dom(node, selector))
     }
 
+    #[allow(dead_code)]
     pub(super) fn closest_dom(&self, node: &NodePtr, selector: &str) -> Option<Option<NodePtr>> {
         self.render_document
             .borrow()
@@ -227,6 +232,7 @@ impl NodeRegistry {
             .and_then(|doc| doc.borrow().closest_dom(node, selector))
     }
 
+    #[allow(dead_code)]
     pub(super) fn sync_append_child_to_render_document(
         &self,
         parent: &NodePtr,
@@ -268,6 +274,7 @@ impl NodeRegistry {
             .is_none_or(|render_document| render_document.borrow_mut().sync_remove_child(child))
     }
 
+    #[allow(dead_code)]
     pub(super) fn sync_replace_child_in_render_document(
         &self,
         parent: &NodePtr,
@@ -422,6 +429,7 @@ impl NodeRegistry {
             .insert(id, v8::Global::new(scope, object));
     }
 
+    #[allow(dead_code)]
     pub(super) fn node_id(&self, node: &NodePtr) -> Option<u32> {
         let key = Rc::as_ptr(node) as usize;
         self.reverse_nodes.borrow().get(&key).copied()

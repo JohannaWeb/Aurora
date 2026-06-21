@@ -1,4 +1,5 @@
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct RasterGlyph {
     pub width: u32,
     pub height: u32,
@@ -15,6 +16,7 @@ pub struct PositionedGlyph {
 }
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct TextRun {
     pub glyphs: Vec<PositionedGlyph>,
     pub width: f32,

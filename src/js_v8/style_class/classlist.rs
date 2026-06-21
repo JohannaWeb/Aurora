@@ -1,5 +1,5 @@
 use crate::dom::{Node, NodePtr};
-use crate::js_v8::node_create::{NodeData, create_js_node};
+use crate::js_v8::node_create::NodeData;
 use std::collections::BTreeSet;
 use v8;
 

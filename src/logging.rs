@@ -3,9 +3,9 @@ use std::fs;
 use std::sync::{Mutex, OnceLock};
 
 struct CompatTracker {
-    missing_apis: HashMap<String, u32>,
+    _missing_apis: HashMap<String, u32>,
     js_exceptions: HashMap<String, u32>,
-    unsupported_css: HashMap<String, u32>,
+    _unsupported_css: HashMap<String, u32>,
 }
 
 static COMPAT: OnceLock<Mutex<CompatTracker>> = OnceLock::new();
@@ -13,19 +13,20 @@ static COMPAT: OnceLock<Mutex<CompatTracker>> = OnceLock::new();
 fn compat() -> &'static Mutex<CompatTracker> {
     COMPAT.get_or_init(|| {
         Mutex::new(CompatTracker {
-            missing_apis: HashMap::new(),
+            _missing_apis: HashMap::new(),
             js_exceptions: HashMap::new(),
-            unsupported_css: HashMap::new(),
+            _unsupported_css: HashMap::new(),
         })
     })
 }
 
 /// Call when a Web API stub is invoked. Logs the first occurrence at WARN;
 /// all occurrences are counted for the shutdown summary.
+#[allow(dead_code)]
 pub fn track_missing_api(name: &str) {
     let is_first = {
         let mut t = compat().lock().unwrap();
-        let c = t.missing_apis.entry(name.to_string()).or_insert(0);
+        let c = t._missing_apis.entry(name.to_string()).or_insert(0);
         *c += 1;
         *c == 1
     };
@@ -52,10 +53,11 @@ pub fn track_js_exception(msg: &str) {
 }
 
 /// Call when the CSS engine encounters an unsupported feature.
+#[allow(dead_code)]
 pub fn track_css_unsupported(feature: &str) {
     let is_first = {
         let mut t = compat().lock().unwrap();
-        let c = t.unsupported_css.entry(feature.to_string()).or_insert(0);
+        let c = t._unsupported_css.entry(feature.to_string()).or_insert(0);
         *c += 1;
         *c == 1
     };
@@ -65,17 +67,18 @@ pub fn track_css_unsupported(feature: &str) {
 }
 
 /// Print the full deduped compatibility summary to stderr. Call once at shutdown.
+#[allow(dead_code)]
 pub fn print_compat_summary() {
     let t = compat().lock().unwrap();
-    if t.missing_apis.is_empty() && t.js_exceptions.is_empty() && t.unsupported_css.is_empty() {
+    if t._missing_apis.is_empty() && t.js_exceptions.is_empty() && t._unsupported_css.is_empty() {
         return;
     }
 
     eprintln!("\n=== Aurora compatibility summary ===");
 
-    if !t.missing_apis.is_empty() {
+    if !t._missing_apis.is_empty() {
         eprintln!("Missing Web APIs:");
-        let mut v: Vec<_> = t.missing_apis.iter().collect();
+        let mut v: Vec<_> = t._missing_apis.iter().collect();
         v.sort_by(|a, b| b.1.cmp(a.1));
         for (name, count) in v {
             eprintln!("  {} x{}", name, count);
@@ -91,9 +94,9 @@ pub fn print_compat_summary() {
         }
     }
 
-    if !t.unsupported_css.is_empty() {
+    if !t._unsupported_css.is_empty() {
         eprintln!("Unsupported CSS:");
-        let mut v: Vec<_> = t.unsupported_css.iter().collect();
+        let mut v: Vec<_> = t._unsupported_css.iter().collect();
         v.sort_by(|a, b| b.1.cmp(a.1));
         for (feat, count) in v {
             eprintln!("  {} x{}", feat, count);
@@ -101,6 +104,7 @@ pub fn print_compat_summary() {
     }
 }
 
+#[allow(dead_code)]
 pub fn init() {
     let _ = fs::create_dir_all("logs");
     let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S").to_string();

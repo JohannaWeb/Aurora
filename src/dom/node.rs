@@ -178,6 +178,7 @@ impl Node {
     }
 
     /// Create a document node wrapping top-level child nodes.
+    #[allow(dead_code)]
     pub fn document(children: Vec<NodePtr>) -> NodePtr {
         Self::document_with_mode(children, DocumentMode::NoQuirks)
     }

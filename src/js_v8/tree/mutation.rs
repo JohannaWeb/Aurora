@@ -451,6 +451,7 @@ pub(crate) fn collect_text(node: &NodePtr) -> String {
     }
 }
 
+#[allow(dead_code)]
 pub(crate) fn set_text_content(node: &NodePtr, text: &str) {
     match &mut *node.borrow_mut() {
         Node::Element(el) => el.children = vec![Node::text(text.to_string())],

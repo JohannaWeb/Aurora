@@ -152,7 +152,7 @@ impl ShadowTreeBackend for SyntheticShadowTreeBackend {
     }
 
     fn composed_children(&self, node: &NodePtr) -> Vec<NodePtr> {
-        let (tag_name, shadow_root, template_contents, children, assigned_nodes) = {
+        let (tag_name, shadow_root, _template_contents, children, assigned_nodes) = {
             let node_borrow = node.borrow();
             match &*node_borrow {
                 Node::Element(el) => (

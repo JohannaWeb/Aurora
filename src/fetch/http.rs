@@ -59,6 +59,7 @@ static CLIENT: LazyLock<Client> = LazyLock::new(|| {
 // Global token bucket: at most one outgoing request every 150 ms.
 // Blitz spawns one thread per image, so without this every image fires simultaneously
 // and upload.wikimedia.org immediately 429s the whole batch.
+#[allow(dead_code)]
 static LAST_REQUEST: LazyLock<Mutex<Instant>> = LazyLock::new(|| {
     Mutex::new(
         Instant::now()
@@ -223,6 +224,7 @@ pub fn fetch_string(url: &str) -> Result<String, FetchError> {
     Ok(String::from_utf8_lossy(&bytes).into_owned())
 }
 
+#[allow(dead_code)]
 pub fn fetch_string_with_method(
     url: &str,
     method: &str,

@@ -16,12 +16,14 @@ pub use shadow::{ShadowTreeBackend, SyntheticShadowTreeBackend};
 
 /// Serialize an SVG DOM node back to an SVG markup string.
 /// Used by the painter to render inline `<svg>` elements via usvg.
+#[allow(dead_code)]
 pub fn serialize_svg_node(node: &NodePtr) -> String {
     let mut out = String::new();
     serialize_node(node, &mut out);
     out
 }
 
+#[allow(dead_code)]
 fn serialize_node(node: &NodePtr, out: &mut String) {
     match &*node.borrow() {
         Node::Element(el) => {
@@ -57,6 +59,7 @@ fn serialize_node(node: &NodePtr, out: &mut String) {
     }
 }
 
+#[allow(dead_code)]
 fn html_escape(s: &str) -> String {
     s.replace('&', "&amp;")
         .replace('<', "&lt;")

@@ -3,6 +3,7 @@ use ab_glyph::{Font, PxScale};
 use super::glyph::RasterGlyph;
 use super::resources::get_ab_font;
 
+#[allow(dead_code)]
 pub fn rasterize_glyph(ch: char, font_size: f32) -> Option<RasterGlyph> {
     if ch == ' ' || ch == '\n' || ch == '\t' {
         return None;

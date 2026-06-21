@@ -11,5 +11,6 @@ mod shape;
 pub use glyph::{PositionedGlyph, RasterGlyph, TextRun};
 #[allow(unused_imports)]
 pub use metrics::{get_atlas_texture, get_glyph_metrics, measure_text};
+#[allow(unused_imports)]
 pub use raster::rasterize_glyph;
 pub use shape::layout_text_run;
