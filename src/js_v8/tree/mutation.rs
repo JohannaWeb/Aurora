@@ -87,6 +87,7 @@ pub(crate) fn apply_dom_mutation(
             let inserted_nodes = insertion_nodes(child);
             let added_ids = node_ids(registry, &inserted_nodes);
             append_child_ptr(parent, child);
+            enqueue_connected_reactions(registry, &inserted_nodes);
             let render_synced =
                 sync_inserted_nodes_to_render_document(registry, parent, &inserted_nodes);
             if render_synced {
@@ -107,6 +108,7 @@ pub(crate) fn apply_dom_mutation(
             let inserted_nodes = insertion_nodes(child);
             let added_ids = node_ids(registry, &inserted_nodes);
             prepend_child_ptr(parent, child);
+            enqueue_connected_reactions(registry, &inserted_nodes);
             let render_synced =
                 sync_inserted_nodes_to_render_document(registry, parent, &inserted_nodes);
             if render_synced {
@@ -131,6 +133,7 @@ pub(crate) fn apply_dom_mutation(
             let inserted_nodes = insertion_nodes(new_child);
             let added_ids = node_ids(registry, &inserted_nodes);
             insert_before_ptr(parent, new_child, ref_child);
+            enqueue_connected_reactions(registry, &inserted_nodes);
             let render_synced =
                 sync_inserted_nodes_to_render_document(registry, parent, &inserted_nodes);
             if render_synced {
@@ -347,6 +350,57 @@ pub(crate) fn apply_dom_mutation(
 
 fn insertion_nodes(node: &NodePtr) -> Vec<NodePtr> {
     document_fragment_children(node).unwrap_or_else(|| vec![node.clone()])
+}
+
+/// Phase 2 of the native custom-element-reaction plan: for every connected
+/// custom element in a freshly-inserted subtree, enqueue a `connectedCallback`
+/// reaction. This is the native counterpart to the shadow-including
+/// inclusive-descendant walk in Ladybird's insertion algorithm
+/// (`LibWeb/DOM/Node.cpp:674-714`). Gated by the `AURORA_NATIVE_CE_REACTIONS`
+/// flag; a no-op (early return) when the flag is off.
+fn enqueue_connected_reactions(registry: &Rc<NodeRegistry>, inserted: &[NodePtr]) {
+    if !registry.native_ce_reactions.get() {
+        return;
+    }
+    let document = match registry.document.borrow().clone() {
+        Some(doc) => doc,
+        None => return,
+    };
+    // Tree-order walk: process a node, then push its children/shadow so the
+    // parent's reaction enqueues before its descendants'.
+    let mut stack: Vec<NodePtr> = inserted.iter().rev().cloned().collect();
+    while let Some(node) = stack.pop() {
+        let (tag, children, shadow, template) = match &*node.borrow() {
+            Node::Element(el) => (
+                Some(el.tag_name.clone()),
+                el.children.clone(),
+                el.shadow_root.clone(),
+                el.template_contents.clone(),
+            ),
+            _ => (None, Vec::new(), None, None),
+        };
+        if let Some(tag) = tag {
+            if is_connected_to(&document, &node) {
+                if let Some(definition) = registry.ce_registry.lookup(&tag) {
+                    if let Some(connected) = &definition.connected {
+                        let id = registry.register(node.clone());
+                        registry
+                            .ce_registry
+                            .enqueue_callback(id, connected.clone(), Vec::new());
+                    }
+                }
+            }
+        }
+        if let Some(template) = template {
+            stack.push(template);
+        }
+        if let Some(shadow) = shadow {
+            stack.push(shadow);
+        }
+        for child in children.into_iter().rev() {
+            stack.push(child);
+        }
+    }
 }
 
 fn node_ids(registry: &Rc<NodeRegistry>, nodes: &[NodePtr]) -> Vec<u32> {

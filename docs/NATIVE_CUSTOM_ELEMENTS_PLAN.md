@@ -210,10 +210,19 @@ single authority for what Blitz mirrors.
 1. **Native `CeRegistry` + `define` binding.** Definitions mirror into a native
    registry; JS still drives upgrade. No behavior change — pure plumbing.
    Verified by a unit test that `customElements.define` populates the native
-   registry. **← this PR.**
+   registry. **✅ DONE.**
 2. **Reaction queue + microtask backup drain.** Add the spine; wire
-   `connectedCallback` enqueue into `AppendChild`/`InsertBefore` only, behind a
-   flag, A/B against the JS sweep on the existing `runtime_tests.rs` CE tests.
+   `connectedCallback` enqueue into `AppendChild`/`PrependChild`/`InsertBefore`,
+   behind the `AURORA_NATIVE_CE_REACTIONS` flag (default off), A/B against the JS
+   sweep. **✅ DONE.** `Reaction`/per-element queue/backup queue +
+   `drain_reactions` in `custom_elements.rs`; `enqueue_connected_reactions` walk
+   in `mutation.rs`; drain folded into `deliver_mutation_records` (the
+   microtask-checkpoint phase); JS shim suppresses its own `connectedCallback`
+   fire when the flag is on. Test `v8_native_reactions_fire_connected_callback_once`
+   proves: flag on → no synchronous fire, drain fires exactly once.
+   Not yet done (Phase 2b): the element-queue *stack* for synchronous CEReactions
+   boundaries (only the microtask-drained backup queue exists), and the native
+   *upgrade* reaction (JS still drives upgrade).
 3. **`disconnectedCallback` + `attributeChangedCallback`** in `RemoveChild` /
    `SetAttribute`.
 4. **Native slot composition + `flattened_children`** feeding Blitz; retire the

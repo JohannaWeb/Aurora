@@ -269,6 +269,14 @@ impl V8Runtime {
                 v8_str(scope, "__aurora_ce_is_defined_native").into(),
                 ce_is_defined_fn.get_function(scope).expect("function template yields a function outside of a pending exception").into(),
             );
+            // Phase 2 A/B flag: when native CE reactions are on, the JS shim
+            // suppresses its own connectedCallback firing (the native insertion
+            // path drives it via the reaction queue instead).
+            global.set(
+                scope,
+                v8_str(scope, "__aurora_native_ce_reactions__").into(),
+                v8::Boolean::new(scope, registry.native_ce_reactions.get()).into(),
+            );
             document_obj.set(
                 scope,
                 v8_str(scope, "nodeType").into(),
@@ -1001,6 +1009,32 @@ impl V8Runtime {
     /// Evaluate a script and return its completion value as a string.
     /// Test/diagnostic helper; the `JsRuntime` trait only reports errors.
     #[cfg(test)]
+    /// Toggle the native-custom-element-reactions A/B flag at runtime, updating
+    /// both the native registry and the JS-visible global so the shim's
+    /// suppression check stays in sync. Test-only; production reads the env var
+    /// at construction.
+    #[cfg(test)]
+    pub(crate) fn set_native_ce_reactions(&mut self, on: bool) {
+        self.registry.native_ce_reactions.set(on);
+        v8::scope_with_context!(let scope, &mut self.isolate, &self.context);
+        let context = v8::Local::new(scope, &self.context);
+        let global = context.global(scope);
+        let key = v8_str(scope, "__aurora_native_ce_reactions__");
+        let val = v8::Boolean::new(scope, on);
+        global.set(scope, key.into(), val.into());
+    }
+
+    /// Drain queued native custom-element reactions (Phase 2). Exposed for tests;
+    /// in production it runs as part of the MutationObserver-delivery phase
+    /// (`deliver_mutation_records`).
+    pub(crate) fn drain_custom_element_reactions(&mut self) -> bool {
+        if !self.registry.ce_registry.has_pending_reactions() {
+            return false;
+        }
+        v8::scope_with_context!(let scope, &mut self.isolate, &self.context);
+        super::custom_elements::drain_reactions(scope, &self.registry)
+    }
+
     pub(crate) fn eval_to_string(&mut self, source: &str) -> Result<String, String> {
         v8::scope_with_context!(let scope, &mut self.isolate, &self.context);
         v8::tc_scope!(let scope, scope);
@@ -1981,11 +2015,15 @@ impl crate::js_engine::JsRuntime for V8Runtime {
     }
 
     fn deliver_mutation_records(&mut self) -> bool {
+        // Custom-element reactions are microtasks too; drain them first since a
+        // `connectedCallback` can mutate the DOM and queue MutationObserver
+        // records that should be delivered in the same checkpoint.
+        let reactions = self.drain_custom_element_reactions();
         if !super::mutation_observer::has_pending(&self.registry) {
-            return false;
+            return reactions;
         }
         v8::scope_with_context!(let scope, &mut self.isolate, &self.context);
-        super::mutation_observer::deliver(scope, &self.registry)
+        super::mutation_observer::deliver(scope, &self.registry) || reactions
     }
 
     fn drain_animation_frame_callbacks(&mut self, now: Instant) -> bool {

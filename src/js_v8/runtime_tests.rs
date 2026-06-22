@@ -690,6 +690,52 @@ fn v8_define_mirrors_into_native_registry() {
 }
 
 #[test]
+fn v8_native_reactions_fire_connected_callback_once() {
+    let mut runtime = V8Runtime::new(blank_dom());
+    runtime.set_native_ce_reactions(true);
+
+    // With the native-reactions flag on, appending a custom element should NOT
+    // fire connectedCallback synchronously (it's enqueued as a microtask, like
+    // Ladybird); draining the reaction queue fires it exactly once.
+    assert_eq!(
+        runtime.eval_to_string(
+            r#"
+            (() => {
+            globalThis.__cc_calls__ = 0;
+            class NativeConnect extends HTMLElement {
+                connectedCallback() { globalThis.__cc_calls__++; }
+            }
+            customElements.define('native-connect', NativeConnect);
+            const el = document.createElement('native-connect');
+            document.body.appendChild(el);
+            return String(globalThis.__cc_calls__);
+            })()
+            "#
+        ),
+        Ok("0".to_string()),
+        "connectedCallback must not fire synchronously under native reactions"
+    );
+
+    assert!(
+        runtime.drain_custom_element_reactions(),
+        "drain should report it delivered a reaction"
+    );
+
+    assert_eq!(
+        runtime.eval_to_string("String(globalThis.__cc_calls__)"),
+        Ok("1".to_string()),
+        "connectedCallback must fire exactly once via the native drain"
+    );
+
+    // Draining again with nothing queued is a no-op.
+    assert!(!runtime.drain_custom_element_reactions());
+    assert_eq!(
+        runtime.eval_to_string("String(globalThis.__cc_calls__)"),
+        Ok("1".to_string())
+    );
+}
+
+#[test]
 fn v8_custom_element_connects_only_after_append() {
     let mut runtime = V8Runtime::new(blank_dom());
 

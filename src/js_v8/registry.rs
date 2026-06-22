@@ -34,6 +34,12 @@ pub(super) struct NodeRegistry {
     /// Native mirror of the JS `customElements` registry (Phase 1 of the native
     /// custom-element-reaction plan). Populated from `customElements.define`.
     pub(super) ce_registry: super::custom_elements::CeRegistry,
+    /// When set (env `AURORA_NATIVE_CE_REACTIONS`, or via the runtime setter),
+    /// the native insertion path enqueues `connectedCallback` reactions and the
+    /// JS shim suppresses its own firing (Phase 2 A/B flag). Default off —
+    /// YouTube's Polymer path stays on the JS shim until later phases migrate its
+    /// orchestration. `Cell` so it can be toggled deterministically (tests).
+    pub(super) native_ce_reactions: std::cell::Cell<bool>,
 }
 
 impl NodeRegistry {
@@ -55,6 +61,9 @@ impl NodeRegistry {
             mo_next: RefCell::new(1),
             snapshot_rebuild_reason: RefCell::new(None),
             ce_registry: super::custom_elements::CeRegistry::default(),
+            native_ce_reactions: std::cell::Cell::new(
+                std::env::var_os("AURORA_NATIVE_CE_REACTIONS").is_some(),
+            ),
         }
     }
 

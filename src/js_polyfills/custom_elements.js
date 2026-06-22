@@ -2073,7 +2073,10 @@
                                 ' own=' + ceOwnStamp(el) + ' ' + ceContent(el));
                             var previousHost = activeLifecycleHost;
                             activeLifecycleHost = el;
-                            try { el.connectedCallback(); }
+                            // When native CE reactions are on, the native
+                            // insertion path enqueues connectedCallback and fires
+                            // it at the microtask checkpoint — don't double-fire.
+                            try { if (!globalThis.__aurora_native_ce_reactions__) el.connectedCallback(); }
                             finally { activeLifecycleHost = previousHost; }
                             ceLog('post-connectedCallback', el, 'chain=' + ceChain(Object.getPrototypeOf(el)) +
                                 ' own=' + ceOwnStamp(el) + ' ' + ceContent(el));
