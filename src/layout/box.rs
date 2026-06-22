@@ -153,10 +153,12 @@ impl LayoutBox {
         }
     }
 
+    #[allow(dead_code)]
     pub fn is_media(&self) -> bool {
         matches!(self.kind, LayoutKind::Media { .. })
     }
 
+    #[allow(dead_code)]
     pub fn is_svg_element(&self) -> bool {
         match &self.kind {
             LayoutKind::Block { tag_name } => tag_name.eq_ignore_ascii_case("svg"),
@@ -177,6 +179,7 @@ impl LayoutBox {
         }
     }
 
+    #[allow(dead_code)]
     pub fn find_node(&self, node: &crate::dom::NodePtr) -> Option<&LayoutBox> {
         if self
             .node

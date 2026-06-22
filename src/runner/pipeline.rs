@@ -222,6 +222,10 @@ fn run_scripts(
     log_youtube_debug_state(runtime.as_mut(), "after-load");
     apply_polymer_bindings(runtime.as_mut());
     pump_ready_work(runtime.as_mut());
+    drive_content_bearing_initial_navigation(runtime.as_mut());
+    pump_ready_work(runtime.as_mut());
+    apply_polymer_bindings(runtime.as_mut());
+    pump_ready_work(runtime.as_mut());
     log_youtube_debug_state(runtime.as_mut(), "after-polymer-bindings");
     Some(runtime)
 }
@@ -330,6 +334,110 @@ fn apply_polymer_bindings(runtime: &mut dyn crate::js_engine::JsRuntime) {
     );
 }
 
+/// Recover YouTube's first page transition only when the inline application
+/// data contains real content. Kevlar normally drives this through a private
+/// navigation state machine that does not fire in Aurora. Calling
+/// `ytd-page-manager.updatePageData` is the narrow public equivalent, but it
+/// must not run for the logged-out homepage's feed-nudge-only payload: doing so
+/// replaces the useful shell with an empty browse page.
+fn drive_content_bearing_initial_navigation(runtime: &mut dyn crate::js_engine::JsRuntime) {
+    let _ = runtime.execute(
+        r#"
+        (function() {
+            try {
+                var pageManager = document.querySelector && document.querySelector('ytd-page-manager');
+                if (!pageManager && document.querySelector) {
+                    var app = document.querySelector('ytd-app');
+                    var appController = app && (app.polymerController || app);
+                    pageManager = appController && appController.$ &&
+                        appController.$['page-manager'];
+                }
+                var getInitialData = window.getInitialData;
+                if (!pageManager || pageManager.__aurora_initial_navigation_driven__ ||
+                    typeof pageManager.updatePageData !== 'function' ||
+                    typeof getInitialData !== 'function') return;
+
+                var data = getInitialData();
+                if (!data) return;
+
+                var visited = [];
+                var budget = 50000;
+                var contentKeys = {
+                    videoRenderer: true,
+                    gridVideoRenderer: true,
+                    compactVideoRenderer: true,
+                    playlistVideoRenderer: true,
+                    reelItemRenderer: true
+                };
+                function hasRenderableContent(value, depth) {
+                    if (!value || typeof value !== 'object' || depth > 30 || --budget <= 0) return false;
+                    if (visited.indexOf(value) >= 0) return false;
+                    visited.push(value);
+                    var keys;
+                    try { keys = Object.keys(value); } catch (e) { return false; }
+                    for (var i = 0; i < keys.length; i++) {
+                        if (contentKeys[keys[i]]) return true;
+                    }
+                    for (var j = 0; j < keys.length; j++) {
+                        if (hasRenderableContent(value[keys[j]], depth + 1)) return true;
+                    }
+                    return false;
+                }
+
+                var player = globalThis.ytInitialPlayerResponse;
+                var contentBearing = !!(player && player.videoDetails) ||
+                    data.page === 'watch' || data.page === 'search' ||
+                    hasRenderableContent(data, 0);
+                if (!contentBearing) {
+                    if (globalThis.__aurora_debug_youtube__) {
+                        console.log('[yt-nav] skipped initial navigation: payload has no renderable content');
+                    }
+                    return;
+                }
+
+                // If the private state machine succeeded on its own, leave its
+                // live page alone. The driver is a recovery path, not a second
+                // navigation.
+                if (document.querySelector('ytd-watch-flexy,ytd-browse,ytd-search')) return;
+
+                pageManager.__aurora_initial_navigation_driven__ = true;
+                var attempts = 0;
+                function settleRenderers() {
+                    attempts++;
+                    var all = document.querySelectorAll ? document.querySelectorAll('*') : [];
+                    for (var i = 0; i < all.length; i++) {
+                        var el = all[i];
+                        var elData = el.data || (el.__data && el.__data.data);
+                        if (!elData || !elData.contents || !elData.contents.length) continue;
+                        var shown = el.shownItems || (el.__data && el.__data.shownItems);
+                        if (shown && shown.length) continue;
+                        try {
+                            if (typeof el.dataChanged === 'function') el.dataChanged();
+                            else if (typeof el.reflowContent === 'function') el.reflowContent(true);
+                        } catch (e) {}
+                    }
+                    if (attempts < 5) setTimeout(settleRenderers, 0);
+                }
+
+                var result = pageManager.updatePageData(data);
+                if (globalThis.__aurora_debug_youtube__) {
+                    console.log('[yt-nav] drove content-bearing initial page=' + (data.page || 'unknown'));
+                }
+                if (result && typeof result.then === 'function') {
+                    result.then(settleRenderers, function() {});
+                } else {
+                    settleRenderers();
+                }
+            } catch (error) {
+                if (globalThis.__aurora_debug_youtube__) {
+                    console.log('[yt-nav] initial navigation failed ' + error);
+                }
+            }
+        })();
+        "#,
+    );
+}
+
 fn log_youtube_debug_state(runtime: &mut dyn crate::js_engine::JsRuntime, label: &str) {
     if !matches!(
         env::var("AURORA_DEBUG_YOUTUBE").as_deref(),
@@ -368,6 +476,16 @@ fn log_youtube_debug_state(runtime: &mut dyn crate::js_engine::JsRuntime, label:
             console.log('[yt-probe] {label} ytcfg=' + ytcfgType +
                 ' app=' + nodeState('ytd-app'));
             console.log('[yt-probe] {label} flexy=' + nodeState('ytd-watch-flexy'));
+            var app = document.querySelector('ytd-app');
+            var appController = app && (app.polymerController || app);
+            var pageManager = appController && appController.$ && appController.$['page-manager'];
+            var pageController = pageManager && pageManager.polymerController;
+            console.log('[yt-probe] {label} page-manager=' + bool(pageManager) +
+                ' lazy=' + (pageManager ? typeof pageManager.lazyPrepareCriticalPages : 'missing') +
+                ' controller=' + bool(pageController) +
+                ' controllerLazy=' + (pageController ? typeof pageController.lazyPrepareCriticalPages : 'missing') +
+                ' own=' + keys(pageManager) +
+                ' controllerOwn=' + keys(pageController));
             console.log('[yt-probe] {label} stamped player=' +
                 bool(document.querySelector('ytd-player,#movie_player,ytw-player-with-controls')) +
                 ' metadata=' + bool(document.querySelector('ytd-watch-metadata')) +
@@ -530,6 +648,114 @@ mod tests {
         assert!(summary.contains("text_len=5"), "{summary}");
         assert!(summary.contains("nodes=5"), "{summary}");
         assert!(summary.contains("elements=4"), "{summary}");
+    }
+
+    #[test]
+    fn initial_navigation_driver_skips_empty_home_and_drives_content_once() {
+        let dom = Parser::new("<html><body><ytd-page-manager></ytd-page-manager></body></html>")
+            .parse_document();
+        let mut runtime = crate::js_v8::V8Runtime::new(dom);
+        runtime
+            .execute(
+                r#"
+                globalThis.__navCalls = 0;
+                globalThis.__initialData = {
+                    page: 'browse',
+                    contents: { feedNudgeRenderer: { title: 'Sign in' } }
+                };
+                window.getInitialData = function() { return globalThis.__initialData; };
+                document.querySelector('ytd-page-manager').updatePageData = function(data) {
+                    globalThis.__navCalls++;
+                    globalThis.__navigatedData = data;
+                };
+                "#,
+            )
+            .unwrap();
+
+        drive_content_bearing_initial_navigation(&mut runtime);
+        assert_eq!(runtime.eval_to_string("__navCalls"), Ok("0".into()));
+
+        runtime
+            .execute(
+                r#"
+                globalThis.__initialData = {
+                    page: 'search',
+                    contents: { sectionListRenderer: { contents: [
+                        { itemSectionRenderer: { contents: [
+                            { videoRenderer: { videoId: 'content-id' } }
+                        ] } }
+                    ] } }
+                };
+                "#,
+            )
+            .unwrap();
+        drive_content_bearing_initial_navigation(&mut runtime);
+        drive_content_bearing_initial_navigation(&mut runtime);
+
+        assert_eq!(runtime.eval_to_string("__navCalls"), Ok("1".into()));
+        assert_eq!(
+            runtime.eval_to_string("__navigatedData.page + ':' + __navigatedData.contents.sectionListRenderer.contents[0].itemSectionRenderer.contents[0].videoRenderer.videoId"),
+            Ok("search:content-id".into())
+        );
+    }
+
+    #[test]
+    fn initial_navigation_driver_accepts_watch_player_data() {
+        let dom = Parser::new("<html><body><ytd-page-manager></ytd-page-manager></body></html>")
+            .parse_document();
+        let mut runtime = crate::js_v8::V8Runtime::new(dom);
+        runtime
+            .execute(
+                r#"
+                globalThis.__navCalls = 0;
+                globalThis.ytInitialPlayerResponse = { videoDetails: { videoId: 'watch-id' } };
+                window.getInitialData = function() { return { page: 'watch' }; };
+                document.querySelector('ytd-page-manager').updatePageData = function() {
+                    globalThis.__navCalls++;
+                };
+                "#,
+            )
+            .unwrap();
+
+        drive_content_bearing_initial_navigation(&mut runtime);
+        assert_eq!(runtime.eval_to_string("__navCalls"), Ok("1".into()));
+    }
+
+    #[test]
+    fn initial_navigation_driver_finds_page_manager_in_app_shadow_map() {
+        let dom = Parser::new("<html><body><ytd-app></ytd-app></body></html>").parse_document();
+        let mut runtime = crate::js_v8::V8Runtime::new(dom);
+        runtime
+            .execute(
+                r#"
+                globalThis.__navCalls = 0;
+                globalThis.__initialData = {
+                    page: 'search',
+                    contents: { videoRenderer: { videoId: 'shadow-content' } }
+                };
+                window.getInitialData = function() { return globalThis.__initialData; };
+                const app = document.querySelector('ytd-app');
+                const pageManager = document.createElement('ytd-page-manager');
+                pageManager.updatePageData = function(data) {
+                    globalThis.__navCalls++;
+                    globalThis.__navigatedData = data;
+                };
+                app.attachShadow({ mode: 'open' }).appendChild(pageManager);
+                app.$ = { 'page-manager': pageManager };
+                "#,
+            )
+            .unwrap();
+
+        assert_eq!(
+            runtime.eval_to_string("String(document.querySelector('ytd-page-manager'))"),
+            Ok("null".into())
+        );
+        drive_content_bearing_initial_navigation(&mut runtime);
+        assert_eq!(runtime.eval_to_string("__navCalls"), Ok("1".into()));
+        assert_eq!(
+            runtime.eval_to_string("__navigatedData.contents.videoRenderer.videoId"),
+            Ok("shadow-content".into())
+        );
     }
 
     fn headless_identity() -> Identity {

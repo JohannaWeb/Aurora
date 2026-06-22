@@ -8,6 +8,7 @@ use v8;
 
 pub(super) struct NodeData {
     pub node: NodePtr,
+    #[allow(dead_code)]
     pub blitz_node_id: Option<usize>,
     pub registry: Rc<NodeRegistry>,
     pub document: NodePtr,
@@ -190,12 +191,13 @@ pub(super) fn create_js_node<'s>(
         get_parent_element,
         node_external,
     );
-    // `ShadowRoot.host`: synthetic shadow-root fragments are parented to their host
-    // via `el.shadow_root` (not the host's regular `children`), so `parentNode` can't
-    // see the host. Exposing `host` lets connectivity/composed-event traversal cross
-    // the shadow boundary — without it, custom elements stamped into a shadow root are
-    // treated as disconnected and their connectedCallback never fires.
-    install_readonly_accessor(scope, template, "host", get_shadow_host, node_external);
+    // Only registered engine shadow roots get the native own `host` accessor.
+    // Installing it on every DocumentFragment shadows ShadyDOM's prototype
+    // getter/constructor assignment and erases the logical host relationship it
+    // is trying to expose.
+    if crate::dom::SyntheticShadowTreeBackend.is_shadow_root(&node) {
+        install_readonly_accessor(scope, template, "host", get_shadow_host, node_external);
+    }
     install_readonly_accessor(
         scope,
         template,
@@ -401,6 +403,13 @@ pub(super) fn create_js_node<'s>(
         template,
         "__shady_attachShadow",
         attach_shadow,
+        node_external,
+    );
+    install_method(
+        scope,
+        template,
+        "__aurora_adoptShadowRoot",
+        adopt_shadow_root,
         node_external,
     );
 
@@ -612,6 +621,10 @@ pub(super) fn create_js_node<'s>(
             }
         }
         let content_obj = create_js_node(scope, content, registry, document);
+        // Script-created/template-parsed content fragments bypass
+        // document.createDocumentFragment and cloneNode, so explicitly pass
+        // them through the lifecycle owner tracker as well.
+        call_global_hook(scope, "__aurora_track_fragment__", content_obj);
         obj.set(scope, v8_str(scope, "content").into(), content_obj.into());
     }
 
@@ -832,14 +845,10 @@ fn query_selector(
     let external = v8::Local::<v8::External>::try_from(data).unwrap();
     let node_data = unsafe { &*(external.value() as *const NodeData) };
 
-    let found = if node_data.registry.has_render_document() {
-        node_data
-            .registry
-            .query_selector_all_dom(&selector, &node_data.node)
-            .and_then(|nodes| nodes.into_iter().next())
-    } else {
-        query::query_first(&node_data.document, &selector, &node_data.node)
-    };
+    let selector_root = crate::dom::SyntheticShadowTreeBackend
+        .nearest_shadow_root(&node_data.node)
+        .unwrap_or_else(|| node_data.document.clone());
+    let found = query::query_first(&selector_root, &selector, &node_data.node);
     if let Some(found) = found {
         let js_node = create_js_node(scope, found, &node_data.registry, &node_data.document);
         retval.set(js_node.into());
@@ -858,14 +867,10 @@ fn query_selector_all(
     let external = v8::Local::<v8::External>::try_from(data).unwrap();
     let node_data = unsafe { &*(external.value() as *const NodeData) };
 
-    let found = if node_data.registry.has_render_document() {
-        node_data
-            .registry
-            .query_selector_all_dom(&selector, &node_data.node)
-            .unwrap_or_default()
-    } else {
-        query::query_all(&node_data.document, &selector, &node_data.node)
-    };
+    let selector_root = crate::dom::SyntheticShadowTreeBackend
+        .nearest_shadow_root(&node_data.node)
+        .unwrap_or_else(|| node_data.document.clone());
+    let found = query::query_all(&selector_root, &selector, &node_data.node);
     let array = v8::Array::new(scope, found.len() as i32);
     for (i, node) in found.into_iter().enumerate() {
         let js_node = create_js_node(scope, node, &node_data.registry, &node_data.document);
@@ -884,16 +889,8 @@ fn get_elements_by_tag_name(
     let external = v8::Local::<v8::External>::try_from(data).unwrap();
     let node_data = unsafe { &*(external.value() as *const NodeData) };
 
-    let out = if node_data.registry.has_render_document() {
-        node_data
-            .registry
-            .collect_by_tag_dom(&tag, &node_data.node)
-            .unwrap_or_default()
-    } else {
-        let mut out = Vec::new();
-        query::collect_by_tag(&node_data.node, &tag, &mut out);
-        out
-    };
+    let mut out = Vec::new();
+    query::collect_by_tag(&node_data.node, &tag, &mut out);
 
     let array = v8::Array::new(scope, out.len() as i32);
     for (i, node) in out.into_iter().enumerate() {
@@ -913,14 +910,10 @@ fn matches(
     let external = v8::Local::<v8::External>::try_from(data).unwrap();
     let node_data = unsafe { &*(external.value() as *const NodeData) };
 
-    let matched = if node_data.registry.has_render_document() {
-        node_data
-            .registry
-            .selector_matches_dom(&node_data.node, &selector)
-            .unwrap_or(false)
-    } else {
-        query::selector_matches(&node_data.node, &selector, &node_data.document)
-    };
+    let selector_root = crate::dom::SyntheticShadowTreeBackend
+        .nearest_shadow_root(&node_data.node)
+        .unwrap_or_else(|| node_data.document.clone());
+    let matched = query::selector_matches(&node_data.node, &selector, &selector_root);
     retval.set(v8::Boolean::new(scope, matched).into());
 }
 
@@ -934,23 +927,12 @@ fn closest(
     let external = v8::Local::<v8::External>::try_from(data).unwrap();
     let node_data = unsafe { &*(external.value() as *const NodeData) };
 
-    if node_data.registry.has_render_document() {
-        let found = node_data
-            .registry
-            .closest_dom(&node_data.node, &selector)
-            .flatten();
-        if let Some(found) = found {
-            let js_node = create_js_node(scope, found, &node_data.registry, &node_data.document);
-            retval.set(js_node.into());
-        } else {
-            retval.set(v8::null(scope).into());
-        }
-        return;
-    }
-
+    let selector_root = crate::dom::SyntheticShadowTreeBackend
+        .nearest_shadow_root(&node_data.node)
+        .unwrap_or_else(|| node_data.document.clone());
     let mut current = Some(node_data.node.clone());
     while let Some(n) = current {
-        if query::selector_matches(&n, &selector, &node_data.document) {
+        if query::selector_matches(&n, &selector, &selector_root) {
             let js_node = create_js_node(scope, n, &node_data.registry, &node_data.document);
             retval.set(js_node.into());
             return;
@@ -1135,6 +1117,14 @@ fn remove_node(
 }
 
 fn find_parent_for(node_data: &NodeData, node: &NodePtr) -> Option<NodePtr> {
+    // Per DOM semantics ShadowRoot.parentNode is null. More importantly, do not
+    // feed the host back-pointer through `query::find_parent`: a shadow root is
+    // intentionally absent from the host's light child list, so that helper
+    // would treat the valid pointer as stale and clear it. Connectivity and the
+    // `host` accessor use the retained back-pointer directly.
+    if crate::dom::SyntheticShadowTreeBackend.is_shadow_root(node) {
+        return None;
+    }
     if let Some(parent) = crate::dom::parent_ptr(node) {
         if query::find_parent(&parent, node).is_some() {
             return Some(parent);
@@ -1197,7 +1187,14 @@ fn clone_node(
 
     let deep = args.get(0).is_true();
     let cloned = mutation::clone_node(&node_data.node, deep);
+    let is_fragment = matches!(
+        &*cloned.borrow(),
+        Node::Element(el) if el.tag_name == "#document-fragment"
+    );
     let js_node = create_js_node(scope, cloned, &node_data.registry, &node_data.document);
+    if is_fragment {
+        call_global_hook(scope, "__aurora_track_fragment__", js_node);
+    }
     retval.set(js_node.into());
 }
 
@@ -1725,8 +1722,7 @@ fn get_shadow_host(
     let external = v8::Local::<v8::External>::try_from(args.data()).unwrap();
     let node_data = unsafe { &*(external.value() as *const NodeData) };
 
-    if let Some(host) =
-        crate::dom::SyntheticShadowTreeBackend.host_for_shadow_root(&node_data.node)
+    if let Some(host) = crate::dom::SyntheticShadowTreeBackend.host_for_shadow_root(&node_data.node)
     {
         let js_node = create_js_node(scope, host, &node_data.registry, &node_data.document);
         retval.set(js_node.into());
@@ -2059,6 +2055,7 @@ fn get_owner_document(
     }
 }
 
+#[allow(dead_code)]
 fn node_add_event_listener(
     scope: &mut v8::PinScope<'_, '_>,
     args: v8::FunctionCallbackArguments,
@@ -2079,6 +2076,7 @@ fn node_add_event_listener(
         .add_event_listener(node_id, event_type, callback_global);
 }
 
+#[allow(dead_code)]
 fn node_remove_event_listener(
     scope: &mut v8::PinScope<'_, '_>,
     args: v8::FunctionCallbackArguments,
@@ -2506,14 +2504,10 @@ fn get_elements_by_class_name(
     );
     let external = v8::Local::<v8::External>::try_from(args.data()).unwrap();
     let node_data = unsafe { &*(external.value() as *const NodeData) };
-    let found = if node_data.registry.has_render_document() {
-        node_data
-            .registry
-            .query_selector_all_dom(&selector, &node_data.node)
-            .unwrap_or_default()
-    } else {
-        query::query_all(&node_data.document, &selector, &node_data.node)
-    };
+    let selector_root = crate::dom::SyntheticShadowTreeBackend
+        .nearest_shadow_root(&node_data.node)
+        .unwrap_or_else(|| node_data.document.clone());
+    let found = query::query_all(&selector_root, &selector, &node_data.node);
     let array = nodes_to_array(scope, found, node_data);
     retval.set(array.into());
 }
@@ -2623,6 +2617,11 @@ fn attach_shadow(
         v8_str(scope, "delegatesFocus").into(),
         v8::Boolean::new(scope, false).into(),
     );
+    sr.set(
+        scope,
+        v8_str(scope, "__aurora_registered_shadow_root__").into(),
+        v8::Boolean::new(scope, true).into(),
+    );
     // ShadyDOM hybrid callers do `root.shadowRoot.appendChild` — self-ref so
     // both paths land on the same ShadowRoot object.
     sr.set(scope, v8_str(scope, "shadowRoot").into(), sr.into());
@@ -2640,4 +2639,42 @@ fn attach_shadow(
     host.create_data_property(scope, shady_shadow_root_key.into(), sr.into());
 
     retval.set(sr.into());
+}
+
+/// Link a ShadyDOM-created logical `DocumentFragment` to its component host.
+/// Unlike `attachShadow`, this adopts the exact fragment supplied by the
+/// polyfill so the JS logical tree, connectivity walk, and Blitz mirror share
+/// one root.
+fn adopt_shadow_root(
+    scope: &mut v8::PinScope<'_, '_>,
+    args: v8::FunctionCallbackArguments,
+    mut retval: v8::ReturnValue,
+) {
+    let external = v8::Local::<v8::External>::try_from(args.data()).unwrap();
+    let node_data = unsafe { &*(external.value() as *const NodeData) };
+    let Some(shadow_root) = node_from_js(scope, args.get(0), &node_data.registry) else {
+        retval.set(v8::Boolean::new(scope, false).into());
+        return;
+    };
+
+    let adopted =
+        crate::dom::SyntheticShadowTreeBackend.adopt_shadow_root(&node_data.node, &shadow_root);
+    if adopted {
+        let mode = args
+            .get(1)
+            .to_string(scope)
+            .map(|value| value.to_rust_string_lossy(scope))
+            .unwrap_or_else(|| "open".to_string());
+        let result = mutation::apply_dom_mutation(
+            &node_data.registry,
+            mutation::DomMutation::AttachShadow {
+                host: &node_data.node,
+                shadow_root: &shadow_root,
+                mode: &mode,
+            },
+        );
+        retval.set(v8::Boolean::new(scope, result.render_synced).into());
+    } else {
+        retval.set(v8::Boolean::new(scope, false).into());
+    }
 }

@@ -69,6 +69,7 @@ impl LayoutTree {
         &self.root
     }
 
+    #[allow(dead_code)]
     pub fn find_box_for_node(&self, node: &crate::dom::NodePtr) -> Option<&LayoutBox> {
         self.root.find_node(node)
     }

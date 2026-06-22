@@ -6,6 +6,7 @@ pub use super::selectors_impl::AuroraSelectorImpl;
 pub type Selector = selectors::parser::Selector<AuroraSelectorImpl>;
 
 /// Specificity as a u32 (packed 0xAA_BB_CC: A=id, B=class, C=type).
+#[allow(dead_code)]
 pub type Specificity = u32;
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]

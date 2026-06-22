@@ -1,4 +1,5 @@
 #[derive(Debug, Clone, Copy)]
+#[allow(dead_code)]
 pub enum LengthValue {
     Px(f32),
     Percent(f32),

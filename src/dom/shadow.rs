@@ -40,6 +40,15 @@ pub trait ShadowTreeBackend {
     /// fragment is mirrored; the legacy tree only needs the host↔root link.
     fn attach_shadow(&self, host: &NodePtr, mode: &str) -> NodePtr;
 
+    /// Adopt an existing document fragment as `host`'s shadow root.
+    ///
+    /// ShadyDOM creates logical roots as ordinary detached fragments and later
+    /// exposes them through a component's `root`/`shadowRoot` properties. The
+    /// engine must link that exact fragment to the host rather than allocating a
+    /// second root, otherwise connectivity and rendering operate on different
+    /// trees.
+    fn adopt_shadow_root(&self, host: &NodePtr, shadow_root: &NodePtr) -> bool;
+
     /// Append `child` into `shadow_root`'s flattened child list.
     fn append_shadow_child(&self, shadow_root: &NodePtr, child: &NodePtr);
 
@@ -106,6 +115,35 @@ impl ShadowTreeBackend for SyntheticShadowTreeBackend {
         shadow_root
     }
 
+    fn adopt_shadow_root(&self, host: &NodePtr, shadow_root: &NodePtr) -> bool {
+        if !is_document_fragment(shadow_root) {
+            return false;
+        }
+
+        // A logical root is detached by construction, but defensively remove it
+        // from a regular parent if a polyfill temporarily inserted it there.
+        if let Some(previous_parent) = parent_ptr(shadow_root)
+            && !Rc::ptr_eq(&previous_parent, host)
+        {
+            if let Node::Element(el) = &mut *previous_parent.borrow_mut() {
+                el.children.retain(|child| !Rc::ptr_eq(child, shadow_root));
+            }
+        }
+
+        let previous_root = match &mut *host.borrow_mut() {
+            Node::Element(el) => el.shadow_root.replace(shadow_root.clone()),
+            _ => return false,
+        };
+        if let Some(previous_root) = previous_root
+            && !Rc::ptr_eq(&previous_root, shadow_root)
+        {
+            super::clear_parent(&previous_root);
+        }
+        set_parent(shadow_root, host);
+        super::reparent_subtree(shadow_root);
+        true
+    }
+
     fn append_shadow_child(&self, shadow_root: &NodePtr, child: &NodePtr) {
         if let Node::Element(el) = &mut *shadow_root.borrow_mut() {
             el.children.push(child.clone());
@@ -114,7 +152,7 @@ impl ShadowTreeBackend for SyntheticShadowTreeBackend {
     }
 
     fn composed_children(&self, node: &NodePtr) -> Vec<NodePtr> {
-        let (tag_name, shadow_root, template_contents, children, assigned_nodes) = {
+        let (tag_name, shadow_root, _template_contents, children, assigned_nodes) = {
             let node_borrow = node.borrow();
             match &*node_borrow {
                 Node::Element(el) => (

@@ -41,6 +41,7 @@ pub(super) fn layout_lines(text: &str, font_size: f32, max_width: Option<f32>) -
 
 /// Lay out a text node using Parley, respecting white-space and available width.
 /// Returns one `LayoutBox` per visual line.
+#[allow(dead_code)]
 pub fn layout_text_with_parley(
     node: Option<crate::dom::NodePtr>,
     text: &str,

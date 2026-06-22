@@ -45,7 +45,13 @@
     };
     // Comments become text nodes (no Comment node type in the DOM core).
     document.createComment = function(text) { return document.createTextNode(text); };
-    document.createDocumentFragment = function() { return document.createElement('#document-fragment'); };
+    document.createDocumentFragment = function() {
+        var fragment = document.createElement('#document-fragment');
+        if (typeof globalThis.__aurora_track_fragment__ === 'function') {
+            try { globalThis.__aurora_track_fragment__(fragment); } catch (e) {}
+        }
+        return fragment;
+    };
     document.importNode = function(node, deep) {
         return node && typeof node.cloneNode === 'function' ? node.cloneNode(deep) : null;
     };

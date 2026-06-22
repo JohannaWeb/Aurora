@@ -297,6 +297,7 @@ pub struct CascadeElement<'a> {
 }
 
 impl<'a> CascadeElement<'a> {
+    #[allow(dead_code)]
     pub fn new(
         element: &'a ElementData,
         ancestors: &'a [ElementData],

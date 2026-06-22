@@ -164,6 +164,7 @@ pub enum DrawCommand {
 
 /// Represents what needs to be recomputed in the next frame.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[allow(dead_code)]
 pub enum InvalidationLevel {
     None,
     Paint,  // Only repaint (e.g. opacity, color change)

@@ -26,6 +26,7 @@ struct DecodedVideo {
 
 struct VideoFrame {
     at_secs: f64,
+    #[allow(dead_code)]
     image: peniko::ImageData,
 }
 
@@ -89,6 +90,7 @@ impl MediaCache {
         changed
     }
 
+    #[allow(dead_code)]
     pub(crate) fn frame(&self, src: &str) -> Option<&peniko::ImageData> {
         let src = self.aliases.get(src).map(String::as_str).unwrap_or(src);
         self.videos

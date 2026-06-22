@@ -24,6 +24,5 @@ pub use properties::{
     AlignItems, BoxSizing, DisplayMode, EdgeSizes, FlexDirection, JustifyContent, Margin,
     MarginValue, TextAlign, WhiteSpace,
 };
-pub use selectors_impl::CascadeElement;
 pub use style_map::StyleMap;
 pub use stylesheet::Stylesheet;
