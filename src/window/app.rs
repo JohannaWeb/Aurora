@@ -100,7 +100,9 @@ impl AuroraApp {
     pub(super) fn render(&mut self) {
         // Extract what we need from surface before any mutable borrows of self.
         let (width, height, dev_id) = {
-            let s = self.surface.as_ref().unwrap();
+            let Some(s) = self.surface.as_ref() else {
+                return; // nothing to render before the surface is configured
+            };
             (s.config.width, s.config.height, s.dev_id)
         };
 
@@ -119,7 +121,9 @@ impl AuroraApp {
             &self.input.identity,
         );
 
-        let surface = self.surface.as_ref().unwrap();
+        let Some(surface) = self.surface.as_ref() else {
+            return;
+        };
         let device_handle = &self.context.devices[dev_id];
         let surface_texture = match surface.surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(t)
@@ -241,21 +245,18 @@ fn renderer_for_surface<'a>(
     dev_id: usize,
     device: &wgpu::Device,
 ) -> &'a mut Renderer {
-    if renderers[dev_id].is_none() {
-        renderers[dev_id] = Some(
-            Renderer::new(
-                device,
-                RendererOptions {
-                    use_cpu: false,
-                    antialiasing_support: vello::AaSupport::all(),
-                    num_init_threads: None,
-                    pipeline_cache: None,
-                },
-            )
-            .expect("failed to create vello renderer"),
-        );
-    }
-    renderers[dev_id].as_mut().unwrap()
+    renderers[dev_id].get_or_insert_with(|| {
+        Renderer::new(
+            device,
+            RendererOptions {
+                use_cpu: false,
+                antialiasing_support: vello::AaSupport::all(),
+                num_init_threads: None,
+                pipeline_cache: None,
+            },
+        )
+        .expect("failed to create vello renderer")
+    })
 }
 
 fn paint_content_layer(app: &mut AuroraApp, scene: &mut Scene, width: u32, height: u32) {

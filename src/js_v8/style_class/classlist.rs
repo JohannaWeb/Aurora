@@ -1,5 +1,5 @@
 use crate::dom::{Node, NodePtr};
-use crate::js_v8::node_create::NodeData;
+use crate::js_v8::node_create::{NodeData, node_data_from, v8_str};
 use std::collections::BTreeSet;
 use v8;
 
@@ -17,7 +17,9 @@ pub(crate) fn build_classlist_object<'s>(
     install_method(scope, template, "item", item, node_external);
     install_method(scope, template, "toString", to_string, node_external);
 
-    let obj = template.new_instance(scope).unwrap();
+    let obj = template
+        .new_instance(scope)
+        .expect("object template instantiation failed");
 
     // Array-like shape (length + indexed tokens) so iteration helpers work.
     // The classList object is rebuilt on every `.classList` access, so a
@@ -31,14 +33,14 @@ pub(crate) fn build_classlist_object<'s>(
             .unwrap_or_default(),
         _ => Vec::new(),
     };
-    let length_key = v8::String::new(scope, "length").unwrap();
+    let length_key = v8_str(scope, "length");
     let length_val = v8::Integer::new(scope, tokens.len() as i32);
     obj.set(scope, length_key.into(), length_val.into());
-    let value_key = v8::String::new(scope, "value").unwrap();
-    let value_val = v8::String::new(scope, &tokens.join(" ")).unwrap();
+    let value_key = v8_str(scope, "value");
+    let value_val = v8_str(scope, &tokens.join(" "));
     obj.set(scope, value_key.into(), value_val.into());
     for (i, token) in tokens.iter().enumerate() {
-        let token_val = v8::String::new(scope, token).unwrap();
+        let token_val = v8_str(scope, token);
         obj.set_index(scope, i as u32, token_val.into());
     }
 
@@ -55,7 +57,7 @@ fn install_method<'s>(
     let t = v8::FunctionTemplate::builder(callback)
         .data(data.into())
         .build(scope);
-    let name_str = v8::String::new(scope, name).unwrap();
+    let name_str = v8_str(scope, name);
     template.set(name_str.into(), t.into());
 }
 
@@ -64,9 +66,7 @@ fn add(
     args: v8::FunctionCallbackArguments,
     mut _retval: v8::ReturnValue,
 ) {
-    let data = args.data();
-    let external = v8::Local::<v8::External>::try_from(data).unwrap();
-    let node_data = unsafe { &*(external.value() as *const NodeData) };
+    let node_data = node_data_from(args.data());
 
     for i in 0..args.length() {
         let cls = args.get(i).to_rust_string_lossy(scope);
@@ -82,9 +82,7 @@ fn remove(
     args: v8::FunctionCallbackArguments,
     mut _retval: v8::ReturnValue,
 ) {
-    let data = args.data();
-    let external = v8::Local::<v8::External>::try_from(data).unwrap();
-    let node_data = unsafe { &*(external.value() as *const NodeData) };
+    let node_data = node_data_from(args.data());
 
     for i in 0..args.length() {
         let cls = args.get(i).to_rust_string_lossy(scope);
@@ -101,9 +99,7 @@ fn contains(
     mut retval: v8::ReturnValue,
 ) {
     let cls = args.get(0).to_rust_string_lossy(scope);
-    let data = args.data();
-    let external = v8::Local::<v8::External>::try_from(data).unwrap();
-    let node_data = unsafe { &*(external.value() as *const NodeData) };
+    let node_data = node_data_from(args.data());
 
     let b = node_data.node.borrow();
     if let Node::Element(el) = &*b {
@@ -122,9 +118,7 @@ fn toggle(
     mut retval: v8::ReturnValue,
 ) {
     let cls = args.get(0).to_rust_string_lossy(scope);
-    let data = args.data();
-    let external = v8::Local::<v8::External>::try_from(data).unwrap();
-    let node_data = unsafe { &*(external.value() as *const NodeData) };
+    let node_data = node_data_from(args.data());
 
     let mut present = false;
     modify_classlist(&node_data.node, |set| {
@@ -146,9 +140,7 @@ fn replace(
 ) {
     let old_cls = args.get(0).to_rust_string_lossy(scope);
     let new_cls = args.get(1).to_rust_string_lossy(scope);
-    let data = args.data();
-    let external = v8::Local::<v8::External>::try_from(data).unwrap();
-    let node_data = unsafe { &*(external.value() as *const NodeData) };
+    let node_data = node_data_from(args.data());
 
     let mut swapped = false;
     modify_classlist(&node_data.node, |set| {
@@ -167,15 +159,13 @@ fn item(
     mut retval: v8::ReturnValue,
 ) {
     let idx = args.get(0).uint32_value(scope).unwrap_or(0) as usize;
-    let data = args.data();
-    let external = v8::Local::<v8::External>::try_from(data).unwrap();
-    let node_data = unsafe { &*(external.value() as *const NodeData) };
+    let node_data = node_data_from(args.data());
 
     let b = node_data.node.borrow();
     if let Node::Element(el) = &*b {
         if let Some(v) = el.attributes.get("class") {
             if let Some(cls) = v.split_whitespace().nth(idx) {
-                let s = v8::String::new(scope, cls).unwrap();
+                let s = v8_str(scope, cls);
                 retval.set(s.into());
                 return;
             }
@@ -189,19 +179,17 @@ fn to_string(
     args: v8::FunctionCallbackArguments,
     mut retval: v8::ReturnValue,
 ) {
-    let data = args.data();
-    let external = v8::Local::<v8::External>::try_from(data).unwrap();
-    let node_data = unsafe { &*(external.value() as *const NodeData) };
+    let node_data = node_data_from(args.data());
 
     let b = node_data.node.borrow();
     if let Node::Element(el) = &*b {
         if let Some(v) = el.attributes.get("class") {
-            let s = v8::String::new(scope, v).unwrap();
+            let s = v8_str(scope, v);
             retval.set(s.into());
             return;
         }
     }
-    let empty = v8::String::new(scope, "").unwrap();
+    let empty = v8_str(scope, "");
     retval.set(empty.into());
 }
 

@@ -31,6 +31,9 @@ pub(super) struct NodeRegistry {
     /// Monotonic id source for MutationObservers (kept separate from node ids).
     mo_next: RefCell<u32>,
     snapshot_rebuild_reason: RefCell<Option<SnapshotRebuildReason>>,
+    /// Native mirror of the JS `customElements` registry (Phase 1 of the native
+    /// custom-element-reaction plan). Populated from `customElements.define`.
+    pub(super) ce_registry: super::custom_elements::CeRegistry,
 }
 
 impl NodeRegistry {
@@ -51,6 +54,7 @@ impl NodeRegistry {
             mo_entries: RefCell::new(Vec::new()),
             mo_next: RefCell::new(1),
             snapshot_rebuild_reason: RefCell::new(None),
+            ce_registry: super::custom_elements::CeRegistry::default(),
         }
     }
 

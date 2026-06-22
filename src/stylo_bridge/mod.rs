@@ -126,12 +126,13 @@ mod tests {
         resolve_styles(&mut doc);
 
         // Find the div node in the arena and check it has computed styles.
-        let div_id = doc.nodes.iter().find(|n| {
-            n.data.element().map_or(false, |e| e.local_name.as_ref() == "div")
-        }).map(|n| n.id);
-
-        assert!(div_id.is_some(), "div node not found in arena");
-        let div = &doc.nodes[div_id.unwrap()];
+        let div_id = doc
+            .nodes
+            .iter()
+            .find(|n| n.data.element().map_or(false, |e| e.local_name.as_ref() == "div"))
+            .map(|n| n.id)
+            .expect("div node not found in arena");
+        let div = &doc.nodes[div_id];
         assert!(div.stylo_data.has_data(), "div has no computed style data");
 
         let data = div.stylo_data.get().expect("borrow_data returned None");

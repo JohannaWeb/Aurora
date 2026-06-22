@@ -2,7 +2,7 @@
 //! Replaces the hand-rolled TLS + chunked + redirect stack.
 
 use std::collections::HashMap;
-use std::sync::{LazyLock, Mutex};
+use std::sync::{LazyLock, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use super::FetchError;
@@ -83,7 +83,7 @@ fn pace(url: &str) {
     }
 
     let sleep_for = {
-        let mut map = RATE_LIMITERS.lock().unwrap();
+        let mut map = RATE_LIMITERS.lock().unwrap_or_else(PoisonError::into_inner);
         let last = map
             .entry(host)
             .or_insert_with(|| Instant::now() - REQUEST_INTERVAL);
@@ -241,7 +241,8 @@ mod tests {
     use super::is_forbidden_request_header;
 
     #[test]
-    fn script_request_headers_respect_the_browser_security_boundary() {
+    fn script_request_headers_respect_the_browser_security_boundary()
+    -> Result<(), reqwest::header::InvalidHeaderName> {
         for allowed in [
             "content-type",
             "x-youtube-client-name",
@@ -249,7 +250,7 @@ mod tests {
             "x-goog-visitor-id",
             "authorization",
         ] {
-            let name = HeaderName::from_bytes(allowed.as_bytes()).unwrap();
+            let name = HeaderName::from_bytes(allowed.as_bytes())?;
             assert!(!is_forbidden_request_header(&name), "{allowed}");
         }
         for forbidden in [
@@ -261,8 +262,9 @@ mod tests {
             "sec-fetch-site",
             "user-agent",
         ] {
-            let name = HeaderName::from_bytes(forbidden.as_bytes()).unwrap();
+            let name = HeaderName::from_bytes(forbidden.as_bytes())?;
             assert!(is_forbidden_request_header(&name), "{forbidden}");
         }
+        Ok(())
     }
 }

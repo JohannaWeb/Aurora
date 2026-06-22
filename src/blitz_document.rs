@@ -13,7 +13,7 @@ use crate::identity::Identity;
 use std::collections::BTreeMap;
 use std::panic::{self, AssertUnwindSafe};
 use std::rc::Rc;
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Mutex, OnceLock, PoisonError};
 
 static NET_CACHE: OnceLock<Mutex<BTreeMap<String, Vec<u8>>>> = OnceLock::new();
 
@@ -40,7 +40,11 @@ impl NetProvider for AuroraNetProvider {
 
         // Check cache first
         let cache = get_net_cache();
-        if let Some(cached_bytes) = cache.lock().unwrap().get(&url) {
+        if let Some(cached_bytes) = cache
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(&url)
+        {
             handler.bytes(url, Bytes::from(cached_bytes.clone()));
             return;
         }

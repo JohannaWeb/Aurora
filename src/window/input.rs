@@ -418,7 +418,7 @@ mod tests {
     use super::*;
     use crate::dom::Node;
     use crate::identity::{Capability, IdentityKind};
-    use std::sync::Mutex;
+    use std::sync::{Mutex, PoisonError};
 
     static WINDOW_INPUT_TEST_LOCK: Mutex<()> = Mutex::new(());
 
@@ -491,7 +491,7 @@ mod tests {
 
     #[test]
     fn snapshot_rebuild_accounting_records_reason_and_clears_pending_reason() {
-        let _guard = WINDOW_INPUT_TEST_LOCK.lock().unwrap();
+        let _guard = WINDOW_INPUT_TEST_LOCK.lock().unwrap_or_else(PoisonError::into_inner);
         let mut input = test_input();
 
         input.mark_blitz_snapshot_dirty(SnapshotRebuildReason::PaintFailure);
@@ -517,7 +517,7 @@ mod tests {
 
     #[test]
     fn snapshot_rebuild_accounting_records_last_mirror_operation_id() {
-        let _guard = WINDOW_INPUT_TEST_LOCK.lock().unwrap();
+        let _guard = WINDOW_INPUT_TEST_LOCK.lock().unwrap_or_else(PoisonError::into_inner);
         let mut input = test_input();
         let item = find_element_by_id(&input.dom, "item").expect("fixture should have item");
         if let Node::Element(el) = &mut *item.borrow_mut() {
@@ -552,7 +552,7 @@ mod tests {
 
     #[test]
     fn mark_dirty_sets_explicit_snapshot_rebuild_reason() {
-        let _guard = WINDOW_INPUT_TEST_LOCK.lock().unwrap();
+        let _guard = WINDOW_INPUT_TEST_LOCK.lock().unwrap_or_else(PoisonError::into_inner);
         let mut input = test_input();
 
         input.mark_dirty();
@@ -600,7 +600,7 @@ mod tests {
     #[cfg(debug_assertions)]
     #[test]
     fn snapshot_rebuild_threshold_reports_when_rebuild_rate_exceeds_limit() {
-        let _guard = WINDOW_INPUT_TEST_LOCK.lock().unwrap();
+        let _guard = WINDOW_INPUT_TEST_LOCK.lock().unwrap_or_else(PoisonError::into_inner);
         let mut input = test_input();
         let threshold = SnapshotRebuildThreshold {
             max_per_second: 1,

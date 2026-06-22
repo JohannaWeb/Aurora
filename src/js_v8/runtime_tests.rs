@@ -664,6 +664,32 @@ fn v8_attributed_string_setup_props_tolerates_inherited_callable_style() {
 }
 
 #[test]
+fn v8_define_mirrors_into_native_registry() {
+    let mut runtime = V8Runtime::new(blank_dom());
+
+    // `customElements.define` should populate the native CE registry (Phase 1
+    // of the native custom-element-reaction plan). Observed via the
+    // `__aurora_ce_is_defined_native` binding.
+    assert_eq!(
+        runtime.eval_to_string(
+            r#"
+            (() => {
+            class NativeMirror extends HTMLElement {
+                static get observedAttributes() { return ['data-x']; }
+                connectedCallback() {}
+            }
+            const before = String(__aurora_ce_is_defined_native('native-mirror'));
+            customElements.define('native-mirror', NativeMirror);
+            const after = String(__aurora_ce_is_defined_native('native-mirror'));
+            return before + '|' + after;
+            })()
+            "#
+        ),
+        Ok("false|true".to_string())
+    );
+}
+
+#[test]
 fn v8_custom_element_connects_only_after_append() {
     let mut runtime = V8Runtime::new(blank_dom());
 

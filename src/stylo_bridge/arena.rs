@@ -46,8 +46,9 @@ impl StyloNodeData {
     pub unsafe fn ensure_init(&self) -> ElementDataMut<'_> {
         let ptr = self.inner.get();
         unsafe {
-            if (*ptr).is_none() { *ptr = Some(ElementDataWrapper::default()); }
-            (*ptr).as_ref().unwrap().borrow_mut()
+            (*ptr)
+                .get_or_insert_with(ElementDataWrapper::default)
+                .borrow_mut()
         }
     }
     pub unsafe fn clear(&self) { unsafe { *self.inner.get() = None; } }
@@ -199,7 +200,9 @@ pub fn build_arena(root: &NodePtr, css_sheets: &[String]) -> ArenaDoc {
     );
 
     let mut stylist = Stylist::new(device, QuirksMode::NoQuirks);
-    let url_data = UrlExtraData(Arc::new(url::Url::parse("about:blank").unwrap()));
+    let url_data = UrlExtraData(Arc::new(
+        url::Url::parse("about:blank").expect("\"about:blank\" is a valid URL"),
+    ));
 
     for css in css_sheets {
         let media = Arc::new(guard.wrap(MediaList::empty()));
