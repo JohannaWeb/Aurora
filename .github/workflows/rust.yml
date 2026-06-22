@@ -36,4 +36,8 @@ jobs:
       run: cargo build --locked --verbose
 
     - name: Run unit tests
-      run: cargo test --locked --lib --bins --verbose
+      # Run serially: the render/style tests drive Blitz+Stylo, which share global
+      # state (the Stylo style thread pool and per-thread LAYOUT state). Running
+      # them concurrently trips a thread-state assertion and fails non-
+      # deterministically. The suite is small, so single-threaded is cheap.
+      run: cargo test --locked --lib --bins --verbose -- --test-threads=1
