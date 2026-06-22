@@ -389,3 +389,108 @@ Also landed this round: a real `window.visualViewport` polyfill (`v8_base.js`, b
 real EventTarget) — it was genuinely missing (standard API, used by YouTube). It is not the
 `kzA` target, so it did not unblock connect, but it is correct platform completeness and
 prevents a separate future crash. Home still 544 paths; 191 lib tests green.
+
+---
+
+# Update 2026-06-21 — stamp transaction fixed; navigation reaches Stylo
+
+The previous diagnosis above was directionally correct about nested stamping, but wrong
+about the immediate mechanism: the template passed to `_stampTemplate` was valid. Polymer
+had already parsed its node-info metadata and was walking the detached clone when Aurora's
+`childNodes` bridge exposed a dash-named child. That exposure synchronously ran Aurora's
+custom-element upgrade/connect path; detached-stamp composition moved the fragment while
+Polymer was still indexing it. Its next node-info lookup returned `undefined`, producing
+the `_templateInfo` exception. The later null ShadyDOM-child error was the same premature
+composition observed one layer further down.
+
+`custom_elements.js` now scopes lifecycle suppression around `_stampTemplate`. Nested
+elements are queued while Polymer indexes the clone, constructed synchronously when the
+outermost stamp returns, and connected at the following microtask checkpoint after the
+caller can insert the fragment. Waiting until the end-of-page connect sweep was too late:
+YouTube's initial-data loader reads the stamped `ytd-page-manager` first. The post-stamp
+construction step is therefore required, not just an optimization.
+
+Measured result on the real search route:
+
+- `ytd-app.ready()` and `connectedCallback()` complete; both prior `_templateInfo` and
+  attached-listener failures are gone.
+- The stamped `ytd-page-manager` creates its COW/Polymer controller and forwards
+  `lazyPrepareCriticalPages`; that loader exception is gone.
+- The content navigation recovery finds the shadow-contained manager through
+  `ytd-app.$['page-manager']` and calls `updatePageData` with the inline search payload.
+- The next blocker is downstream in rendering: the new result-tree mutation triggers
+  Stylo's `data.rs:186` unwrap panic and then its thread-state assertion. Search results
+  are therefore still not a reliable painted benchmark. Lazy watch-page preparation also
+  reports a separate null `__shady_native_children` read in `ytd-watch-flexy.ready()`.
+
+Regression coverage:
+
+- `v8_defers_stamped_child_upgrade_until_polymer_finishes_indexing`
+- `initial_navigation_driver_finds_page_manager_in_app_shadow_map`
+- Full serial library suite: **193 passed, 1 ignored**.
+
+---
+
+# Update 2026-06-22 — Stylo thread-state leak fixed; search route no longer wedges
+
+The "and then its thread-state assertion" above turned out to be the real reason search
+never recovered, and it was not a second independent bug — it was fallout from the first.
+`blitz_dom::resolve_stylist` wraps the parallel style traversal in
+`thread_state::enter(LAYOUT)` … `thread_state::exit(LAYOUT)`. When the traversal panics
+with stylo#387 (`data.rs:186`, `ElementStyles::primary().unwrap()` on `None`), the unwind
+skips `exit`, so the main thread keeps the `LAYOUT` flag set. `catch_stylo_panic` swallowed
+the unwind but left that flag dirty, so the *next* resolve — including the snapshot rebuild
+that reconstructs a clean Blitz document from the legacy DOM and would otherwise paint —
+aborted immediately at `thread_state::enter`'s `debug_assert!(!intersects(LAYOUT))`. That is
+why the run showed one `data.rs:186` panic followed by a non-terminating stream of
+`thread_state.rs:75` assertions: the page could never re-resolve.
+
+Fix: `catch_stylo_panic` now calls `repair_leaked_style_thread_state`, which clears a
+leftover `LAYOUT` flag after any caught panic. It reaches Stylo's thread-local through a new
+`style = { version = "=0.18.0", package = "stylo" }` dependency, pinned to the exact version
+blitz-dom uses so it is the same compiled crate (same thread-local). Measured on the real
+search route: the `thread_state.rs:75` loop is gone; only the single stylo#387 panic
+remains, after which the rebuild resolves cleanly and the masthead skeleton repaints instead
+of freezing.
+
+Still open (unchanged): the first resolve of the result tree trips stylo#387 itself, so that
+frame is dropped and the rebuilt shell paints without result cards. That requires the
+upstream fix (vendored/patched) or avoiding the `ElementData`-without-primary node shape.
+
+Regression coverage:
+
+- `catch_stylo_panic_repairs_leaked_layout_thread_state`
+- Full serial library suite: **194 passed, 1 ignored**.
+
+---
+
+# Update 2026-06-22 (later) — stylo#387 fixed at source via local fork
+
+Rather than only catching the `data.rs:186` panic, the underlying bug is now fixed.
+`third_party/stylo` is a verbatim copy of crates.io `stylo` 0.18.0 with a single change:
+`ElementStyles::is_display_none` previously did `self.primary().get_box()...`, which
+unwraps `self.primary` and aborts when an element has `ElementData` but no primary
+computed style. That state is reachable normally — blitz `create_element` initialises a
+default `ElementData` (`primary: None`), and if an ancestor carries an attribute snapshot,
+Stylo's targeted invalidation descends into the not-yet-styled child and calls
+`should_process_descendants` → `is_display_none` before the normal traversal styles it. The
+fork changes it to `get_primary().map_or(false, |s| s.get_box().clone_display().is_none())`:
+an unstyled element is simply not `display:none`, and the normal traversal styles it next.
+
+A `[patch.crates-io]` entry redirects every stylo consumer — Aurora's `style` dep and
+blitz-dom's transitive one — to the fork (Mako codegen is self-contained: stylo vendors the
+mako wheel under `properties/vendored_python/`, so no system Python packages are needed).
+
+Measured on the live search route: the `data.rs:186` panic is gone entirely; the style
+resolve now completes cleanly every frame. The thread-state repair from the earlier update
+stays as a general safety net for any future caught panic.
+
+Still open — and now clearly the next benchmark target — is content generation, which is
+independent of Stylo: `ytd-watch-flexy.ready()` throws `Cannot read properties of null
+(reading '__shady_native_children')` during lazy critical-page prep, and `ytd-search` never
+stamps its result list, so the painted output is still the masthead skeleton (~1003 nodes).
+
+Regression coverage:
+
+- Live search route resolves with no Stylo panic (manual run).
+- Full serial library suite: **194 passed, 1 ignored**, against the forked stylo.

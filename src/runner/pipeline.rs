@@ -346,6 +346,12 @@ fn drive_content_bearing_initial_navigation(runtime: &mut dyn crate::js_engine::
         (function() {
             try {
                 var pageManager = document.querySelector && document.querySelector('ytd-page-manager');
+                if (!pageManager && document.querySelector) {
+                    var app = document.querySelector('ytd-app');
+                    var appController = app && (app.polymerController || app);
+                    pageManager = appController && appController.$ &&
+                        appController.$['page-manager'];
+                }
                 var getInitialData = window.getInitialData;
                 if (!pageManager || pageManager.__aurora_initial_navigation_driven__ ||
                     typeof pageManager.updatePageData !== 'function' ||
@@ -470,6 +476,16 @@ fn log_youtube_debug_state(runtime: &mut dyn crate::js_engine::JsRuntime, label:
             console.log('[yt-probe] {label} ytcfg=' + ytcfgType +
                 ' app=' + nodeState('ytd-app'));
             console.log('[yt-probe] {label} flexy=' + nodeState('ytd-watch-flexy'));
+            var app = document.querySelector('ytd-app');
+            var appController = app && (app.polymerController || app);
+            var pageManager = appController && appController.$ && appController.$['page-manager'];
+            var pageController = pageManager && pageManager.polymerController;
+            console.log('[yt-probe] {label} page-manager=' + bool(pageManager) +
+                ' lazy=' + (pageManager ? typeof pageManager.lazyPrepareCriticalPages : 'missing') +
+                ' controller=' + bool(pageController) +
+                ' controllerLazy=' + (pageController ? typeof pageController.lazyPrepareCriticalPages : 'missing') +
+                ' own=' + keys(pageManager) +
+                ' controllerOwn=' + keys(pageController));
             console.log('[yt-probe] {label} stamped player=' +
                 bool(document.querySelector('ytd-player,#movie_player,ytw-player-with-controls')) +
                 ' metadata=' + bool(document.querySelector('ytd-watch-metadata')) +
@@ -703,6 +719,43 @@ mod tests {
 
         drive_content_bearing_initial_navigation(&mut runtime);
         assert_eq!(runtime.eval_to_string("__navCalls"), Ok("1".into()));
+    }
+
+    #[test]
+    fn initial_navigation_driver_finds_page_manager_in_app_shadow_map() {
+        let dom = Parser::new("<html><body><ytd-app></ytd-app></body></html>").parse_document();
+        let mut runtime = crate::js_v8::V8Runtime::new(dom);
+        runtime
+            .execute(
+                r#"
+                globalThis.__navCalls = 0;
+                globalThis.__initialData = {
+                    page: 'search',
+                    contents: { videoRenderer: { videoId: 'shadow-content' } }
+                };
+                window.getInitialData = function() { return globalThis.__initialData; };
+                const app = document.querySelector('ytd-app');
+                const pageManager = document.createElement('ytd-page-manager');
+                pageManager.updatePageData = function(data) {
+                    globalThis.__navCalls++;
+                    globalThis.__navigatedData = data;
+                };
+                app.attachShadow({ mode: 'open' }).appendChild(pageManager);
+                app.$ = { 'page-manager': pageManager };
+                "#,
+            )
+            .unwrap();
+
+        assert_eq!(
+            runtime.eval_to_string("String(document.querySelector('ytd-page-manager'))"),
+            Ok("null".into())
+        );
+        drive_content_bearing_initial_navigation(&mut runtime);
+        assert_eq!(runtime.eval_to_string("__navCalls"), Ok("1".into()));
+        assert_eq!(
+            runtime.eval_to_string("__navigatedData.contents.videoRenderer.videoId"),
+            Ok("shadow-content".into())
+        );
     }
 
     fn headless_identity() -> Identity {

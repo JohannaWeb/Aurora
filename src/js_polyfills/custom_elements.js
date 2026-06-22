@@ -6,6 +6,7 @@
             var originalCreateElement = null;
             var hasOwn = Object.prototype.hasOwnProperty;
             var suppressTrackedConnect = 0;
+            var deferredStampedUpgrades = [];
             var trackedCustomElements = [];
             var logicalHostCache = typeof WeakMap === 'function' ? new WeakMap() : null;
             var tracedUnresolvedRoots = typeof WeakSet === 'function' ? new WeakSet() : null;
@@ -90,7 +91,7 @@
                 console.log('[yt-life] ' + msg);
             }
             function shouldTraceName(name) {
-                return true;
+                return !!globalThis.__aurora_debug_youtube__ && debugProbeName(name);
             }
             function shouldSuppressLifecycle(name) {
                 return name === 'snackbar-container' || name === 'yt-ephemeral-actions';
@@ -1373,6 +1374,34 @@
                 } catch (e) {
                     el.__aurora_id_map_hooks__ = true;
                 }
+                // Polymer resolves template metadata by repeatedly walking the
+                // detached fragment returned from document.importNode(). Merely
+                // exposing one of those cloned custom elements to JS must not run
+                // Aurora's detached-stamp composition path: doing so consumes the
+                // fragment while Polymer is still indexing it. Defer construction
+                // until indexing finishes, then defer connection until insertion.
+                if (typeof el._stampTemplate === 'function' &&
+                    !el._stampTemplate.__aurora_connect_suppressed__) {
+                    var originalStampTemplate = el._stampTemplate;
+                    var wrappedStampTemplate = function() {
+                        suppressTrackedConnect++;
+                        try {
+                            return originalStampTemplate.apply(this, arguments);
+                        } finally {
+                            suppressTrackedConnect--;
+                            if (!suppressTrackedConnect) flushDeferredStampedUpgrades();
+                        }
+                    };
+                    try {
+                        Object.defineProperty(wrappedStampTemplate, '__aurora_connect_suppressed__', {
+                            value: true,
+                            configurable: true
+                        });
+                    } catch (e) {
+                        wrappedStampTemplate.__aurora_connect_suppressed__ = true;
+                    }
+                    try { el._stampTemplate = wrappedStampTemplate; } catch (e) {}
+                }
                 if (typeof el._attachDom === 'function' && !el._attachDom.__aurora_id_map_wrapped__) {
                     var originalAttachDom = el._attachDom;
                     var wrappedAttachDom = function() {
@@ -1971,8 +2000,16 @@
                 rebuildPolymerIdMap(el);
                 var previousHost = activeLifecycleHost;
                 activeLifecycleHost = el;
-                try { el.ready(); }
-                finally { activeLifecycleHost = previousHost; }
+                try {
+                    el.ready();
+                } catch (error) {
+                    if (globalThis.__aurora_debug_youtube__ || ceOn()) {
+                        traceError('ready ' + name, error);
+                    }
+                    throw error;
+                } finally {
+                    activeLifecycleHost = previousHost;
+                }
                 rebuildPolymerIdMap(el);
                 installBindingHooks(el);
                 wireEventHandlers(el);
@@ -2104,11 +2141,49 @@
                 if (!shouldTrack(name)) return;
                 trackCustomElement(el);
                 if (getDefinition(name)) {
-                    tryUpgrade(el, suppressTrackedConnect ? false : true);
+                    // Template stamping exposes detached clones through childNodes
+                    // while Polymer is still building its node-info table. Wait
+                    // until the outer stamp returns before running constructors or
+                    // ready(), then wait until the microtask checkpoint to connect:
+                    // the caller still needs to insert the returned fragment.
+                    if (suppressTrackedConnect) deferStampedUpgrade(el);
+                    else tryUpgrade(el, true);
                     return;
                 }
                 if (!pending[name]) pending[name] = [];
                 pending[name].push(el);
+            }
+
+            function deferStampedUpgrade(el) {
+                if (!el || el.__aurora_stamp_upgrade_deferred__) return;
+                try {
+                    Object.defineProperty(el, '__aurora_stamp_upgrade_deferred__', {
+                        value: true,
+                        configurable: true,
+                        writable: true
+                    });
+                } catch (e) {
+                    el.__aurora_stamp_upgrade_deferred__ = true;
+                }
+                deferredStampedUpgrades.push(el);
+            }
+
+            function flushDeferredStampedUpgrades() {
+                if (suppressTrackedConnect || !deferredStampedUpgrades.length) return;
+                var list = deferredStampedUpgrades;
+                deferredStampedUpgrades = [];
+                for (var i = 0; i < list.length; i++) {
+                    var el = list[i];
+                    try { el.__aurora_stamp_upgrade_deferred__ = false; } catch (e) {}
+                    try { tryUpgrade(el, false); } catch (e) {}
+                }
+                var connect = function() {
+                    for (var j = 0; j < list.length; j++) {
+                        try { tryUpgrade(list[j], true); } catch (e) {}
+                    }
+                };
+                if (typeof queueMicrotask === 'function') queueMicrotask(connect);
+                else setTimeout(connect, 0);
             }
 
             function flushPending(name) {
@@ -2116,7 +2191,8 @@
                 if (!list || !list.length) return;
                 pending[name] = [];
                 for (var i = 0; i < list.length; i++) {
-                    tryUpgrade(list[i], true);
+                    if (suppressTrackedConnect) deferStampedUpgrade(list[i]);
+                    else tryUpgrade(list[i], true);
                 }
             }
 
@@ -2190,7 +2266,10 @@
                         };
                     });
                 },
-                upgrade: function(root) { trace('customElements.upgrade'); upgradeTree(root); },
+                upgrade: function(root) {
+                    if (globalThis.__aurora_debug_youtube__) trace('customElements.upgrade');
+                    upgradeTree(root);
+                },
                 __aurora_track_custom_element__: function(el) { rememberPending(el); }
             };
 
@@ -2317,6 +2396,10 @@
                         var nt; try { nt = node.nodeType; } catch (e) { return; }
                         if (nt === 1) {
                             var ln; try { ln = node.localName || ''; } catch (e) { ln = ''; }
+                            if (ln.indexOf('-') >= 0 && !node.__ce_upgraded__ &&
+                                getDefinition(ln) && isActuallyConnected(node)) {
+                                try { tryUpgrade(node, true); } catch (e) {}
+                            }
                             if (ln.indexOf('-') >= 0 && node.__ce_upgraded__ &&
                                 !node.__ce_connected__ && !node.__ce_connect_failed__) {
                                 try {

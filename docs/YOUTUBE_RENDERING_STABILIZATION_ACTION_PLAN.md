@@ -25,7 +25,77 @@ This plan reduces Aurora's YouTube fragility by moving away from the current "le
 - Current JS bridge code in this checkout is under `src/js_v8/`; do not assume SpiderMonkey-only paths when implementing mutation, event-loop, or layout-accessor work.
 - This document is the source of truth for stabilization progress. Treat a reliable, real content-bearing YouTube route as the next benchmark gate; do not expand scope to full YouTube navigation, playback, or account-specific behavior until that route is proven.
 
-## Live YouTube Status - 2026-06-18
+## Live YouTube Status - 2026-06-22 (later)
+
+- stylo#387 is now fixed at the source via a local fork. `third_party/stylo` is a
+  copy of crates.io `stylo` 0.18.0 with one change: `ElementStyles::is_display_none`
+  no longer unwraps a missing primary style (`get_primary().map_or(false, …)`).
+  A `[patch.crates-io]` in `Cargo.toml` redirects every stylo consumer — our
+  `style` dep and blitz-dom's transitive one — to the fork. On the live search
+  route the `data.rs:186` panic is gone entirely: the style resolve completes
+  cleanly every frame instead of panicking and dropping the frame. The
+  thread-state repair (below) is kept as a general safety net for any future
+  caught Stylo panic. Suite: **194 passed, 1 ignored**, serial.
+- The remaining gap is content generation, not styling. With the resolve no longer
+  crashing, the search route reaches `drive content-bearing initial page=search`
+  but the result cards are still not built into the DOM (node count unchanged at
+  ~1003/52). The live blocker is now JS hydration: `ytd-watch-flexy.ready()` throws
+  `Cannot read properties of null (reading '__shady_native_children')` during lazy
+  critical-page prep, and `ytd-search` never stamps its result list. This is the
+  next benchmark target and is independent of Stylo.
+
+## Live YouTube Status - 2026-06-22
+
+- The recurring Stylo thread-state assertion that wedged the search route is fixed.
+  Sequence: the search-result tree trips the upstream stylo#387 panic
+  (`data.rs:186`, `ElementStyles::primary` unwraps `None`) inside the parallel
+  style traversal. `blitz_dom::resolve_stylist` brackets that traversal with
+  `thread_state::enter(LAYOUT)` / `exit(LAYOUT)`; the unwind skips `exit`, leaving
+  the `LAYOUT` flag set on the main thread. Every later resolve — including the
+  clean snapshot rebuild that would otherwise paint — then aborts at
+  `thread_state::enter`'s re-entry `debug_assert`, so the page was wedged forever.
+  `catch_stylo_panic` (`src/blitz_document.rs`) now repairs the leaked flag after a
+  caught panic via a pinned (`=0.18.0`, same compiled crate as blitz-dom) `style`
+  dependency. Measured effect on the real search route: the endless
+  `thread_state.rs:75` loop is gone; only the single stylo#387 panic remains, after
+  which the snapshot rebuild resolves cleanly and the masthead skeleton paints
+  again instead of freezing. Regression test:
+  `catch_stylo_panic_repairs_leaked_layout_thread_state`. Unit baseline now
+  **194 passed, 1 ignored**, serial.
+- Still open: the first resolve of the search-result tree itself trips stylo#387
+  (upstream, fixed on `main` but unreleased), so that frame is dropped and the
+  rebuild paints the shell without result cards. Closing this needs either the
+  upstream fix vendored/patched or avoiding the `ElementData`-without-primary shape
+  that triggers it. The separate `ytd-watch-flexy.ready()` null ShadyDOM-child read
+  remains for the watch route.
+
+## Live YouTube Status - 2026-06-21
+
+- The search-route `ytd-app` bootstrap failure is fixed. The reported
+  `_stampTemplate` metadata error was not a missing template: while Polymer walked the
+  detached clone's node-info table, exposing `childNodes` caused Aurora to upgrade and
+  connect nested custom elements immediately. Detached-stamp composition then consumed
+  the fragment underneath Polymer. `custom_elements.js` now treats `_stampTemplate` as
+  a lifecycle transaction: nested construction waits until the outer stamp finishes,
+  and connection waits until the microtask checkpoint after the caller inserts the
+  fragment. Regression test:
+  `v8_defers_stamped_child_upgrade_until_polymer_finishes_indexing`.
+- This also fixes the follow-on `ytd-page-manager` failure. Its YouTube component
+  controller and forwarded `lazyPrepareCriticalPages` method now exist before the
+  initial-data loader reads `ytd-app.$['page-manager']`; the previous
+  `lazyPrepareCriticalPages is not a function` exception is gone.
+- The content-bearing navigation recovery now resolves a page manager through the
+  app's shadow `$` map when `document.querySelector` cannot cross Aurora's synthetic
+  shadow boundary. On the search route it reaches
+  `updatePageData(page='search')`. Regression test:
+  `initial_navigation_driver_finds_page_manager_in_app_shadow_map`.
+- The benchmark is not complete. Driving the search payload now reaches a deeper
+  render failure: Stylo panics at `stylo/data.rs:186` (`Option::unwrap`) followed by
+  its thread-state assertion, so results do not paint reliably. Lazy preparation also
+  exposes a separate `ytd-watch-flexy.ready()` null ShadyDOM-child read. Current unit
+  baseline: **193 passed, 1 ignored**, serial.
+
+## Earlier Live YouTube Status - 2026-06-18
 
 - Fixed a fatal `RefCell already mutably borrowed` abort that crashed `cargo run -- https://youtube.com` during Polymer hydration. Root cause: the `DomMutation::SetTextContent` dispatcher arm in `src/js_v8/tree/mutation.rs` held `node.borrow_mut()` across the render-sync call, and `BlitzDocument::sync_text_node` re-borrows the node via `parent_ptr`/`is_shadow_root_node`. YouTube triggered it immediately because Polymer rewrites `textContent` on text nodes. Fix: apply the structural mutation under the borrow, release it, then sync (matching the `SetAttribute` arm's existing pattern). Regression test: `v8_set_text_content_on_text_node_syncs_without_reborrow_panic` in `src/js_v8/runtime_tests.rs`.
 - After the fix YouTube loads through the full custom-element upgrade pipeline and renders a screenshot (`AURORA_SCREENSHOT=... cargo run -- https://youtube.com`), reproducibly, EXIT 0.

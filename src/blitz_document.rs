@@ -1742,8 +1742,37 @@ fn catch_stylo_panic<T>(context: &str, f: impl FnOnce() -> T) -> Option<T> {
                 "Blitz/Stylo panicked while {context}: {}",
                 panic_payload_message(payload.as_ref())
             );
+            repair_leaked_style_thread_state();
             None
         }
+    }
+}
+
+/// Repair Stylo's thread-local style state after a caught panic.
+///
+/// `blitz_dom::BaseDocument::resolve_stylist` brackets the style traversal with
+/// `thread_state::enter(LAYOUT)` / `exit(LAYOUT)`. If the traversal panics, the
+/// unwind skips `exit`, leaving the `LAYOUT` flag set on this thread. Every
+/// later resolve then aborts at `thread_state::enter`'s
+/// `debug_assert!(!current_state.intersects(LAYOUT))` — including the clean
+/// snapshot rebuild that would otherwise paint, so the page is wedged forever.
+///
+/// The original trigger (stylo#387's `ElementStyles::primary` unwrap on a
+/// content-bearing YouTube route) is now fixed at the source in our local stylo
+/// fork (`third_party/stylo`, see `[patch.crates-io]`), so this no longer fires
+/// on that path. It stays as a general safety net: any future Stylo panic that
+/// we catch must not leave the thread-state wedged.
+///
+/// Clearing the leaked flags lets the next resolve start from a clean state.
+/// This relies on Aurora's `style` dependency resolving to the exact same
+/// compiled `stylo` crate as blitz-dom (pinned `=0.18.0`), so we touch the same
+/// thread-local.
+fn repair_leaked_style_thread_state() {
+    use style::thread_state::{self, ThreadState};
+
+    let leaked = thread_state::get() & ThreadState::LAYOUT;
+    if !leaked.is_empty() {
+        thread_state::exit(leaked);
     }
 }
 
@@ -1848,6 +1877,28 @@ mod tests {
             .expect("Blitz document should build");
 
         blitz_doc.validate_mirror_integrity().unwrap();
+    }
+
+    #[test]
+    fn catch_stylo_panic_repairs_leaked_layout_thread_state() {
+        use style::thread_state::{self, ThreadState};
+
+        let _guard = BLITZ_DOCUMENT_TEST_LOCK.lock().unwrap();
+
+        // Model `resolve_stylist`: it enters the LAYOUT thread-state, then the
+        // style traversal panics (stylo#387) before the matching `exit`.
+        let result: Option<()> = catch_stylo_panic("test traversal", || {
+            thread_state::enter(ThreadState::LAYOUT);
+            panic!("simulated stylo#387 traversal panic");
+        });
+        assert!(result.is_none());
+
+        // Without the repair the leaked LAYOUT flag would wedge every later
+        // resolve at `thread_state::enter`'s re-entry assertion. Confirm it is
+        // cleared and a fresh enter/exit cycle succeeds.
+        assert!(!thread_state::get().intersects(ThreadState::LAYOUT));
+        thread_state::enter(ThreadState::LAYOUT);
+        thread_state::exit(ThreadState::LAYOUT);
     }
 
     #[cfg(debug_assertions)]

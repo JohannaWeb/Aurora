@@ -693,6 +693,68 @@ fn v8_custom_element_connects_only_after_append() {
 }
 
 #[test]
+fn v8_defers_stamped_child_upgrade_until_polymer_finishes_indexing() {
+    let mut runtime = V8Runtime::new(blank_dom());
+
+    assert_eq!(
+        runtime.eval_to_string(
+            r#"
+            (() => {
+            const events = [];
+            function StampChild() {
+                events.push('child-ctor');
+                HTMLElement.call(this);
+            }
+            StampChild.prototype = Object.create(HTMLElement.prototype);
+            StampChild.prototype.constructor = StampChild;
+            StampChild.prototype.ready = function() {
+                events.push('child-ready');
+            };
+            StampChild.prototype.connectedCallback = function() {
+                globalThis.stampChildConnected = this.isConnected;
+            };
+
+            function StampHost() { HTMLElement.call(this); }
+            StampHost.prototype = Object.create(HTMLElement.prototype);
+            StampHost.prototype.constructor = StampHost;
+            StampHost.prototype._stampTemplate = function(template) {
+                const fragment = document.importNode(template.content, true);
+                events.length = 0;
+                events.push('stamp-start');
+                const child = fragment.childNodes[0];
+                events.push('during:' + !!child.__ce_upgraded__);
+                events.push('stamp-end');
+                return fragment;
+            };
+            StampHost.prototype.ready = function() {
+                const template = document.createElement('template');
+                template.innerHTML = '<x-stamp-child></x-stamp-child>';
+                const fragment = this._stampTemplate(template);
+                events.push('after:' + !!fragment.firstChild.__ce_upgraded__);
+                const child = fragment.firstChild;
+                this.appendChild(fragment);
+                events.push('parent:' + (this.firstChild === child));
+            };
+
+            customElements.define('x-stamp-child', StampChild);
+            customElements.define('x-stamp-host', StampHost);
+            document.body.appendChild(document.createElement('x-stamp-host'));
+            return events.join('|');
+            })()
+            "#
+        ),
+        Ok(
+            "stamp-start|during:false|stamp-end|child-ctor|child-ready|after:true|parent:true"
+                .to_string()
+        )
+    );
+    assert_eq!(
+        runtime.eval_to_string("String(globalThis.stampChildConnected)"),
+        Ok("true".to_string())
+    );
+}
+
+#[test]
 fn v8_custom_element_calls_attached_when_connected_callback_missing() {
     let mut runtime = V8Runtime::new(blank_dom());
 
