@@ -41,3 +41,37 @@ jobs:
       # them concurrently trips a thread-state assertion and fails non-
       # deterministically. The suite is small, so single-threaded is cheap.
       run: cargo test --locked --lib --bins --verbose -- --test-threads=1
+
+  clippy:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout Aurora
+      uses: actions/checkout@v4
+
+    - name: Install Linux dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y --no-install-recommends \
+          libfontconfig1-dev \
+          libwayland-dev \
+          libx11-dev \
+          libx11-xcb-dev \
+          libxcb1-dev \
+          libxcb-render0-dev \
+          libxcb-shape0-dev \
+          libxcb-xfixes0-dev \
+          libxkbcommon-dev \
+          pkg-config
+
+    # The pinned nightly in rust-toolchain.toml is installed automatically by
+    # rustup; we only need to add the clippy component to it.
+    - name: Add clippy component
+      run: rustup component add clippy
+
+    - name: Run clippy
+      # Lint the crate's own code (lib + bins). `-D warnings` makes any clippy
+      # lint a hard CI failure so regressions can't land. If the first run is
+      # noisy, fix the findings or scope specific lints down via
+      # `#![allow(clippy::...)]` rather than dropping the gate.
+      run: cargo clippy --locked --lib --bins -- -D warnings
