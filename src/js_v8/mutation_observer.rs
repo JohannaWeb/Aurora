@@ -45,7 +45,9 @@ pub(super) enum MutationRecordData {
 }
 
 fn v8_str<'s>(scope: &v8::PinScope<'s, '_, ()>, s: &str) -> v8::Local<'s, v8::String> {
-    v8::String::new(scope, s).unwrap()
+    // `String::new` only returns `None` for strings past V8's length limit or
+    // while the isolate is terminating; our callers pass short internal keys.
+    v8::String::new(scope, s).expect("v8 string allocation failed")
 }
 
 // ── Install ───────────────────────────────────────────────────────────────────
@@ -59,7 +61,9 @@ pub(super) fn install(
     let ctor = v8::FunctionTemplate::builder(mutation_observer_ctor)
         .data(registry_data.into())
         .build(scope);
-    let ctor_fn = ctor.get_function(scope).unwrap();
+    let ctor_fn = ctor
+        .get_function(scope)
+        .expect("function template yields a function outside of a pending exception");
     global.set(
         scope,
         v8_str(scope, "MutationObserver").into(),
@@ -68,7 +72,8 @@ pub(super) fn install(
 }
 
 fn registry_from_data<'a>(args_data: v8::Local<'a, v8::Value>) -> &'a Rc<NodeRegistry> {
-    let external = v8::Local::<v8::External>::try_from(args_data).unwrap();
+    let external = v8::Local::<v8::External>::try_from(args_data)
+        .expect("callback data is always the registry External we installed");
     let registry_ptr = external.value() as *const Rc<NodeRegistry>;
     unsafe { &*registry_ptr }
 }
@@ -95,7 +100,7 @@ fn mutation_observer_ctor(
     // Bind the instance methods with their own External over the same registry
     // pointer; each method recovers its observer id from `this.__mo_id__`.
     let registry_ptr = v8::Local::<v8::External>::try_from(args.data())
-        .unwrap()
+        .expect("callback data is always the registry External we installed")
         .value();
     install_method(
         scope,
@@ -141,7 +146,9 @@ fn install_method(
     let t = v8::FunctionTemplate::builder(callback)
         .data(ext.into())
         .build(scope);
-    let f = t.get_function(scope).unwrap();
+    let f = t
+        .get_function(scope)
+        .expect("function template yields a function outside of a pending exception");
     let key = v8_str(scope, name);
     obj.set(scope, key.into(), f.into());
 }
@@ -170,7 +177,9 @@ fn mutation_observer_observe(
     if !target.is_object() {
         return;
     }
-    let obj = target.to_object(scope).unwrap();
+    let Some(obj) = target.to_object(scope) else {
+        return;
+    };
     let key = v8_str(scope, "__aurora_node_id");
     let Some(target_id) = obj
         .get(scope, key.into())
@@ -181,8 +190,7 @@ fn mutation_observer_observe(
 
     let (mut child_list, mut attributes, mut subtree) = (false, false, false);
     let opts = args.get(1);
-    if opts.is_object() {
-        let opts = opts.to_object(scope).unwrap();
+    if let Some(opts) = opts.is_object().then(|| opts.to_object(scope)).flatten() {
         for (k, slot) in [
             ("childList", &mut child_list),
             ("attributes", &mut attributes),

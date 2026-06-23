@@ -227,7 +227,9 @@ impl ShadowTreeBackend for SyntheticShadowTreeBackend {
 
             let target_slot = slots.iter().find(|slot| {
                 let slot_borrow = slot.borrow();
-                let slot_el = slot_borrow.as_element().unwrap();
+                let Some(slot_el) = slot_borrow.as_element() else {
+                    return false;
+                };
                 let name = slot_el.attributes.get("name");
                 match (slot_name.as_deref(), name.map(|s| s.as_str())) {
                     (Some(sn), Some(n)) => sn == n,
@@ -237,11 +239,9 @@ impl ShadowTreeBackend for SyntheticShadowTreeBackend {
             });
 
             if let Some(slot) = target_slot {
-                slot.borrow_mut()
-                    .as_element_mut()
-                    .unwrap()
-                    .assigned_nodes
-                    .push(child);
+                if let Some(slot_el) = slot.borrow_mut().as_element_mut() {
+                    slot_el.assigned_nodes.push(child);
+                }
             }
         }
     }

@@ -175,7 +175,7 @@ impl V8Runtime {
             console_template.set(v8_str(scope, "warn").into(), log_fn.into());
             console_template.set(v8_str(scope, "error").into(), log_fn.into());
 
-            let console_obj = console_template.new_instance(scope).unwrap();
+            let console_obj = console_template.new_instance(scope).expect("object template instantiation failed");
             global.set(scope, v8_str(scope, "console").into(), console_obj.into());
 
             // Document.
@@ -244,8 +244,31 @@ impl V8Runtime {
                 element_from_point_fn.into(),
             );
 
-            let document_obj = document_template.new_instance(scope).unwrap();
+            let document_obj = document_template.new_instance(scope).expect("object template instantiation failed");
             global.set(scope, v8_str(scope, "document").into(), document_obj.into());
+
+            // Native custom-element registry bindings (Phase 1 of the native
+            // custom-element-reaction plan, docs/NATIVE_CUSTOM_ELEMENTS_PLAN.md).
+            // `customElements.define` mirrors each definition into the native
+            // registry via `__aurora_ce_define_native`; the JS shim still drives
+            // upgrade/connection for now. `__aurora_ce_is_defined_native` lets JS
+            // (and tests) consult native state.
+            let ce_define_fn = v8::FunctionTemplate::builder(ce_define_native)
+                .data(doc_external.into())
+                .build(scope);
+            global.set(
+                scope,
+                v8_str(scope, "__aurora_ce_define_native").into(),
+                ce_define_fn.get_function(scope).expect("function template yields a function outside of a pending exception").into(),
+            );
+            let ce_is_defined_fn = v8::FunctionTemplate::builder(ce_is_defined_native)
+                .data(doc_external.into())
+                .build(scope);
+            global.set(
+                scope,
+                v8_str(scope, "__aurora_ce_is_defined_native").into(),
+                ce_is_defined_fn.get_function(scope).expect("function template yields a function outside of a pending exception").into(),
+            );
             document_obj.set(
                 scope,
                 v8_str(scope, "nodeType").into(),
@@ -326,7 +349,7 @@ impl V8Runtime {
 
             // Navigator stub.
             let navigator_template = v8::ObjectTemplate::new(scope);
-            let navigator_obj = navigator_template.new_instance(scope).unwrap();
+            let navigator_obj = navigator_template.new_instance(scope).expect("object template instantiation failed");
             navigator_obj.set(
                 scope,
                 v8_str(scope, "userAgent").into(),
@@ -340,7 +363,7 @@ impl V8Runtime {
 
             // Location stub.
             let location_template = v8::ObjectTemplate::new(scope);
-            let location_obj = location_template.new_instance(scope).unwrap();
+            let location_obj = location_template.new_instance(scope).expect("object template instantiation failed");
             location_obj.set(
                 scope,
                 v8_str(scope, "href").into(),
@@ -358,7 +381,7 @@ impl V8Runtime {
             global.set(
                 scope,
                 v8_str(scope, "setTimeout").into(),
-                set_timeout_fn.get_function(scope).unwrap().into(),
+                set_timeout_fn.get_function(scope).expect("function template yields a function outside of a pending exception").into(),
             );
 
             let set_interval_fn = v8::FunctionTemplate::builder(set_interval)
@@ -367,7 +390,7 @@ impl V8Runtime {
             global.set(
                 scope,
                 v8_str(scope, "setInterval").into(),
-                set_interval_fn.get_function(scope).unwrap().into(),
+                set_interval_fn.get_function(scope).expect("function template yields a function outside of a pending exception").into(),
             );
 
             let clear_timer_fn = v8::FunctionTemplate::builder(clear_timer)
@@ -376,12 +399,12 @@ impl V8Runtime {
             global.set(
                 scope,
                 v8_str(scope, "clearTimeout").into(),
-                clear_timer_fn.get_function(scope).unwrap().into(),
+                clear_timer_fn.get_function(scope).expect("function template yields a function outside of a pending exception").into(),
             );
             global.set(
                 scope,
                 v8_str(scope, "clearInterval").into(),
-                clear_timer_fn.get_function(scope).unwrap().into(),
+                clear_timer_fn.get_function(scope).expect("function template yields a function outside of a pending exception").into(),
             );
 
             let raf_fn = v8::FunctionTemplate::builder(request_animation_frame)
@@ -390,7 +413,7 @@ impl V8Runtime {
             global.set(
                 scope,
                 v8_str(scope, "requestAnimationFrame").into(),
-                raf_fn.get_function(scope).unwrap().into(),
+                raf_fn.get_function(scope).expect("function template yields a function outside of a pending exception").into(),
             );
 
             let cancel_raf_fn = v8::FunctionTemplate::builder(cancel_animation_frame)
@@ -399,7 +422,7 @@ impl V8Runtime {
             global.set(
                 scope,
                 v8_str(scope, "cancelAnimationFrame").into(),
-                cancel_raf_fn.get_function(scope).unwrap().into(),
+                cancel_raf_fn.get_function(scope).expect("function template yields a function outside of a pending exception").into(),
             );
 
             // Event listeners.
@@ -409,7 +432,7 @@ impl V8Runtime {
             let add_event_listener_fn = v8::FunctionTemplate::builder(add_event_listener)
                 .data(registry_data.into())
                 .build(scope);
-            let add_event_listener_js = add_event_listener_fn.get_function(scope).unwrap();
+            let add_event_listener_js = add_event_listener_fn.get_function(scope).expect("function template yields a function outside of a pending exception");
 
             global.set(
                 scope,
@@ -425,7 +448,7 @@ impl V8Runtime {
             let dispatch_event_fn = v8::FunctionTemplate::builder(dispatch_event_global)
                 .data(registry_data.into())
                 .build(scope);
-            let dispatch_event_js = dispatch_event_fn.get_function(scope).unwrap();
+            let dispatch_event_js = dispatch_event_fn.get_function(scope).expect("function template yields a function outside of a pending exception");
             global.set(
                 scope,
                 v8_str(scope, "dispatchEvent").into(),
@@ -446,7 +469,7 @@ impl V8Runtime {
                 v8_str(scope, "__aurora_fetch_sync__").into(),
                 v8::FunctionTemplate::new(scope, aurora_fetch_sync)
                     .get_function(scope)
-                    .unwrap()
+                    .expect("function template yields a function outside of a pending exception")
                     .into(),
             );
             let network_data = v8::External::new(
@@ -460,7 +483,7 @@ impl V8Runtime {
                     .data(network_data.into())
                     .build(scope)
                     .get_function(scope)
-                    .unwrap()
+                    .expect("function template yields a function outside of a pending exception")
                     .into(),
             );
             global.set(
@@ -470,14 +493,14 @@ impl V8Runtime {
                     .data(network_data.into())
                     .build(scope)
                     .get_function(scope)
-                    .unwrap()
+                    .expect("function template yields a function outside of a pending exception")
                     .into(),
             );
 
             // Stubs and no-ops
             let noop = v8::FunctionTemplate::new(scope, noop_callback)
                 .get_function(scope)
-                .unwrap();
+                .expect("function template yields a function outside of a pending exception");
             global.set(scope, v8_str(scope, "alert").into(), noop.into());
             global.set(scope, v8_str(scope, "scrollTo").into(), noop.into());
             global.set(scope, v8_str(scope, "scrollBy").into(), noop.into());
@@ -488,7 +511,7 @@ impl V8Runtime {
                 v8_str(scope, "atob").into(),
                 v8::FunctionTemplate::new(scope, atob)
                     .get_function(scope)
-                    .unwrap()
+                    .expect("function template yields a function outside of a pending exception")
                     .into(),
             );
             global.set(
@@ -496,7 +519,7 @@ impl V8Runtime {
                 v8_str(scope, "btoa").into(),
                 v8::FunctionTemplate::new(scope, btoa)
                     .get_function(scope)
-                    .unwrap()
+                    .expect("function template yields a function outside of a pending exception")
                     .into(),
             );
 
@@ -506,7 +529,7 @@ impl V8Runtime {
                 v8_str(scope, "structuredClone").into(),
                 v8::FunctionTemplate::new(scope, structured_clone)
                     .get_function(scope)
-                    .unwrap()
+                    .expect("function template yields a function outside of a pending exception")
                     .into(),
             );
 
@@ -544,7 +567,7 @@ impl V8Runtime {
                 v8_str(scope, "availHeight").into(),
                 v8::Integer::new(scope, 800).into(),
             );
-            let screen_obj = screen_template.new_instance(scope).unwrap();
+            let screen_obj = screen_template.new_instance(scope).expect("object template instantiation failed");
             global.set(scope, v8_str(scope, "screen").into(), screen_obj.into());
 
             // Storage
@@ -1063,17 +1086,16 @@ fn add_timer(
     is_interval: bool,
 ) {
     let callback = args.get(0);
-    if !callback.is_function() {
+    let Ok(callback) = v8::Local::<v8::Function>::try_from(callback) else {
         return;
-    }
-    let callback = v8::Local::<v8::Function>::try_from(callback).unwrap();
+    };
     let callback_global = v8::Global::new(scope, callback);
 
     let delay_ms = args.get(1).int32_value(scope).unwrap_or(0).max(0) as u64;
     let duration = Duration::from_millis(delay_ms);
 
     let data = args.data();
-    let external = v8::Local::<v8::External>::try_from(data).unwrap();
+    let external = v8::Local::<v8::External>::try_from(data).expect("callback data is always the External we installed");
     let window_ptr = external.value() as *const Rc<RefCell<WindowCapture>>;
     let window_rc = unsafe { &*window_ptr };
 
@@ -1102,7 +1124,7 @@ fn clear_timer(
     }
 
     let data = args.data();
-    let external = v8::Local::<v8::External>::try_from(data).unwrap();
+    let external = v8::Local::<v8::External>::try_from(data).expect("callback data is always the External we installed");
     let window_ptr = external.value() as *const Rc<RefCell<WindowCapture>>;
     let window_rc = unsafe { &*window_ptr };
 
@@ -1116,14 +1138,13 @@ fn request_animation_frame(
     mut retval: v8::ReturnValue,
 ) {
     let callback = args.get(0);
-    if !callback.is_function() {
+    let Ok(callback) = v8::Local::<v8::Function>::try_from(callback) else {
         return;
-    }
-    let callback = v8::Local::<v8::Function>::try_from(callback).unwrap();
+    };
     let callback_global = v8::Global::new(scope, callback);
 
     let data = args.data();
-    let external = v8::Local::<v8::External>::try_from(data).unwrap();
+    let external = v8::Local::<v8::External>::try_from(data).expect("callback data is always the External we installed");
     let window_ptr = external.value() as *const Rc<RefCell<WindowCapture>>;
     let window_rc = unsafe { &*window_ptr };
 
@@ -1152,7 +1173,7 @@ fn cancel_animation_frame(
     }
 
     let data = args.data();
-    let external = v8::Local::<v8::External>::try_from(data).unwrap();
+    let external = v8::Local::<v8::External>::try_from(data).expect("callback data is always the External we installed");
     let window_ptr = external.value() as *const Rc<RefCell<WindowCapture>>;
     let window_rc = unsafe { &*window_ptr };
 
@@ -1167,14 +1188,13 @@ fn add_event_listener(
 ) {
     let event_type = args.get(0).to_rust_string_lossy(scope);
     let callback = args.get(1);
-    if !callback.is_function() {
+    let Ok(callback) = v8::Local::<v8::Function>::try_from(callback) else {
         return;
-    }
-    let callback = v8::Local::<v8::Function>::try_from(callback).unwrap();
+    };
     let callback_global = v8::Global::new(scope, callback);
 
     let data = args.data();
-    let external = v8::Local::<v8::External>::try_from(data).unwrap();
+    let external = v8::Local::<v8::External>::try_from(data).expect("callback data is always the External we installed");
     let registry_ptr = external.value() as *const Rc<NodeRegistry>;
     let registry = unsafe { &*registry_ptr };
 
@@ -1194,7 +1214,7 @@ fn dispatch_event_global(
 ) {
     let event = args.get(0);
     let data = args.data();
-    let external = v8::Local::<v8::External>::try_from(data).unwrap();
+    let external = v8::Local::<v8::External>::try_from(data).expect("callback data is always the External we installed");
     let registry_ptr = external.value() as *const Rc<NodeRegistry>;
     let registry = unsafe { &*registry_ptr };
 
@@ -1223,7 +1243,7 @@ fn get_element_by_id(
 ) {
     let id = args.get(0).to_rust_string_lossy(scope);
     let data = args.data();
-    let external = v8::Local::<v8::External>::try_from(data).unwrap();
+    let external = v8::Local::<v8::External>::try_from(data).expect("callback data is always the External we installed");
     let doc_data_ptr = external.value() as *const DocumentData;
     let doc_data = unsafe { &*doc_data_ptr };
 
@@ -1243,7 +1263,7 @@ fn get_elements_by_tag_name(
 ) {
     let tag = args.get(0).to_rust_string_lossy(scope);
     let data = args.data();
-    let external = v8::Local::<v8::External>::try_from(data).unwrap();
+    let external = v8::Local::<v8::External>::try_from(data).expect("callback data is always the External we installed");
     let doc_data_ptr = external.value() as *const DocumentData;
     let doc_data = unsafe { &*doc_data_ptr };
 
@@ -1265,7 +1285,7 @@ fn query_selector(
 ) {
     let selector = args.get(0).to_rust_string_lossy(scope);
     let data = args.data();
-    let external = v8::Local::<v8::External>::try_from(data).unwrap();
+    let external = v8::Local::<v8::External>::try_from(data).expect("callback data is always the External we installed");
     let doc_data_ptr = external.value() as *const DocumentData;
     let doc_data = unsafe { &*doc_data_ptr };
 
@@ -1285,7 +1305,7 @@ fn query_selector_all(
 ) {
     let selector = args.get(0).to_rust_string_lossy(scope);
     let data = args.data();
-    let external = v8::Local::<v8::External>::try_from(data).unwrap();
+    let external = v8::Local::<v8::External>::try_from(data).expect("callback data is always the External we installed");
     let doc_data_ptr = external.value() as *const DocumentData;
     let doc_data = unsafe { &*doc_data_ptr };
 
@@ -1305,7 +1325,7 @@ fn create_element(
 ) {
     let tag = args.get(0).to_rust_string_lossy(scope).to_lowercase();
     let data = args.data();
-    let external = v8::Local::<v8::External>::try_from(data).unwrap();
+    let external = v8::Local::<v8::External>::try_from(data).expect("callback data is always the External we installed");
     let doc_data_ptr = external.value() as *const DocumentData;
     let doc_data = unsafe { &*doc_data_ptr };
 
@@ -1321,13 +1341,115 @@ fn create_text_node(
 ) {
     let text = args.get(0).to_rust_string_lossy(scope);
     let data = args.data();
-    let external = v8::Local::<v8::External>::try_from(data).unwrap();
+    let external = v8::Local::<v8::External>::try_from(data).expect("callback data is always the External we installed");
     let doc_data_ptr = external.value() as *const DocumentData;
     let doc_data = unsafe { &*doc_data_ptr };
 
     let node = Node::text(text);
     let js_node = create_js_node(scope, node, &doc_data.registry, &doc_data.document);
     retval.set(js_node.into());
+}
+
+/// Read a lifecycle callback (`connectedCallback`, …) off a constructor's
+/// prototype, returning a global handle if it's a function.
+fn read_proto_callback(
+    scope: &mut v8::PinScope<'_, '_>,
+    proto: v8::Local<'_, v8::Object>,
+    name: &str,
+) -> Option<v8::Global<v8::Function>> {
+    let key = v8_str(scope, name);
+    let val = proto.get(scope, key.into())?;
+    if val.is_function() {
+        let func = v8::Local::<v8::Function>::try_from(val).ok()?;
+        Some(v8::Global::new(scope, func))
+    } else {
+        None
+    }
+}
+
+/// `__aurora_ce_define_native(name, ctor)` — mirror a `customElements.define`
+/// call into the native registry (Phase 1). Reads the constructor's
+/// `observedAttributes` and prototype lifecycle callbacks once, at definition
+/// time, the way Ladybird's `CustomElementDefinition` captures them.
+fn ce_define_native(
+    scope: &mut v8::PinScope<'_, '_>,
+    args: v8::FunctionCallbackArguments,
+    mut _retval: v8::ReturnValue,
+) {
+    let name = args.get(0).to_rust_string_lossy(scope);
+    let ctor_val = args.get(1);
+    if name.is_empty() || !ctor_val.is_function() {
+        return;
+    }
+    let ctor_obj = match v8::Local::<v8::Object>::try_from(ctor_val) {
+        Ok(obj) => obj,
+        Err(_) => return,
+    };
+    let constructor = match v8::Local::<v8::Function>::try_from(ctor_val) {
+        Ok(func) => v8::Global::new(scope, func),
+        Err(_) => return,
+    };
+
+    // observedAttributes: a static array on the constructor.
+    let mut observed_attributes = std::collections::HashSet::new();
+    let observed_key = v8_str(scope, "observedAttributes");
+    if let Some(observed_val) = ctor_obj.get(scope, observed_key.into()) {
+        if observed_val.is_array() {
+            if let Ok(arr) = v8::Local::<v8::Array>::try_from(observed_val) {
+                for i in 0..arr.length() {
+                    if let Some(item) = arr.get_index(scope, i) {
+                        observed_attributes.insert(item.to_rust_string_lossy(scope));
+                    }
+                }
+            }
+        }
+    }
+
+    // Lifecycle callbacks live on the constructor's prototype.
+    let proto_key = v8_str(scope, "prototype");
+    let (connected, disconnected, attribute_changed) = match ctor_obj
+        .get(scope, proto_key.into())
+        .and_then(|p| v8::Local::<v8::Object>::try_from(p).ok())
+    {
+        Some(proto) => (
+            read_proto_callback(scope, proto, "connectedCallback"),
+            read_proto_callback(scope, proto, "disconnectedCallback"),
+            read_proto_callback(scope, proto, "attributeChangedCallback"),
+        ),
+        None => (None, None, None),
+    };
+
+    let data = args.data();
+    let external = v8::Local::<v8::External>::try_from(data)
+        .expect("callback data is always the External we installed");
+    let doc_data = unsafe { &*(external.value() as *const DocumentData) };
+    doc_data
+        .registry
+        .ce_registry
+        .define(super::custom_elements::CeDefinition {
+            name,
+            constructor,
+            connected,
+            disconnected,
+            attribute_changed,
+            observed_attributes,
+        });
+}
+
+/// `__aurora_ce_is_defined_native(name)` — whether a tag name has a native
+/// definition. Lets JS and tests consult native registry state.
+fn ce_is_defined_native(
+    scope: &mut v8::PinScope<'_, '_>,
+    args: v8::FunctionCallbackArguments,
+    mut retval: v8::ReturnValue,
+) {
+    let name = args.get(0).to_rust_string_lossy(scope);
+    let data = args.data();
+    let external = v8::Local::<v8::External>::try_from(data)
+        .expect("callback data is always the External we installed");
+    let doc_data = unsafe { &*(external.value() as *const DocumentData) };
+    let defined = doc_data.registry.ce_registry.is_defined(&name);
+    retval.set(v8::Boolean::new(scope, defined).into());
 }
 
 /// `document.elementFromPoint(x, y)` — hit-tests the Blitz layout (Phase 8.2
@@ -1341,7 +1463,7 @@ fn element_from_point(
     let x = args.get(0).number_value(scope).unwrap_or(f64::NAN) as f32;
     let y = args.get(1).number_value(scope).unwrap_or(f64::NAN) as f32;
     let data = args.data();
-    let external = v8::Local::<v8::External>::try_from(data).unwrap();
+    let external = v8::Local::<v8::External>::try_from(data).expect("callback data is always the External we installed");
     let doc_data_ptr = external.value() as *const DocumentData;
     let doc_data = unsafe { &*doc_data_ptr };
 
@@ -1389,7 +1511,7 @@ fn structured_clone(
     // Minimal JSON round-trip for parity.
     if let Some(json_str) = v8::json::stringify(scope, val) {
         let json_str = json_str.to_rust_string_lossy(scope);
-        let code = v8::String::new(scope, &json_str).unwrap();
+        let code = v8_str(scope, &json_str);
         if let Some(parsed) = v8::json::parse(scope, code) {
             retval.set(parsed);
         }
@@ -1460,7 +1582,7 @@ fn aurora_fetch_start(
         .collect();
     let body = (!body.is_empty()).then_some(body);
 
-    let external = v8::Local::<v8::External>::try_from(args.data()).unwrap();
+    let external = v8::Local::<v8::External>::try_from(args.data()).expect("callback data is always the External we installed");
     let tasks = unsafe { &*(external.value() as *const Rc<RefCell<NetworkTasks>>) };
     let id = tasks.borrow_mut().start(url, method, body, headers);
     retval.set(v8::Integer::new(scope, id as i32).into());
@@ -1472,7 +1594,7 @@ fn aurora_fetch_poll(
     mut retval: v8::ReturnValue,
 ) {
     let id = args.get(0).uint32_value(scope).unwrap_or(0);
-    let external = v8::Local::<v8::External>::try_from(args.data()).unwrap();
+    let external = v8::Local::<v8::External>::try_from(args.data()).expect("callback data is always the External we installed");
     let tasks = unsafe { &*(external.value() as *const Rc<RefCell<NetworkTasks>>) };
     let result = tasks.borrow_mut().poll(id);
     match result {
@@ -1579,7 +1701,7 @@ fn build_storage_object<'s>(
         .build(scope);
     template.set(v8_str(scope, "key").into(), key.into());
 
-    template.new_instance(scope).unwrap()
+    template.new_instance(scope).expect("object template instantiation failed")
 }
 
 fn storage_get_item(
@@ -1589,7 +1711,7 @@ fn storage_get_item(
 ) {
     let key = args.get(0).to_rust_string_lossy(scope);
     let data = args.data();
-    let external = v8::Local::<v8::External>::try_from(data).unwrap();
+    let external = v8::Local::<v8::External>::try_from(data).expect("callback data is always the External we installed");
     let map_ptr =
         external.value() as *const Rc<RefCell<std::collections::BTreeMap<String, String>>>;
     let map = unsafe { &*map_ptr };
@@ -1609,7 +1731,7 @@ fn storage_set_item(
     let key = args.get(0).to_rust_string_lossy(scope);
     let val = args.get(1).to_rust_string_lossy(scope);
     let data = args.data();
-    let external = v8::Local::<v8::External>::try_from(data).unwrap();
+    let external = v8::Local::<v8::External>::try_from(data).expect("callback data is always the External we installed");
     let map_ptr =
         external.value() as *const Rc<RefCell<std::collections::BTreeMap<String, String>>>;
     let map = unsafe { &*map_ptr };
@@ -1624,7 +1746,7 @@ fn storage_remove_item(
 ) {
     let key = args.get(0).to_rust_string_lossy(scope);
     let data = args.data();
-    let external = v8::Local::<v8::External>::try_from(data).unwrap();
+    let external = v8::Local::<v8::External>::try_from(data).expect("callback data is always the External we installed");
     let map_ptr =
         external.value() as *const Rc<RefCell<std::collections::BTreeMap<String, String>>>;
     let map = unsafe { &*map_ptr };
@@ -1638,7 +1760,7 @@ fn storage_clear(
     mut _retval: v8::ReturnValue,
 ) {
     let data = args.data();
-    let external = v8::Local::<v8::External>::try_from(data).unwrap();
+    let external = v8::Local::<v8::External>::try_from(data).expect("callback data is always the External we installed");
     let map_ptr =
         external.value() as *const Rc<RefCell<std::collections::BTreeMap<String, String>>>;
     let map = unsafe { &*map_ptr };
@@ -1653,7 +1775,7 @@ fn storage_key(
 ) {
     let idx = args.get(0).uint32_value(scope).unwrap_or(0) as usize;
     let data = args.data();
-    let external = v8::Local::<v8::External>::try_from(data).unwrap();
+    let external = v8::Local::<v8::External>::try_from(data).expect("callback data is always the External we installed");
     let map_ptr =
         external.value() as *const Rc<RefCell<std::collections::BTreeMap<String, String>>>;
     let map = unsafe { &*map_ptr };

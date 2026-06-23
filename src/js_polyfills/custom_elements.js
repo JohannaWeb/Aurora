@@ -2252,6 +2252,14 @@
                 installSetUpPropsHook(ctor, name);
                 probeCustomElementState(name, null, ctor);
                 flushPending(name);
+                // Mirror the definition into the native registry (Phase 1 of the
+                // native custom-element-reaction plan). The native side captures
+                // the constructor, observedAttributes, and lifecycle callbacks;
+                // JS still drives upgrade/connection for now.
+                if (typeof globalThis.__aurora_ce_define_native === 'function') {
+                    try { globalThis.__aurora_ce_define_native(name, ctor); }
+                    catch (e) {}
+                }
             },
                 get: function(name) {
                     var definition = getDefinition(name);

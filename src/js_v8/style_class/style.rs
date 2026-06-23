@@ -1,6 +1,6 @@
 use crate::css::parse_style_text;
 use crate::dom::{Node, NodePtr};
-use crate::js_v8::node_create::NodeData;
+use crate::js_v8::node_create::{NodeData, external_data, v8_str};
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::rc::Rc;
@@ -63,7 +63,9 @@ pub(crate) fn build_style_object<'s>(
         install_style_property_accessor(scope, template, js_name, css_name, style_external);
     }
 
-    template.new_instance(scope).unwrap()
+    template
+        .new_instance(scope)
+        .expect("object template instantiation failed")
 }
 
 fn install_method<'s>(
@@ -76,7 +78,7 @@ fn install_method<'s>(
     let t = v8::FunctionTemplate::builder(callback)
         .data(data.into())
         .build(scope);
-    let name_str = v8::String::new(scope, name).unwrap();
+    let name_str = v8_str(scope, name);
     template.set(name_str.into(), t.into());
 }
 
@@ -88,7 +90,7 @@ fn install_accessor<'s>(
     setter: impl v8::MapFnTo<v8::AccessorNameSetterCallback>,
     data: v8::Local<'s, v8::External>,
 ) {
-    let name_str = v8::String::new(scope, name).unwrap();
+    let name_str = v8_str(scope, name);
     template.set_accessor_with_configuration(
         name_str.into(),
         v8::AccessorConfiguration::new(getter)
@@ -103,13 +105,11 @@ fn get_property_value(
     mut retval: v8::ReturnValue,
 ) {
     let k = args.get(0).to_rust_string_lossy(scope);
-    let data = args.data();
-    let external = v8::Local::<v8::External>::try_from(data).unwrap();
-    let style_data = unsafe { &*(external.value() as *const StyleData) };
+    let style_data: &StyleData = external_data(args.data());
 
     let style = style_data.style.borrow();
     let val = style.get(&k).cloned().unwrap_or_default();
-    let s = v8::String::new(scope, &val).unwrap();
+    let s = v8_str(scope, &val);
     retval.set(s.into());
 }
 
@@ -120,9 +120,7 @@ fn set_property(
 ) {
     let k = args.get(0).to_rust_string_lossy(scope);
     let v = args.get(1).to_rust_string_lossy(scope);
-    let data = args.data();
-    let external = v8::Local::<v8::External>::try_from(data).unwrap();
-    let style_data = unsafe { &*(external.value() as *const StyleData) };
+    let style_data: &StyleData = external_data(args.data());
 
     {
         let mut style = style_data.style.borrow_mut();
@@ -142,9 +140,7 @@ fn remove_property(
     mut _retval: v8::ReturnValue,
 ) {
     let k = args.get(0).to_rust_string_lossy(scope);
-    let data = args.data();
-    let external = v8::Local::<v8::External>::try_from(data).unwrap();
-    let style_data = unsafe { &*(external.value() as *const StyleData) };
+    let style_data: &StyleData = external_data(args.data());
 
     {
         let mut style = style_data.style.borrow_mut();
@@ -160,16 +156,14 @@ fn item(
     mut retval: v8::ReturnValue,
 ) {
     let idx = args.get(0).uint32_value(scope).unwrap_or(0) as usize;
-    let data = args.data();
-    let external = v8::Local::<v8::External>::try_from(data).unwrap();
-    let style_data = unsafe { &*(external.value() as *const StyleData) };
+    let style_data: &StyleData = external_data(args.data());
 
     let style = style_data.style.borrow();
     if let Some(k) = style.keys().nth(idx) {
-        let s = v8::String::new(scope, k).unwrap();
+        let s = v8_str(scope, k);
         retval.set(s.into());
     } else {
-        let empty = v8::String::new(scope, "").unwrap();
+        let empty = v8_str(scope, "");
         retval.set(empty.into());
     }
 }
@@ -180,12 +174,11 @@ fn get_css_text(
     args: v8::PropertyCallbackArguments,
     mut retval: v8::ReturnValue,
 ) {
-    let external = v8::Local::<v8::External>::try_from(args.data()).unwrap();
-    let style_data = unsafe { &*(external.value() as *const StyleData) };
+    let style_data: &StyleData = external_data(args.data());
 
     let style = style_data.style.borrow();
     let css = serialize_style(&style);
-    let s = v8::String::new(scope, &css).unwrap();
+    let s = v8_str(scope, &css);
     retval.set(s.into());
 }
 
@@ -196,8 +189,7 @@ fn set_css_text(
     args: v8::PropertyCallbackArguments,
     _retval: v8::ReturnValue<()>,
 ) {
-    let external = v8::Local::<v8::External>::try_from(args.data()).unwrap();
-    let style_data = unsafe { &*(external.value() as *const StyleData) };
+    let style_data: &StyleData = external_data(args.data());
 
     let css = value.to_rust_string_lossy(scope);
     {
@@ -275,7 +267,7 @@ fn install_style_property_accessor<'s>(
     // We need to pass the mapping to the callback.
 
     template.set_accessor_with_configuration(
-        v8::String::new(scope, js_name).unwrap().into(),
+        v8_str(scope, js_name).into(),
         v8::AccessorConfiguration::new(style_property_getter)
             .setter(style_property_setter)
             .data(data.into()),
@@ -288,14 +280,13 @@ fn style_property_getter(
     args: v8::PropertyCallbackArguments,
     mut retval: v8::ReturnValue,
 ) {
-    let external = v8::Local::<v8::External>::try_from(args.data()).unwrap();
-    let style_data = unsafe { &*(external.value() as *const StyleData) };
+    let style_data: &StyleData = external_data(args.data());
 
     let js_name = name.to_rust_string_lossy(scope);
     if let Some(css_name) = js_to_css_name(&js_name) {
         let style = style_data.style.borrow();
         let val = style.get(css_name).cloned().unwrap_or_default();
-        let s = v8::String::new(scope, &val).unwrap();
+        let s = v8_str(scope, &val);
         retval.set(s.into());
     }
 }
@@ -307,8 +298,7 @@ fn style_property_setter(
     args: v8::PropertyCallbackArguments,
     _retval: v8::ReturnValue<()>,
 ) {
-    let external = v8::Local::<v8::External>::try_from(args.data()).unwrap();
-    let style_data = unsafe { &*(external.value() as *const StyleData) };
+    let style_data: &StyleData = external_data(args.data());
 
     let js_name = name.to_rust_string_lossy(scope);
     if let Some(css_name) = js_to_css_name(&js_name) {

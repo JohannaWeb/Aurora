@@ -425,7 +425,9 @@ pub(super) fn create_js_node<'s>(
         }
     }
 
-    let obj = template.new_instance(scope).unwrap();
+    let obj = template
+        .new_instance(scope)
+        .expect("object template instantiation failed");
 
     obj.set(
         scope,
@@ -665,8 +667,7 @@ fn assigned_nodes(
     args: v8::FunctionCallbackArguments,
     mut retval: v8::ReturnValue,
 ) {
-    let external = v8::Local::<v8::External>::try_from(args.data()).unwrap();
-    let node_data = unsafe { &*(external.value() as *const NodeData) };
+    let node_data = node_data_from(args.data());
 
     let backend = crate::dom::shadow::SyntheticShadowTreeBackend;
     if let Some(shadow_root) = backend.nearest_shadow_root(&node_data.node) {
@@ -684,8 +685,32 @@ fn assigned_nodes(
     retval.set(result_array.into());
 }
 
-fn v8_str<'s>(scope: &v8::PinScope<'s, '_, ()>, s: &str) -> v8::Local<'s, v8::String> {
-    v8::String::new(scope, s).unwrap()
+pub(super) fn v8_str<'s>(scope: &v8::PinScope<'s, '_, ()>, s: &str) -> v8::Local<'s, v8::String> {
+    // `String::new` only returns `None` past V8's string-length limit or while
+    // the isolate is terminating; our callers pass node names and attribute text.
+    v8::String::new(scope, s).expect("v8 string allocation failed")
+}
+
+/// Recover the `&T` that a callback's data External points at.
+///
+/// Every callback's function/accessor template is built with an External over a
+/// leaked `Box<T>` (a `NodeData`, `StyleData`, …), so the data slot is always
+/// that External. The caller must request the same `T` the External was built
+/// with.
+///
+/// # Safety
+/// Sound as long as the data slot really is the External we installed for this
+/// callback and the pointee `T` matches — which is an invariant of how the
+/// templates are constructed here, `classlist.rs`, and `style.rs`.
+pub(super) fn external_data<'a, T>(data: v8::Local<'a, v8::Value>) -> &'a T {
+    let external = v8::Local::<v8::External>::try_from(data)
+        .expect("callback data is always the External we installed");
+    unsafe { &*(external.value() as *const T) }
+}
+
+/// Recover the `&NodeData` a per-node method callback was installed with.
+pub(super) fn node_data_from<'a>(data: v8::Local<'a, v8::Value>) -> &'a NodeData {
+    external_data(data)
 }
 
 /// Set `obj`'s `[[Prototype]]` to `globalThis[<ctor>].prototype` if that DOM
@@ -800,11 +825,11 @@ fn node_from_js(
     if !val.is_object() {
         return None;
     }
-    let obj = val.to_object(scope).unwrap();
+    let obj = val.to_object(scope)?;
     let key = v8_str(scope, "__aurora_node_id");
     let id_val = obj.get(scope, key.into())?;
     if id_val.is_int32() {
-        let id = id_val.int32_value(scope).unwrap() as u32;
+        let id = id_val.int32_value(scope)? as u32;
         return registry.lookup(id);
     }
     let blitz_key = v8_str(scope, "__aurora_blitz_node_id");
@@ -812,7 +837,7 @@ fn node_from_js(
     if !blitz_id_val.is_int32() {
         return None;
     }
-    let blitz_id = blitz_id_val.int32_value(scope).unwrap() as usize;
+    let blitz_id = blitz_id_val.int32_value(scope)? as usize;
     registry.dom_node_for_blitz_id(blitz_id)
 }
 
@@ -842,8 +867,7 @@ fn query_selector(
 ) {
     let selector = args.get(0).to_rust_string_lossy(scope);
     let data = args.data();
-    let external = v8::Local::<v8::External>::try_from(data).unwrap();
-    let node_data = unsafe { &*(external.value() as *const NodeData) };
+    let node_data = node_data_from(data);
 
     let selector_root = crate::dom::SyntheticShadowTreeBackend
         .nearest_shadow_root(&node_data.node)
@@ -864,8 +888,7 @@ fn query_selector_all(
 ) {
     let selector = args.get(0).to_rust_string_lossy(scope);
     let data = args.data();
-    let external = v8::Local::<v8::External>::try_from(data).unwrap();
-    let node_data = unsafe { &*(external.value() as *const NodeData) };
+    let node_data = node_data_from(data);
 
     let selector_root = crate::dom::SyntheticShadowTreeBackend
         .nearest_shadow_root(&node_data.node)
@@ -886,8 +909,7 @@ fn get_elements_by_tag_name(
 ) {
     let tag = args.get(0).to_rust_string_lossy(scope).to_lowercase();
     let data = args.data();
-    let external = v8::Local::<v8::External>::try_from(data).unwrap();
-    let node_data = unsafe { &*(external.value() as *const NodeData) };
+    let node_data = node_data_from(data);
 
     let mut out = Vec::new();
     query::collect_by_tag(&node_data.node, &tag, &mut out);
@@ -907,8 +929,7 @@ fn matches(
 ) {
     let selector = args.get(0).to_rust_string_lossy(scope);
     let data = args.data();
-    let external = v8::Local::<v8::External>::try_from(data).unwrap();
-    let node_data = unsafe { &*(external.value() as *const NodeData) };
+    let node_data = node_data_from(data);
 
     let selector_root = crate::dom::SyntheticShadowTreeBackend
         .nearest_shadow_root(&node_data.node)
@@ -924,8 +945,7 @@ fn closest(
 ) {
     let selector = args.get(0).to_rust_string_lossy(scope);
     let data = args.data();
-    let external = v8::Local::<v8::External>::try_from(data).unwrap();
-    let node_data = unsafe { &*(external.value() as *const NodeData) };
+    let node_data = node_data_from(data);
 
     let selector_root = crate::dom::SyntheticShadowTreeBackend
         .nearest_shadow_root(&node_data.node)
@@ -948,8 +968,7 @@ fn append_child(
     mut retval: v8::ReturnValue,
 ) {
     let data = args.data();
-    let external = v8::Local::<v8::External>::try_from(data).unwrap();
-    let node_data = unsafe { &*(external.value() as *const NodeData) };
+    let node_data = node_data_from(data);
 
     if let Some(child) = node_from_js(scope, args.get(0), &node_data.registry) {
         let fragment_children = if is_document_fragment(&child) {
@@ -989,8 +1008,7 @@ fn remove_child(
     mut retval: v8::ReturnValue,
 ) {
     let data = args.data();
-    let external = v8::Local::<v8::External>::try_from(data).unwrap();
-    let node_data = unsafe { &*(external.value() as *const NodeData) };
+    let node_data = node_data_from(data);
 
     if let Some(child) = node_from_js(scope, args.get(0), &node_data.registry) {
         let _mutation_result = mutation::apply_dom_mutation(
@@ -1012,8 +1030,7 @@ fn insert_before(
     mut retval: v8::ReturnValue,
 ) {
     let data = args.data();
-    let external = v8::Local::<v8::External>::try_from(data).unwrap();
-    let node_data = unsafe { &*(external.value() as *const NodeData) };
+    let node_data = node_data_from(data);
 
     let new_child = node_from_js(scope, args.get(0), &node_data.registry);
     let ref_child = node_from_js(scope, args.get(1), &node_data.registry);
@@ -1057,8 +1074,7 @@ fn replace_child(
     mut retval: v8::ReturnValue,
 ) {
     let data = args.data();
-    let external = v8::Local::<v8::External>::try_from(data).unwrap();
-    let node_data = unsafe { &*(external.value() as *const NodeData) };
+    let node_data = node_data_from(data);
 
     let new_child = node_from_js(scope, args.get(0), &node_data.registry);
     let old_child = node_from_js(scope, args.get(1), &node_data.registry);
@@ -1102,8 +1118,7 @@ fn remove_node(
     mut _retval: v8::ReturnValue,
 ) {
     let data = args.data();
-    let external = v8::Local::<v8::External>::try_from(data).unwrap();
-    let node_data = unsafe { &*(external.value() as *const NodeData) };
+    let node_data = node_data_from(data);
 
     if let Some(parent) = find_parent_for_node(node_data) {
         let _mutation_result = mutation::apply_dom_mutation(
@@ -1182,8 +1197,7 @@ fn clone_node(
     mut retval: v8::ReturnValue,
 ) {
     let data = args.data();
-    let external = v8::Local::<v8::External>::try_from(data).unwrap();
-    let node_data = unsafe { &*(external.value() as *const NodeData) };
+    let node_data = node_data_from(data);
 
     let deep = args.get(0).is_true();
     let cloned = mutation::clone_node(&node_data.node, deep);
@@ -1204,8 +1218,7 @@ fn contains(
     mut retval: v8::ReturnValue,
 ) {
     let data = args.data();
-    let external = v8::Local::<v8::External>::try_from(data).unwrap();
-    let node_data = unsafe { &*(external.value() as *const NodeData) };
+    let node_data = node_data_from(data);
 
     if let Some(other) = node_from_js(scope, args.get(0), &node_data.registry) {
         retval.set(v8::Boolean::new(scope, mutation::contains_ptr(&node_data.node, &other)).into());
@@ -1220,8 +1233,7 @@ fn has_child_nodes(
     mut retval: v8::ReturnValue,
 ) {
     let data = args.data();
-    let external = v8::Local::<v8::External>::try_from(data).unwrap();
-    let node_data = unsafe { &*(external.value() as *const NodeData) };
+    let node_data = node_data_from(data);
     retval.set(v8::Boolean::new(scope, !child_nodes_of(&node_data.node).is_empty()).into());
 }
 
@@ -1232,8 +1244,7 @@ fn get_attribute(
 ) {
     let name = args.get(0).to_rust_string_lossy(scope);
     let data = args.data();
-    let external = v8::Local::<v8::External>::try_from(data).unwrap();
-    let node_data = unsafe { &*(external.value() as *const NodeData) };
+    let node_data = node_data_from(data);
 
     if let Node::Element(el) = &*node_data.node.borrow() {
         if let Some(val) = el.attributes.get(&name) {
@@ -1251,8 +1262,7 @@ fn get_attribute_ns(
 ) {
     let name = args.get(1).to_rust_string_lossy(scope);
     let data = args.data();
-    let external = v8::Local::<v8::External>::try_from(data).unwrap();
-    let node_data = unsafe { &*(external.value() as *const NodeData) };
+    let node_data = node_data_from(data);
 
     if let Node::Element(el) = &*node_data.node.borrow() {
         if let Some(val) = el.attributes.get(&name) {
@@ -1271,8 +1281,7 @@ fn set_attribute(
     let name = args.get(0).to_rust_string_lossy(scope);
     let value = args.get(1).to_rust_string_lossy(scope);
     let data = args.data();
-    let external = v8::Local::<v8::External>::try_from(data).unwrap();
-    let node_data = unsafe { &*(external.value() as *const NodeData) };
+    let node_data = node_data_from(data);
 
     let _mutation_result = mutation::apply_dom_mutation(
         &node_data.registry,
@@ -1292,8 +1301,7 @@ fn set_attribute_ns(
     let name = args.get(1).to_rust_string_lossy(scope);
     let value = args.get(2).to_rust_string_lossy(scope);
     let data = args.data();
-    let external = v8::Local::<v8::External>::try_from(data).unwrap();
-    let node_data = unsafe { &*(external.value() as *const NodeData) };
+    let node_data = node_data_from(data);
 
     let _mutation_result = mutation::apply_dom_mutation(
         &node_data.registry,
@@ -1312,8 +1320,7 @@ fn remove_attribute(
 ) {
     let name = args.get(0).to_rust_string_lossy(scope);
     let data = args.data();
-    let external = v8::Local::<v8::External>::try_from(data).unwrap();
-    let node_data = unsafe { &*(external.value() as *const NodeData) };
+    let node_data = node_data_from(data);
 
     let _mutation_result = mutation::apply_dom_mutation(
         &node_data.registry,
@@ -1331,8 +1338,7 @@ fn remove_attribute_ns(
 ) {
     let name = args.get(1).to_rust_string_lossy(scope);
     let data = args.data();
-    let external = v8::Local::<v8::External>::try_from(data).unwrap();
-    let node_data = unsafe { &*(external.value() as *const NodeData) };
+    let node_data = node_data_from(data);
 
     let _mutation_result = mutation::apply_dom_mutation(
         &node_data.registry,
@@ -1350,8 +1356,7 @@ fn has_attribute(
 ) {
     let name = args.get(0).to_rust_string_lossy(scope);
     let data = args.data();
-    let external = v8::Local::<v8::External>::try_from(data).unwrap();
-    let node_data = unsafe { &*(external.value() as *const NodeData) };
+    let node_data = node_data_from(data);
 
     if let Node::Element(el) = &*node_data.node.borrow() {
         retval.set(v8::Boolean::new(scope, el.attributes.contains_key(&name)).into());
@@ -1367,8 +1372,7 @@ fn has_attribute_ns(
 ) {
     let name = args.get(1).to_rust_string_lossy(scope);
     let data = args.data();
-    let external = v8::Local::<v8::External>::try_from(data).unwrap();
-    let node_data = unsafe { &*(external.value() as *const NodeData) };
+    let node_data = node_data_from(data);
 
     if let Node::Element(el) = &*node_data.node.borrow() {
         retval.set(v8::Boolean::new(scope, el.attributes.contains_key(&name)).into());
@@ -1383,8 +1387,7 @@ fn has_attributes(
     mut retval: v8::ReturnValue,
 ) {
     let data = args.data();
-    let external = v8::Local::<v8::External>::try_from(data).unwrap();
-    let node_data = unsafe { &*(external.value() as *const NodeData) };
+    let node_data = node_data_from(data);
 
     let has_any = match &*node_data.node.borrow() {
         Node::Element(el) => !el.attributes.is_empty(),
@@ -1449,7 +1452,7 @@ fn install_map_method<'s>(
         .data(data.into())
         .build(scope)
         .get_function(scope)
-        .unwrap();
+        .expect("function template yields a function outside of a pending exception");
     obj.set(scope, v8_str(scope, name).into(), function.into());
 }
 
@@ -1500,8 +1503,9 @@ fn get_attributes<'s>(
     args: v8::PropertyCallbackArguments<'s>,
     mut retval: v8::ReturnValue,
 ) {
-    let external = v8::Local::<v8::External>::try_from(args.data()).unwrap();
-    let node_data = unsafe { &*(external.value() as *const NodeData) };
+    let external = v8::Local::<v8::External>::try_from(args.data())
+        .expect("callback data is always the NodeData External we installed");
+    let node_data = node_data_from(args.data());
     let attrs = build_named_node_map(scope, external, node_data);
     retval.set(attrs.into());
 }
@@ -1512,8 +1516,7 @@ fn named_node_map_item(
     mut retval: v8::ReturnValue,
 ) {
     let idx = args.get(0).uint32_value(scope).unwrap_or(0) as usize;
-    let external = v8::Local::<v8::External>::try_from(args.data()).unwrap();
-    let node_data = unsafe { &*(external.value() as *const NodeData) };
+    let node_data = node_data_from(args.data());
     match attr_entries(node_data).into_iter().nth(idx) {
         Some((name, value)) => retval.set(build_attr_object(scope, &name, &value).into()),
         None => retval.set(v8::null(scope).into()),
@@ -1526,8 +1529,7 @@ fn named_node_map_get_named_item(
     mut retval: v8::ReturnValue,
 ) {
     let name = args.get(0).to_rust_string_lossy(scope);
-    let external = v8::Local::<v8::External>::try_from(args.data()).unwrap();
-    let node_data = unsafe { &*(external.value() as *const NodeData) };
+    let node_data = node_data_from(args.data());
     if let Node::Element(el) = &*node_data.node.borrow() {
         if let Some(value) = el.attributes.get(&name) {
             retval.set(build_attr_object(scope, &name, value).into());
@@ -1547,7 +1549,10 @@ fn named_node_map_set_named_item(
         retval.set(v8::null(scope).into());
         return;
     }
-    let attr = attr.to_object(scope).unwrap();
+    let Some(attr) = attr.to_object(scope) else {
+        retval.set(v8::null(scope).into());
+        return;
+    };
     let name = attr
         .get(scope, v8_str(scope, "name").into())
         .map(|v| v.to_rust_string_lossy(scope))
@@ -1561,8 +1566,7 @@ fn named_node_map_set_named_item(
         return;
     }
 
-    let external = v8::Local::<v8::External>::try_from(args.data()).unwrap();
-    let node_data = unsafe { &*(external.value() as *const NodeData) };
+    let node_data = node_data_from(args.data());
     let old = match &*node_data.node.borrow() {
         Node::Element(el) => el.attributes.get(&name).cloned(),
         _ => None,
@@ -1587,8 +1591,7 @@ fn named_node_map_remove_named_item(
     mut retval: v8::ReturnValue,
 ) {
     let name = args.get(0).to_rust_string_lossy(scope);
-    let external = v8::Local::<v8::External>::try_from(args.data()).unwrap();
-    let node_data = unsafe { &*(external.value() as *const NodeData) };
+    let node_data = node_data_from(args.data());
     let old = match &*node_data.node.borrow() {
         Node::Element(el) => el.attributes.get(&name).cloned(),
         _ => None,
@@ -1616,8 +1619,7 @@ fn get_attr_value(
     attr_name: &str,
     mut retval: v8::ReturnValue,
 ) {
-    let external = v8::Local::<v8::External>::try_from(args.data()).unwrap();
-    let node_data = unsafe { &*(external.value() as *const NodeData) };
+    let node_data = node_data_from(args.data());
     let value = match &*node_data.node.borrow() {
         Node::Element(el) => el.attributes.get(attr_name).cloned().unwrap_or_default(),
         _ => String::new(),
@@ -1631,8 +1633,7 @@ fn set_attr_value(
     args: v8::PropertyCallbackArguments,
     attr_name: &str,
 ) {
-    let external = v8::Local::<v8::External>::try_from(args.data()).unwrap();
-    let node_data = unsafe { &*(external.value() as *const NodeData) };
+    let node_data = node_data_from(args.data());
     let value = value.to_rust_string_lossy(scope);
     let _mutation_result = if value.is_empty() {
         mutation::apply_dom_mutation(
@@ -1698,8 +1699,7 @@ fn get_parent_node(
     args: v8::PropertyCallbackArguments,
     mut retval: v8::ReturnValue,
 ) {
-    let external = v8::Local::<v8::External>::try_from(args.data()).unwrap();
-    let node_data = unsafe { &*(external.value() as *const NodeData) };
+    let node_data = node_data_from(args.data());
 
     if let Some(parent) = find_parent_for_node(node_data) {
         let js_node = create_js_node(scope, parent, &node_data.registry, &node_data.document);
@@ -1719,8 +1719,7 @@ fn get_shadow_host(
     mut retval: v8::ReturnValue,
 ) {
     use crate::dom::ShadowTreeBackend;
-    let external = v8::Local::<v8::External>::try_from(args.data()).unwrap();
-    let node_data = unsafe { &*(external.value() as *const NodeData) };
+    let node_data = node_data_from(args.data());
 
     if let Some(host) = crate::dom::SyntheticShadowTreeBackend.host_for_shadow_root(&node_data.node)
     {
@@ -1737,8 +1736,7 @@ fn get_parent_element(
     args: v8::PropertyCallbackArguments,
     mut retval: v8::ReturnValue,
 ) {
-    let external = v8::Local::<v8::External>::try_from(args.data()).unwrap();
-    let node_data = unsafe { &*(external.value() as *const NodeData) };
+    let node_data = node_data_from(args.data());
 
     if let Some(parent) = find_parent_for_node(node_data) {
         if node_type(&parent) == 1 {
@@ -1756,8 +1754,7 @@ fn get_first_child(
     args: v8::PropertyCallbackArguments,
     mut retval: v8::ReturnValue,
 ) {
-    let external = v8::Local::<v8::External>::try_from(args.data()).unwrap();
-    let node_data = unsafe { &*(external.value() as *const NodeData) };
+    let node_data = node_data_from(args.data());
 
     if let Some(child) = navigation::first_child(&node_data.node, false) {
         let js_node = create_js_node(scope, child, &node_data.registry, &node_data.document);
@@ -1773,8 +1770,7 @@ fn get_last_child(
     args: v8::PropertyCallbackArguments,
     mut retval: v8::ReturnValue,
 ) {
-    let external = v8::Local::<v8::External>::try_from(args.data()).unwrap();
-    let node_data = unsafe { &*(external.value() as *const NodeData) };
+    let node_data = node_data_from(args.data());
 
     if let Some(child) = navigation::last_child(&node_data.node, false) {
         let js_node = create_js_node(scope, child, &node_data.registry, &node_data.document);
@@ -1790,8 +1786,7 @@ fn get_next_sibling(
     args: v8::PropertyCallbackArguments,
     mut retval: v8::ReturnValue,
 ) {
-    let external = v8::Local::<v8::External>::try_from(args.data()).unwrap();
-    let node_data = unsafe { &*(external.value() as *const NodeData) };
+    let node_data = node_data_from(args.data());
 
     if let Some(sibling) = sibling_for_node(node_data, 1, false) {
         let js_node = create_js_node(scope, sibling, &node_data.registry, &node_data.document);
@@ -1807,8 +1802,7 @@ fn get_next_element_sibling(
     args: v8::PropertyCallbackArguments,
     mut retval: v8::ReturnValue,
 ) {
-    let external = v8::Local::<v8::External>::try_from(args.data()).unwrap();
-    let node_data = unsafe { &*(external.value() as *const NodeData) };
+    let node_data = node_data_from(args.data());
 
     if let Some(sibling) = sibling_for_node(node_data, 1, true) {
         let js_node = create_js_node(scope, sibling, &node_data.registry, &node_data.document);
@@ -1824,8 +1818,7 @@ fn get_previous_sibling(
     args: v8::PropertyCallbackArguments,
     mut retval: v8::ReturnValue,
 ) {
-    let external = v8::Local::<v8::External>::try_from(args.data()).unwrap();
-    let node_data = unsafe { &*(external.value() as *const NodeData) };
+    let node_data = node_data_from(args.data());
 
     if let Some(sibling) = sibling_for_node(node_data, -1, false) {
         let js_node = create_js_node(scope, sibling, &node_data.registry, &node_data.document);
@@ -1841,8 +1834,7 @@ fn get_previous_element_sibling(
     args: v8::PropertyCallbackArguments,
     mut retval: v8::ReturnValue,
 ) {
-    let external = v8::Local::<v8::External>::try_from(args.data()).unwrap();
-    let node_data = unsafe { &*(external.value() as *const NodeData) };
+    let node_data = node_data_from(args.data());
 
     if let Some(sibling) = sibling_for_node(node_data, -1, true) {
         let js_node = create_js_node(scope, sibling, &node_data.registry, &node_data.document);
@@ -1858,8 +1850,7 @@ fn get_text_content(
     args: v8::PropertyCallbackArguments,
     mut retval: v8::ReturnValue,
 ) {
-    let external = v8::Local::<v8::External>::try_from(args.data()).unwrap();
-    let node_data = unsafe { &*(external.value() as *const NodeData) };
+    let node_data = node_data_from(args.data());
 
     let text = mutation::collect_text(&node_data.node);
     retval.set(v8_str(scope, &text).into());
@@ -1872,8 +1863,7 @@ fn set_text_content(
     args: v8::PropertyCallbackArguments,
     _retval: v8::ReturnValue<()>,
 ) {
-    let external = v8::Local::<v8::External>::try_from(args.data()).unwrap();
-    let node_data = unsafe { &*(external.value() as *const NodeData) };
+    let node_data = node_data_from(args.data());
 
     let text = value.to_rust_string_lossy(scope);
     let _mutation_result = mutation::apply_dom_mutation(
@@ -1906,8 +1896,7 @@ fn get_inner_html(
     args: v8::PropertyCallbackArguments,
     mut retval: v8::ReturnValue,
 ) {
-    let external = v8::Local::<v8::External>::try_from(args.data()).unwrap();
-    let node_data = unsafe { &*(external.value() as *const NodeData) };
+    let node_data = node_data_from(args.data());
 
     let target = inner_html_target(&node_data.node);
     let html: String = child_nodes_of(&target)
@@ -1924,8 +1913,7 @@ fn set_inner_html(
     args: v8::PropertyCallbackArguments,
     _retval: v8::ReturnValue<()>,
 ) {
-    let external = v8::Local::<v8::External>::try_from(args.data()).unwrap();
-    let node_data = unsafe { &*(external.value() as *const NodeData) };
+    let node_data = node_data_from(args.data());
 
     let html = value.to_rust_string_lossy(scope);
     let new_children = parsed_html_nodes(&html);
@@ -1946,8 +1934,7 @@ fn get_outer_html(
     args: v8::PropertyCallbackArguments,
     mut retval: v8::ReturnValue,
 ) {
-    let external = v8::Local::<v8::External>::try_from(args.data()).unwrap();
-    let node_data = unsafe { &*(external.value() as *const NodeData) };
+    let node_data = node_data_from(args.data());
 
     let html = crate::dom::serialize_outer_html(&node_data.node);
     retval.set(v8_str(scope, &html).into());
@@ -1959,7 +1946,8 @@ fn get_classlist(
     args: v8::PropertyCallbackArguments,
     mut retval: v8::ReturnValue,
 ) {
-    let external = v8::Local::<v8::External>::try_from(args.data()).unwrap();
+    let external = v8::Local::<v8::External>::try_from(args.data())
+        .expect("callback data is always the NodeData External we installed");
     let node_external = v8::Local::<v8::External>::new(scope, external);
 
     let obj = classlist::build_classlist_object(scope, node_external);
@@ -1995,8 +1983,7 @@ fn get_child_nodes(
     args: v8::PropertyCallbackArguments,
     mut retval: v8::ReturnValue,
 ) {
-    let external = v8::Local::<v8::External>::try_from(args.data()).unwrap();
-    let node_data = unsafe { &*(external.value() as *const NodeData) };
+    let node_data = node_data_from(args.data());
     let nodes = child_nodes_of(&node_data.node);
     let array = nodes_to_array(scope, nodes, node_data);
     retval.set(array.into());
@@ -2008,8 +1995,7 @@ fn get_children(
     args: v8::PropertyCallbackArguments,
     mut retval: v8::ReturnValue,
 ) {
-    let external = v8::Local::<v8::External>::try_from(args.data()).unwrap();
-    let node_data = unsafe { &*(external.value() as *const NodeData) };
+    let node_data = node_data_from(args.data());
     let nodes: Vec<NodePtr> = child_nodes_of(&node_data.node)
         .into_iter()
         .filter(|c| node_type(c) == 1)
@@ -2024,8 +2010,7 @@ fn get_first_element_child(
     args: v8::PropertyCallbackArguments,
     mut retval: v8::ReturnValue,
 ) {
-    let external = v8::Local::<v8::External>::try_from(args.data()).unwrap();
-    let node_data = unsafe { &*(external.value() as *const NodeData) };
+    let node_data = node_data_from(args.data());
     let first = child_nodes_of(&node_data.node)
         .into_iter()
         .find(|c| node_type(c) == 1);
@@ -2068,8 +2053,7 @@ fn node_add_event_listener(
     };
     let callback_global = v8::Global::new(scope, callback);
 
-    let external = v8::Local::<v8::External>::try_from(args.data()).unwrap();
-    let node_data = unsafe { &*(external.value() as *const NodeData) };
+    let node_data = node_data_from(args.data());
     let node_id = node_data.registry.register(node_data.node.clone());
     node_data
         .registry
@@ -2087,8 +2071,7 @@ fn node_remove_event_listener(
         return;
     };
 
-    let external = v8::Local::<v8::External>::try_from(args.data()).unwrap();
-    let node_data = unsafe { &*(external.value() as *const NodeData) };
+    let node_data = node_data_from(args.data());
     let node_id = node_data.registry.register(node_data.node.clone());
     node_data
         .registry
@@ -2128,8 +2111,7 @@ fn get_bounding_client_rect(
     args: v8::FunctionCallbackArguments,
     mut retval: v8::ReturnValue,
 ) {
-    let external = v8::Local::<v8::External>::try_from(args.data()).unwrap();
-    let node_data = unsafe { &*(external.value() as *const NodeData) };
+    let node_data = node_data_from(args.data());
     let obj = bounding_rect_object(scope, node_data);
     retval.set(obj.into());
 }
@@ -2139,8 +2121,7 @@ fn get_client_rects(
     args: v8::FunctionCallbackArguments,
     mut retval: v8::ReturnValue,
 ) {
-    let external = v8::Local::<v8::External>::try_from(args.data()).unwrap();
-    let node_data = unsafe { &*(external.value() as *const NodeData) };
+    let node_data = node_data_from(args.data());
     let metrics = node_data.registry.layout_metrics(&node_data.node);
     // A laid-out box exposes its single border-box rect; an unlaid-out node has
     // no client rects.
@@ -2163,8 +2144,7 @@ fn get_layout_metric(
     args: v8::FunctionCallbackArguments,
     mut retval: v8::ReturnValue,
 ) {
-    let external = v8::Local::<v8::External>::try_from(args.data()).unwrap();
-    let node_data = unsafe { &*(external.value() as *const NodeData) };
+    let node_data = node_data_from(args.data());
     let name = args.get(0).to_rust_string_lossy(scope);
     let value = match node_data.registry.layout_metrics(&node_data.node) {
         Some(m) => match name.as_str() {
@@ -2192,8 +2172,7 @@ fn append_children(
     args: v8::FunctionCallbackArguments,
     mut _retval: v8::ReturnValue,
 ) {
-    let external = v8::Local::<v8::External>::try_from(args.data()).unwrap();
-    let node_data = unsafe { &*(external.value() as *const NodeData) };
+    let node_data = node_data_from(args.data());
     for i in 0..args.length() {
         let arg = args.get(i);
         let child = if let Some(node) = node_from_js(scope, arg, &node_data.registry) {
@@ -2234,8 +2213,7 @@ fn replace_children(
     args: v8::FunctionCallbackArguments,
     mut _retval: v8::ReturnValue,
 ) {
-    let external = v8::Local::<v8::External>::try_from(args.data()).unwrap();
-    let node_data = unsafe { &*(external.value() as *const NodeData) };
+    let node_data = node_data_from(args.data());
 
     let mut children = Vec::new();
     for i in 0..args.length() {
@@ -2262,8 +2240,7 @@ fn prepend_children(
     args: v8::FunctionCallbackArguments,
     mut _retval: v8::ReturnValue,
 ) {
-    let external = v8::Local::<v8::External>::try_from(args.data()).unwrap();
-    let node_data = unsafe { &*(external.value() as *const NodeData) };
+    let node_data = node_data_from(args.data());
     for i in (0..args.length()).rev() {
         let arg = args.get(i);
         let child = if let Some(node) = node_from_js(scope, arg, &node_data.registry) {
@@ -2287,8 +2264,7 @@ fn replace_with(
     args: v8::FunctionCallbackArguments,
     mut _retval: v8::ReturnValue,
 ) {
-    let external = v8::Local::<v8::External>::try_from(args.data()).unwrap();
-    let node_data = unsafe { &*(external.value() as *const NodeData) };
+    let node_data = node_data_from(args.data());
     let parent = find_parent_for_node(node_data);
     insert_relative_to_self(scope, args, false);
     if let Some(parent) = parent {
@@ -2308,8 +2284,7 @@ fn insert_relative_to_self(
     args: v8::FunctionCallbackArguments,
     after: bool,
 ) {
-    let external = v8::Local::<v8::External>::try_from(args.data()).unwrap();
-    let node_data = unsafe { &*(external.value() as *const NodeData) };
+    let node_data = node_data_from(args.data());
     let Some(parent) = find_parent_for_node(node_data) else {
         return;
     };
@@ -2448,8 +2423,7 @@ fn insert_adjacent_html(
 ) {
     let position = args.get(0).to_rust_string_lossy(scope);
     let html = args.get(1).to_rust_string_lossy(scope);
-    let external = v8::Local::<v8::External>::try_from(args.data()).unwrap();
-    let node_data = unsafe { &*(external.value() as *const NodeData) };
+    let node_data = node_data_from(args.data());
     insert_nodes_at_position(scope, node_data, &position, parsed_html_nodes(&html));
 }
 
@@ -2460,8 +2434,7 @@ fn insert_adjacent_text(
 ) {
     let position = args.get(0).to_rust_string_lossy(scope);
     let text = args.get(1).to_rust_string_lossy(scope);
-    let external = v8::Local::<v8::External>::try_from(args.data()).unwrap();
-    let node_data = unsafe { &*(external.value() as *const NodeData) };
+    let node_data = node_data_from(args.data());
     insert_nodes_at_position(scope, node_data, &position, vec![Node::text(text)]);
 }
 
@@ -2472,8 +2445,7 @@ fn insert_adjacent_element(
 ) {
     let position = args.get(0).to_rust_string_lossy(scope);
     let element_value = args.get(1);
-    let external = v8::Local::<v8::External>::try_from(args.data()).unwrap();
-    let node_data = unsafe { &*(external.value() as *const NodeData) };
+    let node_data = node_data_from(args.data());
     let Some(element) = node_from_js(scope, element_value, &node_data.registry) else {
         retval.set(v8::null(scope).into());
         return;
@@ -2502,8 +2474,7 @@ fn get_elements_by_class_name(
         ".{}",
         class.split_whitespace().collect::<Vec<_>>().join(".")
     );
-    let external = v8::Local::<v8::External>::try_from(args.data()).unwrap();
-    let node_data = unsafe { &*(external.value() as *const NodeData) };
+    let node_data = node_data_from(args.data());
     let selector_root = crate::dom::SyntheticShadowTreeBackend
         .nearest_shadow_root(&node_data.node)
         .unwrap_or_else(|| node_data.document.clone());
@@ -2518,8 +2489,7 @@ fn get_last_element_child(
     args: v8::PropertyCallbackArguments,
     mut retval: v8::ReturnValue,
 ) {
-    let external = v8::Local::<v8::External>::try_from(args.data()).unwrap();
-    let node_data = unsafe { &*(external.value() as *const NodeData) };
+    let node_data = node_data_from(args.data());
     let last = child_nodes_of(&node_data.node)
         .into_iter()
         .rev()
@@ -2539,8 +2509,7 @@ fn get_child_element_count(
     args: v8::PropertyCallbackArguments,
     mut retval: v8::ReturnValue,
 ) {
-    let external = v8::Local::<v8::External>::try_from(args.data()).unwrap();
-    let node_data = unsafe { &*(external.value() as *const NodeData) };
+    let node_data = node_data_from(args.data());
     let count = child_nodes_of(&node_data.node)
         .into_iter()
         .filter(|c| node_type(c) == 1)
@@ -2554,8 +2523,7 @@ fn get_is_connected(
     args: v8::PropertyCallbackArguments,
     mut retval: v8::ReturnValue,
 ) {
-    let external = v8::Local::<v8::External>::try_from(args.data()).unwrap();
-    let node_data = unsafe { &*(external.value() as *const NodeData) };
+    let node_data = node_data_from(args.data());
     let connected = mutation::is_connected_to(&node_data.document, &node_data.node);
     retval.set(v8::Boolean::new(scope, connected).into());
 }
@@ -2565,20 +2533,20 @@ fn attach_shadow(
     args: v8::FunctionCallbackArguments,
     mut retval: v8::ReturnValue,
 ) {
-    let external = v8::Local::<v8::External>::try_from(args.data()).unwrap();
+    let external = v8::Local::<v8::External>::try_from(args.data())
+        .expect("callback data is always the NodeData External we installed");
     // Rebind to the callback scope's lifetime so it can seed new templates.
     let external = v8::Local::<v8::External>::new(scope, external);
     let node_data = unsafe { &*(external.value() as *const NodeData) };
 
-    let mode = if args.get(0).is_object() {
-        let opts = args.get(0).to_object(scope).unwrap();
-        opts.get(scope, v8_str(scope, "mode").into())
-            .filter(|v| v.is_string())
-            .map(|v| v.to_rust_string_lossy(scope))
-            .unwrap_or_else(|| "open".to_string())
-    } else {
-        "open".to_string()
-    };
+    let opts = args.get(0).to_object(scope).filter(|_| args.get(0).is_object());
+    let mode = opts
+        .and_then(|opts| {
+            opts.get(scope, v8_str(scope, "mode").into())
+                .filter(|v| v.is_string())
+                .map(|v| v.to_rust_string_lossy(scope))
+        })
+        .unwrap_or_else(|| "open".to_string());
 
     let shadow_root = crate::dom::SyntheticShadowTreeBackend.attach_shadow(&node_data.node, &mode);
     let _mutation_result = mutation::apply_dom_mutation(
@@ -2650,8 +2618,7 @@ fn adopt_shadow_root(
     args: v8::FunctionCallbackArguments,
     mut retval: v8::ReturnValue,
 ) {
-    let external = v8::Local::<v8::External>::try_from(args.data()).unwrap();
-    let node_data = unsafe { &*(external.value() as *const NodeData) };
+    let node_data = node_data_from(args.data());
     let Some(shadow_root) = node_from_js(scope, args.get(0), &node_data.registry) else {
         retval.set(v8::Boolean::new(scope, false).into());
         return;

@@ -144,7 +144,8 @@ impl<'a> selectors::Element for AuroraNode<'a> {
 
     fn opaque(&self) -> OpaqueElement {
         OpaqueElement::from_non_null_ptr(
-            std::ptr::NonNull::new((self.id + 1) as *mut ()).unwrap()
+            std::ptr::NonNull::new((self.id + 1) as *mut ())
+                .expect("id + 1 is never zero, so the pointer is non-null"),
         )
     }
 

@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::fs;
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Mutex, OnceLock, PoisonError};
 
 struct CompatTracker {
     _missing_apis: HashMap<String, u32>,
@@ -25,7 +25,7 @@ fn compat() -> &'static Mutex<CompatTracker> {
 #[allow(dead_code)]
 pub fn track_missing_api(name: &str) {
     let is_first = {
-        let mut t = compat().lock().unwrap();
+        let mut t = compat().lock().unwrap_or_else(PoisonError::into_inner);
         let c = t._missing_apis.entry(name.to_string()).or_insert(0);
         *c += 1;
         *c == 1
@@ -40,7 +40,7 @@ pub fn track_missing_api(name: &str) {
 pub fn track_js_exception(msg: &str) {
     let short = msg.lines().next().unwrap_or(msg);
     let is_first = {
-        let mut t = compat().lock().unwrap();
+        let mut t = compat().lock().unwrap_or_else(PoisonError::into_inner);
         let c = t.js_exceptions.entry(short.to_string()).or_insert(0);
         *c += 1;
         *c == 1
@@ -56,7 +56,7 @@ pub fn track_js_exception(msg: &str) {
 #[allow(dead_code)]
 pub fn track_css_unsupported(feature: &str) {
     let is_first = {
-        let mut t = compat().lock().unwrap();
+        let mut t = compat().lock().unwrap_or_else(PoisonError::into_inner);
         let c = t._unsupported_css.entry(feature.to_string()).or_insert(0);
         *c += 1;
         *c == 1
@@ -69,7 +69,7 @@ pub fn track_css_unsupported(feature: &str) {
 /// Print the full deduped compatibility summary to stderr. Call once at shutdown.
 #[allow(dead_code)]
 pub fn print_compat_summary() {
-    let t = compat().lock().unwrap();
+    let t = compat().lock().unwrap_or_else(PoisonError::into_inner);
     if t._missing_apis.is_empty() && t.js_exceptions.is_empty() && t._unsupported_css.is_empty() {
         return;
     }
