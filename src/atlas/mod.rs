@@ -2,6 +2,7 @@
 //!
 //! Public API: glyph metrics, atlas storage, and glyph packing.
 
+#[allow(clippy::module_inception)]
 mod atlas;
 mod metrics;
 mod packer;

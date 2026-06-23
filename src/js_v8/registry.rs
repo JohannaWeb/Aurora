@@ -1,10 +1,11 @@
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::rc::Rc;
-use v8;
 
 use crate::dom::NodePtr;
 use crate::window::SnapshotRebuildReason;
+
+type EventListeners = BTreeMap<u32, BTreeMap<String, Vec<v8::Global<v8::Function>>>>;
 
 pub(super) struct NodeRegistry {
     pub(super) nodes: RefCell<BTreeMap<u32, NodePtr>>,
@@ -22,8 +23,7 @@ pub(super) struct NodeRegistry {
     pub(super) viewport: RefCell<Option<Rc<RefCell<crate::layout::ViewportSize>>>>,
     render_document: RefCell<Option<Rc<RefCell<crate::blitz_document::BlitzDocument>>>>,
     pub(super) document: RefCell<Option<NodePtr>>,
-    pub(super) listeners:
-        RefCell<BTreeMap<u32, BTreeMap<String, Vec<v8::Global<v8::Function>>>>>,
+    pub(super) listeners: RefCell<EventListeners>,
     /// `MutationObserver` instances by observer id (callback + observer object).
     pub(super) mo_observers: RefCell<BTreeMap<u32, super::mutation_observer::MoObserver>>,
     /// Active `observe()` registrations and their pending records.
@@ -163,8 +163,7 @@ impl NodeRegistry {
     /// deepest mapped DOM node at that point. Backs `document.elementFromPoint`.
     pub(super) fn hit_test(&self, x: f32, y: f32) -> Option<NodePtr> {
         let render_document = self.render_document.borrow().as_ref().cloned()?;
-        let hit = render_document.borrow().hit_test_dom_node(x, y);
-        hit
+        render_document.borrow().hit_test_dom_node(x, y)
     }
 
     pub(super) fn blitz_node_id(&self, node: &NodePtr) -> Option<usize> {
@@ -346,8 +345,7 @@ impl NodeRegistry {
         node: &NodePtr,
     ) -> Option<crate::blitz_document::LayoutMetrics> {
         let render_document = self.render_document.borrow().as_ref().cloned()?;
-        let metrics = render_document.borrow().dom_node_layout_metrics(node);
-        metrics
+        render_document.borrow().dom_node_layout_metrics(node)
     }
 
     pub(super) fn sync_shadow_root_to_render_document(

@@ -2,7 +2,6 @@ use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
-use v8;
 
 pub struct TimerEntry {
     pub id: u32,

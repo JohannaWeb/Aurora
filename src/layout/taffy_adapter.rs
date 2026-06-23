@@ -23,62 +23,63 @@ fn style_to_taffy(styles: &StyleMap) -> TaffyStyle {
 
 pub fn style_to_taffy_with_viewport(styles: &StyleMap, viewport: ViewportSize) -> TaffyStyle {
     let font_size = styles.font_size_px().unwrap_or(16.0);
-    let mut taffy = TaffyStyle::default();
-    taffy.display = taffy_display(styles.display_mode());
-    taffy.position = taffy_position(styles.get("position"));
-    taffy.size = TaffySize {
-        width: box_dimension(styles.get("width"), styles, viewport, font_size, true),
-        height: box_dimension(styles.get("height"), styles, viewport, font_size, false),
-    };
-    taffy.min_size = TaffySize {
-        width: box_dimension(styles.get("min-width"), styles, viewport, font_size, true),
-        height: box_dimension(styles.get("min-height"), styles, viewport, font_size, false),
-    };
-    taffy.max_size = TaffySize {
-        width: box_max_dimension(styles.get("max-width"), styles, viewport, font_size, true),
-        height: box_max_dimension(styles.get("max-height"), styles, viewport, font_size, false),
-    };
-    taffy.margin = taffy_margin(styles);
-    taffy.padding = edge_lengths(styles.padding());
-    taffy.border = edge_lengths(styles.border_width());
-    taffy.flex_direction = match styles.flex_direction() {
-        FlexDirection::Row => TaffyFlexDirection::Row,
-        FlexDirection::Column => TaffyFlexDirection::Column,
-    };
-    taffy.flex_wrap = if styles.flex_wrap() {
-        FlexWrap::Wrap
-    } else {
-        FlexWrap::NoWrap
-    };
-    taffy.justify_content = Some(match styles.justify_content() {
-        JustifyContent::FlexStart => TaffyAlignContent::FlexStart,
-        JustifyContent::Center => TaffyAlignContent::Center,
-        JustifyContent::FlexEnd => TaffyAlignContent::FlexEnd,
-        JustifyContent::SpaceBetween => TaffyAlignContent::SpaceBetween,
-        JustifyContent::SpaceAround => TaffyAlignContent::SpaceAround,
-    });
-    taffy.align_items = Some(match styles.align_items() {
-        AlignItems::Stretch => TaffyAlignItems::Stretch,
-        AlignItems::FlexStart => TaffyAlignItems::FlexStart,
-        AlignItems::Center => TaffyAlignItems::Center,
-        AlignItems::FlexEnd => TaffyAlignItems::FlexEnd,
-    });
     let gap = length_percentage(styles.get("gap")).unwrap_or(LengthPercentage::length(0.0));
     let column_gap = length_percentage(styles.get("column-gap")).unwrap_or(gap);
     let row_gap = length_percentage(styles.get("row-gap")).unwrap_or(gap);
-    taffy.gap = TaffySize {
-        width: column_gap,
-        height: row_gap,
-    };
-    // Inset (left/right/top/bottom) drives placement of positioned boxes. Without
-    // it, every absolutely-positioned element collapses to the container origin.
-    taffy.inset = TaffyRect {
-        left: inset_value(styles.get("left"), viewport, font_size),
-        right: inset_value(styles.get("right"), viewport, font_size),
-        top: inset_value(styles.get("top"), viewport, font_size),
-        bottom: inset_value(styles.get("bottom"), viewport, font_size),
-    };
-    taffy
+    TaffyStyle {
+        display: taffy_display(styles.display_mode()),
+        position: taffy_position(styles.get("position")),
+        size: TaffySize {
+            width: box_dimension(styles.get("width"), styles, viewport, font_size, true),
+            height: box_dimension(styles.get("height"), styles, viewport, font_size, false),
+        },
+        min_size: TaffySize {
+            width: box_dimension(styles.get("min-width"), styles, viewport, font_size, true),
+            height: box_dimension(styles.get("min-height"), styles, viewport, font_size, false),
+        },
+        max_size: TaffySize {
+            width: box_max_dimension(styles.get("max-width"), styles, viewport, font_size, true),
+            height: box_max_dimension(styles.get("max-height"), styles, viewport, font_size, false),
+        },
+        margin: taffy_margin(styles),
+        padding: edge_lengths(styles.padding()),
+        border: edge_lengths(styles.border_width()),
+        flex_direction: match styles.flex_direction() {
+            FlexDirection::Row => TaffyFlexDirection::Row,
+            FlexDirection::Column => TaffyFlexDirection::Column,
+        },
+        flex_wrap: if styles.flex_wrap() {
+            FlexWrap::Wrap
+        } else {
+            FlexWrap::NoWrap
+        },
+        justify_content: Some(match styles.justify_content() {
+            JustifyContent::FlexStart => TaffyAlignContent::FlexStart,
+            JustifyContent::Center => TaffyAlignContent::Center,
+            JustifyContent::FlexEnd => TaffyAlignContent::FlexEnd,
+            JustifyContent::SpaceBetween => TaffyAlignContent::SpaceBetween,
+            JustifyContent::SpaceAround => TaffyAlignContent::SpaceAround,
+        }),
+        align_items: Some(match styles.align_items() {
+            AlignItems::Stretch => TaffyAlignItems::Stretch,
+            AlignItems::FlexStart => TaffyAlignItems::FlexStart,
+            AlignItems::Center => TaffyAlignItems::Center,
+            AlignItems::FlexEnd => TaffyAlignItems::FlexEnd,
+        }),
+        gap: TaffySize {
+            width: column_gap,
+            height: row_gap,
+        },
+        // Inset drives placement of positioned boxes. Without it, absolutely
+        // positioned elements collapse to the container origin.
+        inset: TaffyRect {
+            left: inset_value(styles.get("left"), viewport, font_size),
+            right: inset_value(styles.get("right"), viewport, font_size),
+            top: inset_value(styles.get("top"), viewport, font_size),
+            bottom: inset_value(styles.get("bottom"), viewport, font_size),
+        },
+        ..Default::default()
+    }
 }
 
 fn inset_value(

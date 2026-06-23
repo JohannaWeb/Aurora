@@ -337,7 +337,7 @@ impl WindowInput {
                 new_blitz_doc.clone(),
             )
             .expect("V8 backend is required for JavaScript execution");
-            for (script, content) in scripts.iter().zip(fetched.into_iter()) {
+            for (script, content) in scripts.iter().zip(fetched) {
                 let Some(content) = content else { continue };
                 rt.set_current_script(Some(&script.node));
                 if let Err(e) = rt.execute(&content) {

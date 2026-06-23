@@ -4,7 +4,6 @@ use super::style_class::{classlist, style};
 use super::tree::{mutation, navigation};
 use crate::dom::{Node, NodePtr, ShadowTreeBackend};
 use std::rc::Rc;
-use v8;
 
 pub(super) struct NodeData {
     pub node: NodePtr,

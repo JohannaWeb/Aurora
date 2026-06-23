@@ -4,6 +4,8 @@
 //! root: [`Browser`], [`Page`], [`Capabilities`], [`Error`]. Everything else is
 //! internal engine machinery, exposed as `pub(crate)` for the binary and tests.
 
+#![allow(clippy::too_many_arguments)]
+
 pub mod api;
 pub use api::{Browser, BrowserBuilder, Capabilities, Error, Page};
 
