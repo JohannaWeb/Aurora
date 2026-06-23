@@ -195,7 +195,7 @@ fn run_scripts(
         ));
     }
     let mut total_script_bytes = 0usize;
-    for (script, content) in scripts.iter().zip(fetched.into_iter()) {
+    for (script, content) in scripts.iter().zip(fetched) {
         let Some(content) = content else { continue };
         if total_script_bytes + content.len() > MAX_TOTAL_SCRIPT_BYTES {
             eprintln!(

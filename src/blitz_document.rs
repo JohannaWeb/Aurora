@@ -208,6 +208,7 @@ impl BlitzDocument {
         }
     }
 
+    #[allow(clippy::manual_filter)] // `resolve_inner` requires mutable ownership.
     pub fn try_from_html(
         html: &str,
         base_url: Option<&str>,
@@ -231,6 +232,7 @@ impl BlitzDocument {
         .and_then(|mut doc| if doc.resolve_inner() { Some(doc) } else { None })
     }
 
+    #[allow(clippy::manual_filter)] // `resolve_inner` requires mutable ownership.
     pub fn try_from_dom(
         dom: &NodePtr,
         base_url: Option<&str>,
@@ -731,11 +733,8 @@ impl BlitzDocument {
         let mut current = self.blitz_node_id_for_dom(node)?;
         let matches = self.inner.query_selector_all(selector).ok()?;
         loop {
-            if matches.iter().any(|id| *id == current) {
-                return Some(
-                    self.dom_node_for_blitz_id(current)
-                        .filter(|node| is_element_node(node)),
-                );
+            if matches.contains(&current) {
+                return Some(self.dom_node_for_blitz_id(current).filter(is_element_node));
             }
             let Some(parent) = self.inner.get_node(current).and_then(|node| node.parent) else {
                 return Some(None);
@@ -814,13 +813,12 @@ impl BlitzDocument {
             return;
         };
         if let Some(element) = node.data.downcast_element() {
-            if tag == "*" || element.name.local.as_ref().eq_ignore_ascii_case(tag) {
-                if let Some(dom_node) = self.dom_node_for_blitz_id(node_id)
-                    && is_element_node(&dom_node)
-                    && query_can_see(start, &dom_node)
-                {
-                    out.push(dom_node);
-                }
+            if (tag == "*" || element.name.local.as_ref().eq_ignore_ascii_case(tag))
+                && let Some(dom_node) = self.dom_node_for_blitz_id(node_id)
+                && is_element_node(&dom_node)
+                && query_can_see(start, &dom_node)
+            {
+                out.push(dom_node);
             }
         }
         for child_id in node.children.iter().copied() {
@@ -839,12 +837,15 @@ impl BlitzDocument {
         };
         let Some(parent_id) = self.blitz_node_id_for_dom(parent) else {
             self.record_mirror_failure(
-                &MirrorOp { legacy_node: Some(legacy_node_key(parent)), ..op },
+                &MirrorOp {
+                    legacy_node: Some(legacy_node_key(parent)),
+                    ..op
+                },
                 MirrorMutationFailure::MissingMapping,
             );
             return false;
         };
-        let parent_ns = self.node_namespace(parent_id).unwrap_or_else(|| ns!(html));
+        let parent_ns = self.node_namespace(parent_id).unwrap_or(ns!(html));
         let updated = catch_stylo_panic("appending DOM mutation into Blitz document", || {
             let child_ids = {
                 let mut maps = BlitzNodeMaps {
@@ -882,12 +883,15 @@ impl BlitzDocument {
         };
         let Some(parent_id) = self.blitz_node_id_for_dom(parent) else {
             self.record_mirror_failure(
-                &MirrorOp { legacy_node: Some(legacy_node_key(parent)), ..op },
+                &MirrorOp {
+                    legacy_node: Some(legacy_node_key(parent)),
+                    ..op
+                },
                 MirrorMutationFailure::MissingMapping,
             );
             return false;
         };
-        let parent_ns = self.node_namespace(parent_id).unwrap_or_else(|| ns!(html));
+        let parent_ns = self.node_namespace(parent_id).unwrap_or(ns!(html));
         let anchor_id = ref_child.and_then(|node| self.blitz_node_id_for_dom(node));
         let updated = catch_stylo_panic("inserting DOM mutation into Blitz document", || {
             let child_ids = {
@@ -956,7 +960,10 @@ impl BlitzDocument {
         };
         let Some(old_id) = self.blitz_node_id_for_dom(old_child) else {
             self.record_mirror_failure(
-                &MirrorOp { legacy_node: Some(legacy_node_key(old_child)), ..op },
+                &MirrorOp {
+                    legacy_node: Some(legacy_node_key(old_child)),
+                    ..op
+                },
                 MirrorMutationFailure::MissingMapping,
             );
             return false;
@@ -964,7 +971,7 @@ impl BlitzDocument {
         let parent_ns = self
             .blitz_node_id_for_dom(parent)
             .and_then(|id| self.node_namespace(id))
-            .unwrap_or_else(|| ns!(html));
+            .unwrap_or(ns!(html));
         let updated = catch_stylo_panic("replacing DOM mutation in Blitz document", || {
             let child_ids = {
                 let mut maps = BlitzNodeMaps {
@@ -1133,7 +1140,7 @@ impl BlitzDocument {
             self.record_mirror_failure(&op, MirrorMutationFailure::MissingMapping);
             return false;
         };
-        let host_ns = self.node_namespace(host_id).unwrap_or_else(|| ns!(html));
+        let host_ns = self.node_namespace(host_id).unwrap_or(ns!(html));
         let updated = catch_stylo_panic("attaching ShadowRoot in Blitz document", || {
             // Attaching a shadow root changes the host's *entire composed child
             // list*: light children that were previously rendered are replaced
@@ -1222,7 +1229,7 @@ impl BlitzDocument {
             self.record_mirror_failure(&op, MirrorMutationFailure::MissingMapping);
             return false;
         };
-        let parent_ns = self.node_namespace(parent_id).unwrap_or_else(|| ns!(html));
+        let parent_ns = self.node_namespace(parent_id).unwrap_or(ns!(html));
         let updated = catch_stylo_panic("replacing DOM children in Blitz document", || {
             let existing_child_ids = self
                 .inner
@@ -1716,9 +1723,7 @@ fn namespace_for_element(name: &str, parent_ns: &markup5ever::Namespace) -> mark
         ns!(svg)
     } else if lower == "math" {
         ns!(mathml)
-    } else if *parent_ns == ns!(svg) && lower == "foreignobject" {
-        ns!(svg)
-    } else if *parent_ns == ns!(svg) && lower != "foreignobject" {
+    } else if *parent_ns == ns!(svg) {
         ns!(svg)
     } else if *parent_ns == ns!(mathml) {
         ns!(mathml)

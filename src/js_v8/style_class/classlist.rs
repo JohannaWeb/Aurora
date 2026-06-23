@@ -1,7 +1,6 @@
 use crate::dom::{Node, NodePtr};
 use crate::js_v8::node_create::{NodeData, node_data_from, v8_str};
 use std::collections::BTreeSet;
-use v8;
 
 pub(crate) fn build_classlist_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,

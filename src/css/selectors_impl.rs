@@ -103,11 +103,10 @@ pub enum AurNonTSPseudoClass {
 impl std::hash::Hash for AurNonTSPseudoClass {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         std::mem::discriminant(self).hash(state);
-        match self {
-            Self::Lang(s) => s.hash(state),
-            // HostWith: SelectorList has no Hash impl; hash nothing extra.
-            _ => {}
+        if let Self::Lang(s) = self {
+            s.hash(state);
         }
+        // HostWith: SelectorList has no Hash impl; hash nothing extra.
     }
 }
 

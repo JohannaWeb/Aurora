@@ -128,9 +128,7 @@ pub(crate) fn find_parent(root: &NodePtr, target: &NodePtr) -> Option<NodePtr> {
     // no parent (e.g. a freshly created, not-yet-attached node) and we must NOT
     // fall back to an O(N) document scan — that scan, run per `isConnected`
     // check on detached nodes during boot, was the quadratic hot spot.
-    let Some(parent) = crate::dom::parent_ptr(target) else {
-        return None;
-    };
+    let parent = crate::dom::parent_ptr(target)?;
     if is_direct_child(&parent, target) {
         return Some(parent);
     }

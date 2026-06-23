@@ -4,7 +4,6 @@ use crate::js_v8::node_create::{NodeData, external_data, v8_str};
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::rc::Rc;
-use v8;
 
 pub(crate) struct StyleData {
     pub(crate) node: NodePtr,

@@ -9,7 +9,6 @@
 use std::rc::Rc;
 
 use crate::dom::NodePtr;
-use v8;
 
 use super::node_create::create_js_node;
 use super::registry::NodeRegistry;

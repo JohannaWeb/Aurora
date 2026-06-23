@@ -353,7 +353,6 @@ fn node_ids(registry: &Rc<NodeRegistry>, nodes: &[NodePtr]) -> Vec<u32> {
     nodes
         .iter()
         .cloned()
-        .into_iter()
         .map(|node| registry.register(node))
         .collect()
 }
