@@ -220,11 +220,12 @@ fn run_scripts(
     runtime.fire_load();
     pump_ready_work(runtime.as_mut());
     log_youtube_debug_state(runtime.as_mut(), "after-load");
-    apply_polymer_bindings(runtime.as_mut());
+    let native_ce_reactions = runtime.native_custom_element_reactions_enabled();
+    apply_polymer_bindings(runtime.as_mut(), native_ce_reactions);
     pump_ready_work(runtime.as_mut());
     drive_content_bearing_initial_navigation(runtime.as_mut());
     pump_ready_work(runtime.as_mut());
-    apply_polymer_bindings(runtime.as_mut());
+    apply_polymer_bindings(runtime.as_mut(), native_ce_reactions);
     pump_ready_work(runtime.as_mut());
     log_youtube_debug_state(runtime.as_mut(), "after-polymer-bindings");
     Some(runtime)
@@ -309,29 +310,34 @@ fn pump_ready_work(runtime: &mut dyn crate::js_engine::JsRuntime) {
 /// Sweep the rendered tree to install binding hooks on renderers that Polymer
 /// stamped natively (bypassing our upgrade pipeline). Without this, their
 /// `[[…]]` text/attribute annotations render as literal template text.
-fn apply_polymer_bindings(runtime: &mut dyn crate::js_engine::JsRuntime) {
-    let _ = runtime.execute(
+fn apply_polymer_bindings(
+    runtime: &mut dyn crate::js_engine::JsRuntime,
+    native_ce_reactions: bool,
+) {
+    let native_ce_reactions = if native_ce_reactions { "true" } else { "false" };
+    let script = format!(
         r#"
-        (function() {
-            try {
-                if (typeof globalThis.__aurora_connect_sweep__ === 'function') {
+        (function() {{
+            try {{
+                if (!{native_ce_reactions} && typeof globalThis.__aurora_connect_sweep__ === 'function') {{
                     var c = globalThis.__aurora_connect_sweep__(document.body);
-                    if (globalThis.__aurora_debug_youtube__) {
+                    if (globalThis.__aurora_debug_youtube__) {{
                         console.log('[yt-bind] connect sweep fired connectedCallback on ' + c + ' element(s)');
-                    }
-                }
-                if (typeof globalThis.__aurora_sweep_bindings__ === 'function') {
+                    }}
+                }}
+                if (typeof globalThis.__aurora_sweep_bindings__ === 'function') {{
                     var n = globalThis.__aurora_sweep_bindings__(document.body);
-                    if (globalThis.__aurora_debug_youtube__) {
+                    if (globalThis.__aurora_debug_youtube__) {{
                         console.log('[yt-bind] sweep installed hooks on ' + n + ' element(s)');
-                    }
-                }
-            } catch (e) {
+                    }}
+                }}
+            }} catch (e) {{
                 if (globalThis.__aurora_debug_youtube__) console.log('[yt-bind] sweep error ' + e);
-            }
-        })();
-        "#,
+            }}
+        }})();
+        "#
     );
+    let _ = runtime.execute(&script);
 }
 
 /// Recover YouTube's first page transition only when the inline application

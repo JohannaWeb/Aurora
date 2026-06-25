@@ -2212,8 +2212,13 @@
                 if (!root) return;
                 try {
                     primeTree(root);
-                    if (typeof root.querySelectorAll === 'function') {
-                        var all = root.querySelectorAll('*');
+                    var all = null;
+                    if (typeof globalThis.__aurora_ce_upgrade_candidates_native === 'function') {
+                        all = globalThis.__aurora_ce_upgrade_candidates_native(root);
+                    } else if (typeof root.querySelectorAll === 'function') {
+                        all = root.querySelectorAll('*');
+                    }
+                    if (all && typeof all.length === 'number') {
                         for (var i = 0; i < all.length; i++) { tryUpgrade(all[i], true); }
                     }
                 } catch (e) {}

@@ -209,18 +209,71 @@ single authority for what Blitz mirrors.
 
 1. **Native `CeRegistry` + `define` binding.** Definitions mirror into a native
    registry; JS still drives upgrade. No behavior change — pure plumbing.
-   Verified by a unit test that `customElements.define` populates the native
-   registry. **← this PR.**
+   Verified by `v8_define_mirrors_into_native_registry`. **✅ DONE.**
 2. **Reaction queue + microtask backup drain.** Add the spine; wire
-   `connectedCallback` enqueue into `AppendChild`/`InsertBefore` only, behind a
-   flag, A/B against the JS sweep on the existing `runtime_tests.rs` CE tests.
-3. **`disconnectedCallback` + `attributeChangedCallback`** in `RemoveChild` /
-   `SetAttribute`.
+   `connectedCallback` enqueue into `AppendChild`/`PrependChild`/`InsertBefore`,
+   behind the `AURORA_NATIVE_CE_REACTIONS` flag (default off), A/B against the JS
+   sweep. **✅ DONE.** `Reaction`/per-element queue/backup queue + `drain_reactions`
+   in `custom_elements.rs`; `enqueue_connected_reactions` walk in `mutation.rs`;
+   drain folded into `deliver_mutation_records`; JS shim suppresses its own
+   `connectedCallback` fire when the flag is on. Test
+   `v8_native_reactions_fire_connected_callback_once`. Phase 2b is also done:
+   the element-queue *stack* now drains synchronously at the end of
+   `[CEReactions]` boundaries (`appendChild`, `setAttribute`, `innerHTML`, …).
+   The native *upgrade* reaction still remains for a later phase. NOTE: flag-on
+   is validated for spec-compliant elements only — the JS connect path wraps
+   `connectedCallback` in Polymer orchestration (`_enableProperties`,
+   ytd-app `enable`/`stamp`, `rebuildPolymerIdMap`), so YouTube stays on the JS
+   path until that migrates.
+3. **`disconnectedCallback` + `attributeChangedCallback`.** **✅ DONE.**
+   `disconnectedCallback` enqueued (before detach) in `RemoveChild` /
+   `ReplaceChild` / `ReplaceChildren`; `connectedCallback` for the incoming set in
+   `ReplaceChild` / `ReplaceChildren` too. `attributeChangedCallback` in
+   `SetAttribute` / `RemoveAttribute`, filtered by `observedAttributes`, with
+   old/new values (`Reaction::AttributeChanged` defers V8 arg construction to
+   drain time since the mutation path has no scope). The JS shim never fired
+   either callback, so no suppression is needed — the flag *adds* them. Tests
+   `v8_native_reactions_fire_disconnected_callback`,
+   `v8_native_reactions_fire_attribute_changed_callback`.
 4. **Native slot composition + `flattened_children`** feeding Blitz; retire the
-   ShadyDOM logical-root shims.
+   ShadyDOM logical-root shims. **⚠️ ALREADY EXISTS (2026-06-23 finding).** This
+   was implemented before this plan: `src/dom/shadow.rs`
+   `SyntheticShadowTreeBackend` has `distribute_slots` (populates
+   `assigned_nodes`) + `composed_children` (the flattened view), and Blitz
+   already consumes it via `child_nodes_for_blitz` (blitz_document.rs:1570) on
+   every mirror. So the slot-composition foundation is done and wired. Remaining
+   here is hardening (nested slots, fallback content) and the eventual removal of
+   the JS ShadyDOM logical-root shims once native composition fully covers them —
+   not a from-scratch build.
+
+### Validation status (2026-06-23)
+
+Phases 2–3 are also validated through the *production* event-loop phase, not just
+the direct helper: `v8_native_reactions_drain_in_mutation_observer_phase` proves
+`deliver_mutation_records` (the pump's MutationObserver-delivery phase) drains
+queued reactions. Flag still default-off.
+
+### Phase 2b: synchronous `[CEReactions]` boundary draining
+
+Reactions now drain synchronously at the end of each `[CEReactions]`-annotated
+method (`appendChild`, `setAttribute`, `innerHTML`, …) via the element-queue
+stack. The stack is pushed at the start of the JS-exposed DOM method and popped
+at the end, so reactions enqueued during the call run before control returns to
+script. The microtask backup queue remains in place as a no-op safety net for
+reactions that are queued outside a boundary.
 5. **Delete the external drivers** (`apply_polymer_bindings`,
    `drive_polymer_page_manager_navigation`) once 1–4 carry YouTube past
    `ytd-app.connectedCallback` on their own. Validate the navigation hypothesis.
+
+   Current reduction: when native CE reactions are enabled, the pipeline skips
+   the JS `__aurora_connect_sweep__` pass and keeps only the binding-hook sweep.
+   That removes the last connect-specific external driver from the native path;
+   the remaining sweep is just the renderer-binding compatibility shim.
+
+   Upgrade discovery is also partially native now: `customElements.upgrade(root)`
+   can ask Rust for the candidate list via
+   `__aurora_ce_upgrade_candidates_native(root)` instead of walking the subtree
+   in JS. JS still performs the actual constructor/prototype upgrade today.
 
 ### Measurement rig (unchanged)
 
