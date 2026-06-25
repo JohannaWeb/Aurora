@@ -8,11 +8,7 @@
         "rust-lang.rust-analyzer",
         "tamasfe.even-better-toml",
         "vadimcn.vscode-lldb",
-        "fill-labs.dependi",
-        "anthropics.claude-code",
-        "google.geminicodeassist",
-        "GitHub.copilot",
-        "openai.codex"
+        "fill-labs.dependi"
       ],
       "settings": {
         "editor.fontFamily": "'Cascadia Code', monospace",

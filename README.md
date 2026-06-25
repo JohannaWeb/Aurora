@@ -169,11 +169,10 @@ The image copies the release binary plus `fixtures/` and `fonts/`.
 
 ## Longer-Term Direction
 
-Aurora is being shaped toward a capability-gated, user-owned browser surface
-for human and agent use. The longer-term direction includes DID-native identity,
-AT Protocol integration, stronger explicit authority boundaries for local and
-remote resources, and first-class support for AI-assisted browsing. Those are
-goals, not completed product claims.
+Aurora is being shaped toward a capability-gated, user-owned browser surface.
+The longer-term direction includes DID-native identity, AT Protocol integration,
+and stronger explicit authority boundaries for local and remote resources.
+Those are goals, not completed product claims.
 
 ## Roadmap
 
