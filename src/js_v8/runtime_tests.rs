@@ -690,6 +690,203 @@ fn v8_define_mirrors_into_native_registry() {
 }
 
 #[test]
+fn v8_native_upgrade_candidates_collect_subtree_elements() {
+    let mut runtime = V8Runtime::new(blank_dom());
+
+    assert_eq!(
+        runtime.eval_to_string(
+            r#"
+            (() => {
+            const host = document.createElement('div');
+            const child = document.createElement('x-upgrade-candidate');
+            host.appendChild(child);
+            const tags = __aurora_ce_upgrade_candidates_native(host)
+                .map(node => node.localName)
+                .join(',');
+            return tags;
+            })()
+            "#
+        ),
+        Ok("div,x-upgrade-candidate".to_string())
+    );
+}
+
+#[test]
+fn v8_native_reactions_fire_connected_callback_once() {
+    let mut runtime = V8Runtime::new(blank_dom());
+    runtime.set_native_ce_reactions(true);
+
+    // With the CEReactions stack wired, appending a custom element fires
+    // connectedCallback before appendChild returns. The backup queue drain is a
+    // no-op afterward.
+    assert_eq!(
+        runtime.eval_to_string(
+            r#"
+            (() => {
+            globalThis.__cc_calls__ = 0;
+            class NativeConnect extends HTMLElement {
+                connectedCallback() { globalThis.__cc_calls__++; }
+            }
+            customElements.define('native-connect', NativeConnect);
+            const el = document.createElement('native-connect');
+            document.body.appendChild(el);
+            return String(globalThis.__cc_calls__);
+            })()
+            "#
+        ),
+        Ok("1".to_string()),
+        "connectedCallback must fire synchronously at the end of appendChild"
+    );
+
+    assert!(!runtime.drain_custom_element_reactions());
+
+    assert_eq!(
+        runtime.eval_to_string("String(globalThis.__cc_calls__)"),
+        Ok("1".to_string()),
+        "connectedCallback must fire exactly once"
+    );
+
+    // Draining again with nothing queued is still a no-op.
+    assert!(!runtime.drain_custom_element_reactions());
+    assert_eq!(
+        runtime.eval_to_string("String(globalThis.__cc_calls__)"),
+        Ok("1".to_string())
+    );
+}
+
+#[test]
+fn v8_native_reactions_drain_in_mutation_observer_phase() {
+    let mut runtime = V8Runtime::new(blank_dom());
+    runtime.set_native_ce_reactions(true);
+
+    // The production event-loop pump still reaches the MutationObserver
+    // delivery phase, but the queue should already be empty because the
+    // boundary drained synchronously.
+    let _ = runtime.eval_to_string(
+        r#"
+        (() => {
+        globalThis.__cc2__ = 0;
+        class NcTwo extends HTMLElement { connectedCallback() { globalThis.__cc2__++; } }
+        customElements.define('nc-two', NcTwo);
+        document.body.appendChild(document.createElement('nc-two'));
+        return 'ok';
+        })()
+        "#,
+    );
+
+    assert_eq!(
+        runtime.eval_to_string("String(globalThis.__cc2__)"),
+        Ok("1".to_string())
+    );
+    assert!(!runtime.deliver_mutation_records());
+    assert_eq!(
+        runtime.eval_to_string("String(globalThis.__cc2__)"),
+        Ok("1".to_string()),
+        "connectedCallback must not fire again during production mutation delivery"
+    );
+}
+
+#[test]
+fn v8_native_reactions_drain_synchronously() {
+    let mut runtime = V8Runtime::new(blank_dom());
+    runtime.set_native_ce_reactions(true);
+
+    let _ = runtime.eval_to_string(
+        r#"
+        (() => {
+        globalThis.__sync_calls__ = 0;
+        class NativeSync extends HTMLElement {
+            connectedCallback() { globalThis.__sync_calls__++; }
+        }
+        customElements.define('native-sync', NativeSync);
+        const el = document.createElement('native-sync');
+        document.body.appendChild(el);
+        return 'ok';
+        })()
+        "#,
+    );
+
+    // After appendChild (which is a [CEReactions] boundary), connectedCallback should have run synchronously!
+    assert_eq!(
+        runtime.eval_to_string("String(globalThis.__sync_calls__)"),
+        Ok("1".to_string()),
+        "connectedCallback must fire synchronously at the end of the appendChild call"
+    );
+}
+
+#[test]
+fn v8_native_reactions_fire_disconnected_callback() {
+    let mut runtime = V8Runtime::new(blank_dom());
+    runtime.set_native_ce_reactions(true);
+
+    // Removing a connected custom element fires disconnectedCallback at the
+    // end of removeChild. The backup queue drain is a no-op afterward.
+    let _ = runtime.eval_to_string(
+        r#"
+        (() => {
+        globalThis.__dc_calls__ = 0;
+        class NativeDisconnect extends HTMLElement {
+            disconnectedCallback() { globalThis.__dc_calls__++; }
+        }
+        customElements.define('native-disconnect', NativeDisconnect);
+        const el = document.createElement('native-disconnect');
+        document.body.appendChild(el);
+        document.body.removeChild(el);
+        return 'ok';
+        })()
+        "#,
+    );
+
+    assert_eq!(
+        runtime.eval_to_string("String(globalThis.__dc_calls__)"),
+        Ok("1".to_string()),
+        "disconnectedCallback must fire synchronously at the end of removeChild"
+    );
+    assert!(!runtime.drain_custom_element_reactions());
+    assert_eq!(
+        runtime.eval_to_string("String(globalThis.__dc_calls__)"),
+        Ok("1".to_string()),
+        "disconnectedCallback must fire exactly once"
+    );
+}
+
+#[test]
+fn v8_native_reactions_fire_attribute_changed_callback() {
+    let mut runtime = V8Runtime::new(blank_dom());
+    runtime.set_native_ce_reactions(true);
+
+    // attributeChangedCallback fires synchronously for observed attributes, with
+    // the old (null when absent) and new values, in mutation order.
+    let _ = runtime.eval_to_string(
+        r#"
+        (() => {
+        globalThis.__ac_log__ = [];
+        class NativeAttr extends HTMLElement {
+            static get observedAttributes() { return ['data-x']; }
+            attributeChangedCallback(name, oldV, newV) {
+                globalThis.__ac_log__.push(name + ':' + oldV + '->' + newV);
+            }
+        }
+        customElements.define('native-attr', NativeAttr);
+        const el = document.createElement('native-attr');
+        document.body.appendChild(el);
+        el.setAttribute('data-x', '1');   // observed: null -> 1
+        el.setAttribute('data-y', '2');   // NOT observed -> no callback
+        el.setAttribute('data-x', '3');   // observed: 1 -> 3
+        el.removeAttribute('data-x');     // observed: 3 -> null
+        return 'ok';
+        })()
+        "#,
+    );
+
+    assert_eq!(
+        runtime.eval_to_string("globalThis.__ac_log__.join('|')"),
+        Ok("data-x:null->1|data-x:1->3|data-x:3->null".to_string())
+    );
+    assert!(!runtime.drain_custom_element_reactions());
+}
+
+#[test]
 fn v8_custom_element_connects_only_after_append() {
     let mut runtime = V8Runtime::new(blank_dom());
 

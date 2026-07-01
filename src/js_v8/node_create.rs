@@ -1,3 +1,4 @@
+use super::custom_elements::CeReactionsGuard;
 use super::registry::NodeRegistry;
 use super::selectors::query;
 use super::style_class::{classlist, style};
@@ -968,6 +969,7 @@ fn append_child(
 ) {
     let data = args.data();
     let node_data = node_data_from(data);
+    let _reactions = CeReactionsGuard::new(scope, &node_data.registry);
 
     if let Some(child) = node_from_js(scope, args.get(0), &node_data.registry) {
         let fragment_children = if is_document_fragment(&child) {
@@ -1008,6 +1010,7 @@ fn remove_child(
 ) {
     let data = args.data();
     let node_data = node_data_from(data);
+    let _reactions = CeReactionsGuard::new(scope, &node_data.registry);
 
     if let Some(child) = node_from_js(scope, args.get(0), &node_data.registry) {
         let _mutation_result = mutation::apply_dom_mutation(
@@ -1030,6 +1033,7 @@ fn insert_before(
 ) {
     let data = args.data();
     let node_data = node_data_from(data);
+    let _reactions = CeReactionsGuard::new(scope, &node_data.registry);
 
     let new_child = node_from_js(scope, args.get(0), &node_data.registry);
     let ref_child = node_from_js(scope, args.get(1), &node_data.registry);
@@ -1074,6 +1078,7 @@ fn replace_child(
 ) {
     let data = args.data();
     let node_data = node_data_from(data);
+    let _reactions = CeReactionsGuard::new(scope, &node_data.registry);
 
     let new_child = node_from_js(scope, args.get(0), &node_data.registry);
     let old_child = node_from_js(scope, args.get(1), &node_data.registry);
@@ -1112,12 +1117,13 @@ fn replace_child(
 }
 
 fn remove_node(
-    _scope: &mut v8::PinScope<'_, '_>,
+    scope: &mut v8::PinScope<'_, '_>,
     args: v8::FunctionCallbackArguments,
     mut _retval: v8::ReturnValue,
 ) {
     let data = args.data();
     let node_data = node_data_from(data);
+    let _reactions = CeReactionsGuard::new(scope, &node_data.registry);
 
     if let Some(parent) = find_parent_for_node(node_data) {
         let _mutation_result = mutation::apply_dom_mutation(
@@ -1281,6 +1287,7 @@ fn set_attribute(
     let value = args.get(1).to_rust_string_lossy(scope);
     let data = args.data();
     let node_data = node_data_from(data);
+    let _reactions = CeReactionsGuard::new(scope, &node_data.registry);
 
     let _mutation_result = mutation::apply_dom_mutation(
         &node_data.registry,
@@ -1301,6 +1308,7 @@ fn set_attribute_ns(
     let value = args.get(2).to_rust_string_lossy(scope);
     let data = args.data();
     let node_data = node_data_from(data);
+    let _reactions = CeReactionsGuard::new(scope, &node_data.registry);
 
     let _mutation_result = mutation::apply_dom_mutation(
         &node_data.registry,
@@ -1320,6 +1328,7 @@ fn remove_attribute(
     let name = args.get(0).to_rust_string_lossy(scope);
     let data = args.data();
     let node_data = node_data_from(data);
+    let _reactions = CeReactionsGuard::new(scope, &node_data.registry);
 
     let _mutation_result = mutation::apply_dom_mutation(
         &node_data.registry,
@@ -1338,6 +1347,7 @@ fn remove_attribute_ns(
     let name = args.get(1).to_rust_string_lossy(scope);
     let data = args.data();
     let node_data = node_data_from(data);
+    let _reactions = CeReactionsGuard::new(scope, &node_data.registry);
 
     let _mutation_result = mutation::apply_dom_mutation(
         &node_data.registry,
@@ -1566,6 +1576,7 @@ fn named_node_map_set_named_item(
     }
 
     let node_data = node_data_from(args.data());
+    let _reactions = CeReactionsGuard::new(scope, &node_data.registry);
     let old = match &*node_data.node.borrow() {
         Node::Element(el) => el.attributes.get(&name).cloned(),
         _ => None,
@@ -1591,6 +1602,7 @@ fn named_node_map_remove_named_item(
 ) {
     let name = args.get(0).to_rust_string_lossy(scope);
     let node_data = node_data_from(args.data());
+    let _reactions = CeReactionsGuard::new(scope, &node_data.registry);
     let old = match &*node_data.node.borrow() {
         Node::Element(el) => el.attributes.get(&name).cloned(),
         _ => None,
@@ -1633,6 +1645,7 @@ fn set_attr_value(
     attr_name: &str,
 ) {
     let node_data = node_data_from(args.data());
+    let _reactions = CeReactionsGuard::new(scope, &node_data.registry);
     let value = value.to_rust_string_lossy(scope);
     let _mutation_result = if value.is_empty() {
         mutation::apply_dom_mutation(
@@ -1863,6 +1876,7 @@ fn set_text_content(
     _retval: v8::ReturnValue<()>,
 ) {
     let node_data = node_data_from(args.data());
+    let _reactions = CeReactionsGuard::new(scope, &node_data.registry);
 
     let text = value.to_rust_string_lossy(scope);
     let _mutation_result = mutation::apply_dom_mutation(
@@ -1913,6 +1927,7 @@ fn set_inner_html(
     _retval: v8::ReturnValue<()>,
 ) {
     let node_data = node_data_from(args.data());
+    let _reactions = CeReactionsGuard::new(scope, &node_data.registry);
 
     let html = value.to_rust_string_lossy(scope);
     let new_children = parsed_html_nodes(&html);
@@ -2172,6 +2187,7 @@ fn append_children(
     mut _retval: v8::ReturnValue,
 ) {
     let node_data = node_data_from(args.data());
+    let _reactions = CeReactionsGuard::new(scope, &node_data.registry);
     for i in 0..args.length() {
         let arg = args.get(i);
         let child = if let Some(node) = node_from_js(scope, arg, &node_data.registry) {
@@ -2213,6 +2229,7 @@ fn replace_children(
     mut _retval: v8::ReturnValue,
 ) {
     let node_data = node_data_from(args.data());
+    let _reactions = CeReactionsGuard::new(scope, &node_data.registry);
 
     let mut children = Vec::new();
     for i in 0..args.length() {
@@ -2240,6 +2257,7 @@ fn prepend_children(
     mut _retval: v8::ReturnValue,
 ) {
     let node_data = node_data_from(args.data());
+    let _reactions = CeReactionsGuard::new(scope, &node_data.registry);
     for i in (0..args.length()).rev() {
         let arg = args.get(i);
         let child = if let Some(node) = node_from_js(scope, arg, &node_data.registry) {
@@ -2264,6 +2282,7 @@ fn replace_with(
     mut _retval: v8::ReturnValue,
 ) {
     let node_data = node_data_from(args.data());
+    let _reactions = CeReactionsGuard::new(scope, &node_data.registry);
     let parent = find_parent_for_node(node_data);
     insert_relative_to_self(scope, args, false);
     if let Some(parent) = parent {
@@ -2316,6 +2335,8 @@ fn insert_before_self(
     args: v8::FunctionCallbackArguments,
     mut _retval: v8::ReturnValue,
 ) {
+    let node_data = node_data_from(args.data());
+    let _reactions = CeReactionsGuard::new(scope, &node_data.registry);
     insert_relative_to_self(scope, args, false);
 }
 
@@ -2324,6 +2345,8 @@ fn insert_after_self(
     args: v8::FunctionCallbackArguments,
     mut _retval: v8::ReturnValue,
 ) {
+    let node_data = node_data_from(args.data());
+    let _reactions = CeReactionsGuard::new(scope, &node_data.registry);
     insert_relative_to_self(scope, args, true);
 }
 
@@ -2423,6 +2446,7 @@ fn insert_adjacent_html(
     let position = args.get(0).to_rust_string_lossy(scope);
     let html = args.get(1).to_rust_string_lossy(scope);
     let node_data = node_data_from(args.data());
+    let _reactions = CeReactionsGuard::new(scope, &node_data.registry);
     insert_nodes_at_position(scope, node_data, &position, parsed_html_nodes(&html));
 }
 
@@ -2434,6 +2458,7 @@ fn insert_adjacent_text(
     let position = args.get(0).to_rust_string_lossy(scope);
     let text = args.get(1).to_rust_string_lossy(scope);
     let node_data = node_data_from(args.data());
+    let _reactions = CeReactionsGuard::new(scope, &node_data.registry);
     insert_nodes_at_position(scope, node_data, &position, vec![Node::text(text)]);
 }
 
@@ -2445,6 +2470,7 @@ fn insert_adjacent_element(
     let position = args.get(0).to_rust_string_lossy(scope);
     let element_value = args.get(1);
     let node_data = node_data_from(args.data());
+    let _reactions = CeReactionsGuard::new(scope, &node_data.registry);
     let Some(element) = node_from_js(scope, element_value, &node_data.registry) else {
         retval.set(v8::null(scope).into());
         return;

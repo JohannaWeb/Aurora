@@ -269,6 +269,26 @@ impl V8Runtime {
                 v8_str(scope, "__aurora_ce_is_defined_native").into(),
                 ce_is_defined_fn.get_function(scope).expect("function template yields a function outside of a pending exception").into(),
             );
+            let ce_upgrade_candidates_fn =
+                v8::FunctionTemplate::builder(ce_upgrade_candidates_native)
+                    .data(doc_external.into())
+                    .build(scope);
+            global.set(
+                scope,
+                v8_str(scope, "__aurora_ce_upgrade_candidates_native").into(),
+                ce_upgrade_candidates_fn
+                    .get_function(scope)
+                    .expect("function template yields a function outside of a pending exception")
+                    .into(),
+            );
+            // Phase 2 A/B flag: when native CE reactions are on, the JS shim
+            // suppresses its own connectedCallback firing (the native insertion
+            // path drives it via the reaction queue instead).
+            global.set(
+                scope,
+                v8_str(scope, "__aurora_native_ce_reactions__").into(),
+                v8::Boolean::new(scope, registry.native_ce_reactions.get()).into(),
+            );
             document_obj.set(
                 scope,
                 v8_str(scope, "nodeType").into(),
@@ -999,6 +1019,32 @@ impl V8Runtime {
     /// Evaluate a script and return its completion value as a string.
     /// Test/diagnostic helper; the `JsRuntime` trait only reports errors.
     #[cfg(test)]
+    /// Toggle the native-custom-element-reactions A/B flag at runtime, updating
+    /// both the native registry and the JS-visible global so the shim's
+    /// suppression check stays in sync. Test-only; production reads the env var
+    /// at construction.
+    #[cfg(test)]
+    pub(crate) fn set_native_ce_reactions(&mut self, on: bool) {
+        self.registry.native_ce_reactions.set(on);
+        v8::scope_with_context!(let scope, &mut self.isolate, &self.context);
+        let context = v8::Local::new(scope, &self.context);
+        let global = context.global(scope);
+        let key = v8_str(scope, "__aurora_native_ce_reactions__");
+        let val = v8::Boolean::new(scope, on);
+        global.set(scope, key.into(), val.into());
+    }
+
+    /// Drain queued native custom-element reactions (Phase 2). Exposed for tests;
+    /// in production it runs as part of the MutationObserver-delivery phase
+    /// (`deliver_mutation_records`).
+    pub(crate) fn drain_custom_element_reactions(&mut self) -> bool {
+        if !self.registry.ce_registry.has_pending_reactions() {
+            return false;
+        }
+        v8::scope_with_context!(let scope, &mut self.isolate, &self.context);
+        super::custom_elements::drain_reactions(scope, &self.registry)
+    }
+
     pub(crate) fn eval_to_string(&mut self, source: &str) -> Result<String, String> {
         v8::scope_with_context!(let scope, &mut self.isolate, &self.context);
         v8::tc_scope!(let scope, scope);
@@ -1448,6 +1494,66 @@ fn ce_is_defined_native(
     let doc_data = unsafe { &*(external.value() as *const DocumentData) };
     let defined = doc_data.registry.ce_registry.is_defined(&name);
     retval.set(v8::Boolean::new(scope, defined).into());
+}
+
+fn js_value_to_node<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    val: v8::Local<'s, v8::Value>,
+    registry: &NodeRegistry,
+) -> Option<NodePtr> {
+    if !val.is_object() {
+        return None;
+    }
+    let obj = val.to_object(scope)?;
+    let key = v8_str(scope, "__aurora_node_id");
+    let id_val = obj.get(scope, key.into())?;
+    if id_val.is_int32() {
+        let id = id_val.int32_value(scope)? as u32;
+        return registry.lookup(id);
+    }
+    let blitz_key = v8_str(scope, "__aurora_blitz_node_id");
+    let blitz_id_val = obj.get(scope, blitz_key.into())?;
+    if !blitz_id_val.is_int32() {
+        return None;
+    }
+    let blitz_id = blitz_id_val.int32_value(scope)? as usize;
+    registry.dom_node_for_blitz_id(blitz_id)
+}
+
+/// `__aurora_ce_upgrade_candidates_native(root)` — collect the elements in a
+/// subtree that JS should consider for `customElements.upgrade(root)`. The JS
+/// shim still executes constructors and lifecycle hooks; Rust now owns the
+/// subtree walk, which is the native half of upgrade discovery.
+fn ce_upgrade_candidates_native<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut retval: v8::ReturnValue,
+) {
+    let data = args.data();
+    let external = v8::Local::<v8::External>::try_from(data)
+        .expect("callback data is always the External we installed");
+    let doc_data = unsafe { &*(external.value() as *const DocumentData) };
+    let Some(root) = js_value_to_node(scope, args.get(0), &doc_data.registry) else {
+        retval.set(v8::Array::new(scope, 0).into());
+        return;
+    };
+
+    let candidates = query::query_all(&root, "*", &root);
+    let include_root = matches!(&*root.borrow(), Node::Element(_));
+    let total = candidates.len() + usize::from(include_root);
+    let array = v8::Array::new(scope, total as i32);
+    let mut index = 0u32;
+    if include_root {
+        let js_root = create_js_node(scope, root.clone(), &doc_data.registry, &doc_data.document);
+        array.set_index(scope, index, js_root.into());
+        index += 1;
+    }
+    for node in candidates {
+        let js_node = create_js_node(scope, node, &doc_data.registry, &doc_data.document);
+        array.set_index(scope, index, js_node.into());
+        index += 1;
+    }
+    retval.set(array.into());
 }
 
 /// `document.elementFromPoint(x, y)` — hit-tests the Blitz layout (Phase 8.2
@@ -1979,11 +2085,15 @@ impl crate::js_engine::JsRuntime for V8Runtime {
     }
 
     fn deliver_mutation_records(&mut self) -> bool {
+        // Custom-element reactions are microtasks too; drain them first since a
+        // `connectedCallback` can mutate the DOM and queue MutationObserver
+        // records that should be delivered in the same checkpoint.
+        let reactions = self.drain_custom_element_reactions();
         if !super::mutation_observer::has_pending(&self.registry) {
-            return false;
+            return reactions;
         }
         v8::scope_with_context!(let scope, &mut self.isolate, &self.context);
-        super::mutation_observer::deliver(scope, &self.registry)
+        super::mutation_observer::deliver(scope, &self.registry) || reactions
     }
 
     fn drain_animation_frame_callbacks(&mut self, now: Instant) -> bool {
@@ -2012,6 +2122,10 @@ impl crate::js_engine::JsRuntime for V8Runtime {
         }
 
         true
+    }
+
+    fn native_custom_element_reactions_enabled(&self) -> bool {
+        self.registry.native_ce_reactions.get()
     }
 
     fn dispatch_event(&mut self, _node: &NodePtr, _event_type: &str) -> bool {

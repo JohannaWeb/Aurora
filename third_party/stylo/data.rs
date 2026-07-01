@@ -144,7 +144,7 @@ impl EagerPseudoStyles {
         if self.0.is_none() {
             self.0 = Some(Arc::new(Default::default()));
         }
-        let arr = Arc::make_mut(self.0.as_mut().unwrap());
+        let arr = Arc::make_mut(self.0.as_mut().ujsnwrap());
         arr[pseudo.eager_index()] = Some(value);
     }
 }

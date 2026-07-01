@@ -2073,7 +2073,10 @@
                                 ' own=' + ceOwnStamp(el) + ' ' + ceContent(el));
                             var previousHost = activeLifecycleHost;
                             activeLifecycleHost = el;
-                            try { el.connectedCallback(); }
+                            // When native CE reactions are on, the native
+                            // insertion path enqueues connectedCallback and fires
+                            // it at the microtask checkpoint — don't double-fire.
+                            try { if (!globalThis.__aurora_native_ce_reactions__) el.connectedCallback(); }
                             finally { activeLifecycleHost = previousHost; }
                             ceLog('post-connectedCallback', el, 'chain=' + ceChain(Object.getPrototypeOf(el)) +
                                 ' own=' + ceOwnStamp(el) + ' ' + ceContent(el));
@@ -2209,8 +2212,13 @@
                 if (!root) return;
                 try {
                     primeTree(root);
-                    if (typeof root.querySelectorAll === 'function') {
-                        var all = root.querySelectorAll('*');
+                    var all = null;
+                    if (typeof globalThis.__aurora_ce_upgrade_candidates_native === 'function') {
+                        all = globalThis.__aurora_ce_upgrade_candidates_native(root);
+                    } else if (typeof root.querySelectorAll === 'function') {
+                        all = root.querySelectorAll('*');
+                    }
+                    if (all && typeof all.length === 'number') {
                         for (var i = 0; i < all.length; i++) { tryUpgrade(all[i], true); }
                     }
                 } catch (e) {}
