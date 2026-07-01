@@ -174,7 +174,24 @@ impl ShadowTreeBackend for SyntheticShadowTreeBackend {
             return vec![shadow_root];
         }
         if tag_name.as_deref() == Some("slot") {
-            return assigned_nodes.unwrap_or_default();
+            let assigned_nodes = assigned_nodes.unwrap_or_default();
+            if !assigned_nodes.is_empty() {
+                return assigned_nodes;
+            }
+            return children
+                .into_iter()
+                .flat_map(|child| {
+                    let is_slot = child
+                        .borrow()
+                        .as_element()
+                        .is_some_and(|e| e.tag_name == "slot");
+                    if is_slot {
+                        self.composed_children(&child)
+                    } else {
+                        vec![child]
+                    }
+                })
+                .collect();
         }
 
         // Normal element or shadow root: collect children
@@ -398,5 +415,40 @@ mod tests {
         // A host without a shadow root composes to just its light children.
         let plain = Node::element("div", vec![Node::element("b", Vec::new())]);
         assert_eq!(backend().composed_children(&plain).len(), 1);
+    }
+
+    #[test]
+    fn composed_children_uses_fallback_content_for_empty_slot() {
+        let host = Node::element("my-el", Vec::new());
+        let root = backend().attach_shadow(&host, "open");
+        let slot = Node::element(
+            "slot",
+            vec![Node::element("span", vec![Node::text("fallback")])],
+        );
+        backend().append_shadow_child(&root, &slot);
+
+        let composed = backend().composed_children(&root);
+        assert_eq!(composed.len(), 1);
+        let Node::Element(el) = &*composed[0].borrow() else {
+            panic!("expected fallback element");
+        };
+        assert_eq!(el.tag_name, "span");
+        assert_eq!(el.children.len(), 1);
+    }
+
+    #[test]
+    fn composed_children_flattens_nested_empty_slots() {
+        let host = Node::element("my-el", Vec::new());
+        let root = backend().attach_shadow(&host, "open");
+        let nested = Node::element("slot", vec![Node::text("nested-fallback")]);
+        let outer = Node::element("slot", vec![nested.clone()]);
+        backend().append_shadow_child(&root, &outer);
+
+        let composed = backend().composed_children(&root);
+        assert_eq!(composed.len(), 1);
+        let Node::Text(text) = &*composed[0].borrow() else {
+            panic!("expected nested fallback text");
+        };
+        assert_eq!(text.content, "nested-fallback");
     }
 }

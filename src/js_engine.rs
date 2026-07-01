@@ -109,6 +109,11 @@ pub(crate) trait JsRuntime {
         false
     }
 
+    /// Whether the runtime has native custom-element reactions enabled.
+    fn native_custom_element_reactions_enabled(&self) -> bool {
+        false
+    }
+
     fn dispatch_event(&mut self, node: &NodePtr, event_type: &str) -> bool;
     fn fire_dom_content_loaded(&mut self);
     fn fire_load(&mut self);
