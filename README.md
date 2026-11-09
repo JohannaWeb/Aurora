@@ -1,5 +1,5 @@
 # Aurora
-<img width="1441" height="1061" alt="image" src="https://github.com/user-attachments/assets/6908436c-f621-4e2a-802e-1238ceb72b12" />
+<img width="1431" height="1056" alt="image" src="https://github.com/user-attachments/assets/6077ef4f-95b6-44c4-b8ff-e537d2915fc1" />
 <img width="1080" height="794" alt="image" src="https://github.com/user-attachments/assets/6cc98bcf-0cea-42de-8d1c-707923a3ef52" />
 
 Aurora is an experimental Rust browser-engine prototype. Today it is a crate
