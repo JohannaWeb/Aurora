@@ -101,3 +101,5 @@ dioxus-ssr = "0.7.9"
 # whole style resolve on content-bearing YouTube routes. See third_party/stylo/data.rs.
 [patch.crates-io]
 stylo = { path = "third_party/stylo" }
+blitz-dom = { path = "third_party/blitz-dom" }
+blitz-paint = { path = "third_party/blitz-paint" }
