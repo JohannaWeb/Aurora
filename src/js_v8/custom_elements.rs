@@ -801,22 +801,44 @@ fn invoke_controller_connected(
     true
 }
 
-/// Look up `__aurora_ce_native_connect_trampoline__`, the JS shim's
-/// orchestration wrapper around `connectedCallback` (see the doc comment on
-/// `Reaction::Callback::native_connect`). Always present once
-/// `custom_elements.js` has run, which happens unconditionally at bootstrap;
-/// the `None` case is a defensive fallback for callers of `V8Runtime` that
-/// somehow skip bootstrap.
-fn native_connect_trampoline<'s>(
+/// Look up a global function the JS shim installed by name. Used for the
+/// shim's orchestration hooks the native reaction/upgrade path calls into
+/// (see [`native_connect_trampoline`] and [`after_construct_hook`]). Always
+/// present once `custom_elements.js` has run, which happens unconditionally
+/// at bootstrap; the `None` case is a defensive fallback for callers of
+/// `V8Runtime` that somehow skip bootstrap.
+fn global_hook<'s>(
     scope: &mut v8::PinScope<'s, '_>,
+    name: &str,
 ) -> Option<v8::Local<'s, v8::Function>> {
     let context = scope.get_current_context();
     let global = context.global(scope);
-    let key = v8::String::new(scope, "__aurora_ce_native_connect_trampoline__")
-        .expect("failed to create V8 string");
+    let key = v8::String::new(scope, name).expect("failed to create V8 string");
     global
         .get(scope, key.into())
         .and_then(|v| v8::Local::<v8::Function>::try_from(v).ok())
+}
+
+/// `__aurora_ce_native_connect_trampoline__`, the JS shim's orchestration
+/// wrapper around `connectedCallback` (see the doc comment on
+/// `Reaction::Callback::native_connect`).
+fn native_connect_trampoline<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+) -> Option<v8::Local<'s, v8::Function>> {
+    global_hook(scope, "__aurora_ce_native_connect_trampoline__")
+}
+
+/// `__aurora_ce_after_construct_native__`, the JS shim's orchestration
+/// wrapper around the Polymer compensation a construction needs regardless of
+/// which side ran it (`ceWrapPropMethods`, `maybeCallCreated`,
+/// `readyUpgraded`'s `ready()` dispatch, lifecycle-method preservation — see
+/// `afterConstruct` in `custom_elements.js`). Called from
+/// [`run_upgrade_constructor`] once a construction succeeds, whether native
+/// actually ran the constructor or the shim got there first.
+fn after_construct_hook<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+) -> Option<v8::Local<'s, v8::Function>> {
+    global_hook(scope, "__aurora_ce_after_construct_native__")
 }
 
 /// Invoke a single reaction against `recv` (the element's JS wrapper). Shared
@@ -969,11 +991,8 @@ fn wrapper_is_already_upgraded(
 /// `__aurora_ce_construction_stack_top_native`) instead of allocating a new
 /// one — which requires a JS wrapper to already exist for `node_id`, since
 /// that is what the construction stack resolves to and hands back through
-/// `super()`. A throwing constructor, or one that does not return the same
-/// object it was asked to adopt (e.g. because construction-stack adoption
-/// didn't fire and `HTMLElement` minted an unrelated element instead), leaves
-/// the element in `Failed`, per spec, rather than propagating out and
-/// poisoning the rest of the drain.
+/// `super()`. A throwing constructor leaves the element in `Failed`, per
+/// spec, rather than propagating out and poisoning the rest of the drain.
 ///
 /// On success, this also runs the `attributeChangedCallback` and
 /// `connectedCallback` reactions the spec generates *after* the constructor
@@ -1021,10 +1040,38 @@ fn run_upgrade_constructor(
         let constructed = {
             v8::tc_scope!(let tc, scope);
             let ctor = v8::Local::new(tc, &definition.constructor);
-            match ctor.new_instance(tc, &[]) {
-                Some(result) if !tc.has_caught() => result.strict_equals(wrapper.into()),
-                _ => false,
-            }
+            // `class X extends HTMLElement { constructor() { super(); ... } }`
+            // and a plain `function C() { HTMLElement.call(this); }` need
+            // different invocations — this is not a stylistic choice, it is
+            // forced by the language. A derived class's `this` is uninitialized
+            // until `super()` runs, and `super()`'s result becomes `this` for
+            // the rest of the constructor — that engine-level rebinding is
+            // exactly what makes `new_instance` + construction-stack adoption
+            // (PatchedHTMLElement, gated on `new.target`) work for `class`.
+            // A plain function has no such mechanism: `new C()` always binds
+            // `this` to its own fresh object, and nothing later in `C`'s body
+            // can retarget it without an explicit `return` — which ordinary
+            // ES5-adapter code has no reason to write (this codebase's own
+            // fixtures don't). So for that shape, bind `this` to the real
+            // element from the very first line by calling the constructor
+            // directly on it instead of through `new`, exactly as the JS
+            // shim's `tryUpgrade` used to (`ctor.call(el)` after an external
+            // prototype swap) — construction-stack adoption still fires for
+            // the nested `HTMLElement.call(this)`, but is redundant with the
+            // swap already done here.
+            let source: String = v8::Local::<v8::Value>::from(ctor).to_rust_string_lossy(tc);
+            let is_class_style = source.starts_with("class ");
+            let called = if is_class_style {
+                ctor.new_instance(tc, &[]).is_some()
+            } else {
+                if let Some(proto_key) = v8::String::new(tc, "prototype")
+                    && let Some(proto) = ctor.get(tc, proto_key.into())
+                {
+                    wrapper.set_prototype(tc, proto);
+                }
+                ctor.call(tc, wrapper.into(), &[]).is_some()
+            };
+            called && !tc.has_caught()
         };
         registry.ce_registry.pop_construction();
         constructed
@@ -1039,6 +1086,15 @@ fn run_upgrade_constructor(
     registry
         .ce_registry
         .set_element_state_on(&node, node_id, CeState::Custom);
+
+    // Idempotent on the JS side either way: when the shim already
+    // constructed this element it already ran this compensation itself (from
+    // `tryUpgrade`) and every step here no-ops the second time; when native
+    // just ran the constructor for real, this is the only place it happens.
+    if let Some(hook) = after_construct_hook(scope) {
+        let ctor = v8::Local::new(scope, &definition.constructor);
+        let _ = hook.call(scope, wrapper.into(), &[ctor.into()]);
+    }
 
     let attributes: Vec<(String, String)> = match &*node.borrow() {
         Node::Element(el) => el
@@ -1125,6 +1181,50 @@ pub(super) fn try_upgrade_element(
     registry
         .ce_registry
         .enqueue_upgrade(node_id, definition, is_connected);
+    true
+}
+
+/// Synchronously run "upgrade an element" for a single element, outside the
+/// reaction queue. The entry point `__aurora_ce_upgrade_now_native__` exposes
+/// to the JS shim's `tryUpgrade`, which schedules *when* to upgrade (handling
+/// all the YouTube-specific timing: pending-definition tracking, deferral
+/// during active template stamping, the connect retry ladder) but no longer
+/// performs construction itself.
+///
+/// Differs from [`try_upgrade_element`] (the insertion path's entry point,
+/// which has no V8 scope and must enqueue a reaction to run at the next
+/// drain) by calling [`run_upgrade_constructor`] immediately — required
+/// because a synchronous `document.createElement` of an already-defined name
+/// must return a fully constructed element, per spec, not one that upgrades
+/// on a later microtask. Returns whether an upgrade was attempted.
+pub(super) fn upgrade_element_now(
+    scope: &mut v8::PinScope<'_, '_>,
+    registry: &Rc<NodeRegistry>,
+    node: &NodePtr,
+) -> bool {
+    let tag = match &*node.borrow() {
+        Node::Element(el) => el.tag_name.clone(),
+        _ => return false,
+    };
+    if !is_valid_custom_element_name(&tag) {
+        return false;
+    }
+    let Some(definition) = registry.ce_registry.lookup(&tag) else {
+        return false;
+    };
+    let node_id = registry.register(node.clone());
+    if !matches!(
+        registry.ce_registry.element_state(node_id),
+        CeState::Undefined
+    ) {
+        return false;
+    }
+    let is_connected = registry
+        .document
+        .borrow()
+        .as_ref()
+        .is_some_and(|document| super::tree::mutation::is_connected_to(document, node));
+    run_upgrade_constructor(scope, registry, node_id, &definition, is_connected);
     true
 }
 

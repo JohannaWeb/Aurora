@@ -223,6 +223,7 @@ fn run_scripts(
     let native_ce_reactions = runtime.native_custom_element_reactions_enabled();
     apply_polymer_bindings(runtime.as_mut(), native_ce_reactions);
     pump_ready_work(runtime.as_mut());
+    feed_masthead_initial_data(runtime.as_mut());
     drive_content_bearing_initial_navigation(runtime.as_mut());
     pump_ready_work(runtime.as_mut());
     apply_polymer_bindings(runtime.as_mut(), native_ce_reactions);
@@ -358,12 +359,39 @@ fn apply_polymer_bindings(
     let _ = runtime.execute(&script);
 }
 
-/// Recover YouTube's first page transition only when the inline application
-/// data contains real content. Kevlar normally drives this through a private
-/// navigation state machine that does not fire in Aurora. Calling
-/// `ytd-page-manager.updatePageData` is the narrow public equivalent, but it
-/// must not run for the logged-out homepage's feed-nudge-only payload: doing so
-/// replaces the useful shell with an empty browse page.
+/// Kevlar hands `ytd-masthead` its data through the app's page-data flow,
+/// which never runs in Aurora (see `drive_content_bearing_initial_navigation`).
+/// Without data, `ytd-topbar-logo-renderer.computeShowYoodle` is `!data` and
+/// hides the real logo. The topbar payload is present on every page type, so
+/// feed it directly, independent of whether the page has feed content.
+fn feed_masthead_initial_data(runtime: &mut dyn crate::js_engine::JsRuntime) {
+    let _ = runtime.execute(
+        r#"
+        (function() {
+            try {
+                var masthead = document.querySelector && document.querySelector('ytd-masthead');
+                if (!masthead) return;
+                var controller = masthead.polymerController || masthead.inst || masthead;
+                if (controller.data) return;
+                // `getInitialData()` wraps the payload ({page, response, ...});
+                // `ytInitialData` is the raw response. Accept either shape.
+                var wrapped = typeof window.getInitialData === 'function' ? window.getInitialData() : null;
+                var data = window.ytInitialData || (wrapped && (wrapped.response || wrapped));
+                var topbar = data && data.topbar && data.topbar.desktopTopbarRenderer;
+                if (globalThis.__aurora_debug_youtube__) {
+                    console.log('[yt-nav] masthead data feed: topbar=' + !!topbar);
+                }
+                if (topbar) controller.data = topbar;
+            } catch (e) {
+                if (globalThis.__aurora_debug_youtube__) console.log('[yt-nav] masthead data feed threw: ' + e);
+            }
+        })();
+        "#,
+    );
+}
+
+/// Recover YouTube's first page transition when its private navigation state
+/// machine stalls, including the signed-out homepage's feed prompt.
 fn drive_content_bearing_initial_navigation(runtime: &mut dyn crate::js_engine::JsRuntime) {
     let _ = runtime.execute(
         r#"
@@ -387,6 +415,7 @@ fn drive_content_bearing_initial_navigation(runtime: &mut dyn crate::js_engine::
                 var visited = [];
                 var budget = 50000;
                 var contentKeys = {
+                    feedNudgeRenderer: true,
                     videoRenderer: true,
                     gridVideoRenderer: true,
                     compactVideoRenderer: true,
@@ -426,17 +455,88 @@ fn drive_content_bearing_initial_navigation(runtime: &mut dyn crate::js_engine::
 
                 pageManager.__aurora_initial_navigation_driven__ = true;
                 var attempts = 0;
+                function syncCachedPageVisibility() {
+                    var controller = pageManager.inst || pageManager.polymerController || pageManager;
+                    var pool = controller && controller.pagePool;
+                    var pages = pool && pool.pageNameToElement;
+                    var current = controller && controller.currentPage;
+                    if (!pages || typeof pages.forEach !== 'function' || !current) return;
+                    pages.forEach(function(page) {
+                        if (!page || typeof page.setAttribute !== 'function') return;
+                        // Polymer's page manager tracks this state in a JS
+                        // property. Aurora's render tree consumes DOM
+                        // attributes, so mirror the state with the standard
+                        // hidden attribute to keep cached pages out of layout.
+                        if (page === current) page.removeAttribute('hidden');
+                        else page.setAttribute('hidden', '');
+                    });
+                }
                 function settleRenderers() {
                     attempts++;
-                    var all = document.querySelectorAll ? document.querySelectorAll('*') : [];
+                    syncCachedPageVisibility();
+                    // Renderers stamped during Polymer's private navigation
+                    // path bypass tryUpgrade(), so their shadow descendants
+                    // may not have Aurora's binding hooks installed yet.
+                    // Sweep before invoking data callbacks; installing a hook
+                    // also evaluates the current data against stamped nodes.
+                    if (typeof globalThis.__aurora_sweep_bindings__ === 'function') {
+                        try { globalThis.__aurora_sweep_bindings__(pageManager); } catch (e) {}
+                    }
+                    var all = [];
+                    var seen = [];
+                    function collect(node) {
+                        if (!node || seen.indexOf(node) >= 0) return;
+                        seen.push(node);
+                        if (node.nodeType === 1) all.push(node);
+                        var shadow = node.shadowRoot || node.__shady_shadowRoot;
+                        if (shadow && shadow !== node) {
+                            for (var si = 0; si < shadow.childNodes.length; si++) collect(shadow.childNodes[si]);
+                        }
+                        var children = node.childNodes;
+                        for (var ci = 0; children && ci < children.length; ci++) collect(children[ci]);
+                    }
+                    collect(pageManager);
                     for (var i = 0; i < all.length; i++) {
                         var el = all[i];
                         var elData = el.data || (el.__data && el.__data.data);
-                        if (!elData || !elData.contents || !elData.contents.length) continue;
+                        if (!elData || typeof elData !== 'object') continue;
+                        var hasRenderableData = !!(
+                            (elData.contents && elData.contents.length) || elData.videoId ||
+                            elData.title || elData.navigationEndpoint || elData.thumbnail
+                        );
+                        if (!hasRenderableData || el.__aurora_initial_data_changed__) continue;
                         var shown = el.shownItems || (el.__data && el.__data.shownItems);
-                        if (shown && shown.length) continue;
+                        if (elData.contents && shown && shown.length) continue;
+                        el.__aurora_initial_data_changed__ = true;
+                        var renderer = el.inst || el.polymerController || el;
+                        if (globalThis.__aurora_debug_youtube__ &&
+                            /video-renderer|item-section-renderer/.test(el.localName || '')) {
+                            console.log('[yt-hydrate] ' + el.localName +
+                                ' keys=' + Object.keys(elData).slice(0, 8).join(',') +
+                                ' controller=' + (renderer.localName || renderer.is || '?') +
+                                ' dataChanged=' + typeof renderer.dataChanged +
+                                ' reflow=' + typeof renderer.reflowContent +
+                                ' invalidate=' + typeof renderer._invalidateProperties +
+                                ' setPending=' + typeof renderer._setPendingProperty +
+                                ' template=' + !!renderer.__templateInfo);
+                        }
                         try {
-                            if (typeof el.dataChanged === 'function') el.dataChanged();
+                            // A renderer can receive its `data` object before
+                            // its Polymer template client is ready. Re-notify
+                            // the property-effects system even when the value
+                            // is the same object so stamped bindings (such as
+                            // the video title) get a fresh pass.
+                            if (typeof renderer.set === 'function') {
+                                renderer.set('data', elData);
+                            }
+                            if (typeof renderer.notifyPath === 'function') {
+                                Object.keys(elData).forEach(function(key) {
+                                    try { renderer.notifyPath('data.' + key, elData[key]); } catch (e) {}
+                                });
+                            }
+                            if (typeof renderer.dataChanged === 'function') renderer.dataChanged();
+                            else if (typeof renderer.reflowContent === 'function') renderer.reflowContent(true);
+                            else if (typeof el.dataChanged === 'function') el.dataChanged();
                             else if (typeof el.reflowContent === 'function') el.reflowContent(true);
                         } catch (e) {}
                     }
@@ -444,6 +544,7 @@ fn drive_content_bearing_initial_navigation(runtime: &mut dyn crate::js_engine::
                 }
 
                 var result = pageManager.updatePageData(data);
+                syncCachedPageVisibility();
                 if (globalThis.__aurora_debug_youtube__) {
                     console.log('[yt-nav] drove content-bearing initial page=' + (data.page || 'unknown'));
                 }
@@ -685,7 +786,7 @@ mod tests {
                 globalThis.__navCalls = 0;
                 globalThis.__initialData = {
                     page: 'browse',
-                    contents: { feedNudgeRenderer: { title: 'Sign in' } }
+                    contents: {}
                 };
                 window.getInitialData = function() { return globalThis.__initialData; };
                 document.querySelector('ytd-page-manager').updatePageData = function(data) {
@@ -724,6 +825,36 @@ mod tests {
     }
 
     #[test]
+    fn initial_navigation_driver_accepts_signed_out_home_prompt() {
+        let dom = Parser::new("<html><body><ytd-page-manager></ytd-page-manager></body></html>")
+            .parse_document();
+        let mut runtime = crate::js_v8::V8Runtime::new(dom);
+        runtime.execute(r#"
+            globalThis.__navCalls = 0;
+            window.getInitialData = function() {
+                return { page: 'browse', response: { contents: {
+                    twoColumnBrowseResultsRenderer: { tabs: [{ tabRenderer: {
+                        content: { richGridRenderer: { contents: [{ richSectionRenderer: {
+                            content: { feedNudgeRenderer: {
+                                title: { runs: [{ text: 'Search to get started' }] }
+                            } }
+                        } }] } }
+                    } }] }
+                } } };
+            };
+            document.querySelector('ytd-page-manager').updatePageData = function(data) {
+                globalThis.__navCalls++;
+                globalThis.__navigatedData = data;
+            };
+        "#).unwrap();
+
+        drive_content_bearing_initial_navigation(&mut runtime);
+        drive_content_bearing_initial_navigation(&mut runtime);
+        assert_eq!(runtime.eval_to_string("__navCalls"), Ok("1".into()));
+        assert_eq!(runtime.eval_to_string("__navigatedData.page"), Ok("browse".into()));
+    }
+
+    #[test]
     fn initial_navigation_driver_accepts_watch_player_data() {
         let dom = Parser::new("<html><body><ytd-page-manager></ytd-page-manager></body></html>")
             .parse_document();
@@ -743,6 +874,67 @@ mod tests {
 
         drive_content_bearing_initial_navigation(&mut runtime);
         assert_eq!(runtime.eval_to_string("__navCalls"), Ok("1".into()));
+    }
+
+    #[test]
+    fn initial_navigation_driver_hides_inactive_cached_pages_from_layout() {
+        let dom = Parser::new("<html><body><ytd-page-manager></ytd-page-manager></body></html>")
+            .parse_document();
+        let mut runtime = crate::js_v8::V8Runtime::new(dom);
+        runtime
+            .execute(
+                r#"
+                const manager = document.querySelector('ytd-page-manager');
+                const watch = document.createElement('ytd-watch-flexy');
+                const search = document.createElement('ytd-search');
+                manager.pagePool = { pageNameToElement: new Map([['watch', watch], ['search', search]]) };
+                manager.currentPage = search;
+                manager.updatePageData = function() {};
+                window.getInitialData = function() {
+                    return { page: 'search', contents: { videoRenderer: { videoId: 'visible' } } };
+                };
+                "#,
+            )
+            .unwrap();
+
+        drive_content_bearing_initial_navigation(&mut runtime);
+        assert_eq!(
+            runtime.eval_to_string("watch.hasAttribute('hidden') + '|' + search.hasAttribute('hidden')"),
+            Ok("true|false".into())
+        );
+    }
+
+    #[test]
+    fn initial_navigation_driver_refreshes_shadow_dom_video_cards() {
+        let dom = Parser::new("<html><body><ytd-page-manager></ytd-page-manager></body></html>")
+            .parse_document();
+        let mut runtime = crate::js_v8::V8Runtime::new(dom);
+        runtime
+            .execute(
+                r#"
+                const manager = document.querySelector('ytd-page-manager');
+                const card = document.createElement('ytd-video-renderer');
+                card.data = { videoId: 'hydrated', title: { simpleText: 'Hydrated title' } };
+                card.setCount = 0;
+                card.set = function(path, value) { this.setCount++; this.data = value; };
+                card.notifyPaths = [];
+                card.notifyPath = function(path) { this.notifyPaths.push(path); };
+                card.refreshCount = 0;
+                card.dataChanged = function() { this.refreshCount++; this.textContent = this.data.title.simpleText; };
+                manager.attachShadow({ mode: 'open' }).appendChild(card);
+                manager.updatePageData = function() {};
+                window.getInitialData = function() {
+                    return { page: 'search', contents: { videoRenderer: { videoId: 'hydrated' } } };
+                };
+                "#,
+            )
+            .unwrap();
+
+        drive_content_bearing_initial_navigation(&mut runtime);
+        assert_eq!(
+            runtime.eval_to_string("document.querySelector('ytd-page-manager').shadowRoot.firstChild.setCount + '|' + document.querySelector('ytd-page-manager').shadowRoot.firstChild.notifyPaths.join(',') + '|' + document.querySelector('ytd-page-manager').shadowRoot.firstChild.refreshCount + '|' + document.querySelector('ytd-page-manager').shadowRoot.firstChild.textContent"),
+            Ok("1|data.videoId,data.title|1|Hydrated title".into())
+        );
     }
 
     #[test]

@@ -150,8 +150,18 @@
         }
     };
 
-    function installPolymerMethods(target) {
+    // `$$` is a duck-typing signal: YouTube's DOM helper (`Hy`) treats any
+    // node with `$$` as a Polymer element and resolves its render root from
+    // `node.root`, *before* checking `node.polymerController`. Its thin
+    // controller-shell elements have deliberately empty prototypes, so a
+    // shim `$$` there routes formatted-string text into the host's light DOM
+    // (never painted) instead of its shadow root. Real Polymer classes bring
+    // their own `$$`, so the blanket define-time install skips it.
+    var DEFINE_TIME_SKIP = { $$: true };
+
+    function installPolymerMethods(target, skip) {
         for (var key in POLYMER_PROTO) {
+            if (skip && skip[key]) continue;
             try {
                 if (target[key] == null || typeof target[key] !== 'function')
                     target[key] = POLYMER_PROTO[key];
@@ -435,7 +445,7 @@
     var _origDef = globalThis.customElements.define;
     if (_origDef && !_origDef.__aurora_polymer__) {
         globalThis.customElements.define = function(name, ctor, opts) {
-            if (ctor && ctor.prototype) installPolymerMethods(ctor.prototype);
+            if (ctor && ctor.prototype) installPolymerMethods(ctor.prototype, DEFINE_TIME_SKIP);
             return _origDef.call(this, name, ctor, opts);
         };
         try { Object.defineProperty(globalThis.customElements.define, '__aurora_polymer__', { value: true, configurable: true }); } catch (e) {}

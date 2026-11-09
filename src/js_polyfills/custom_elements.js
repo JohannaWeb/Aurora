@@ -9,6 +9,23 @@
             var deferredStampedUpgrades = [];
             var trackedCustomElements = [];
             var logicalHostCache = typeof WeakMap === 'function' ? new WeakMap() : null;
+            var stampTraceIds = typeof WeakMap === 'function' ? new WeakMap() : null;
+            var nextStampTraceId = 1;
+            var stampTemplateSnapshots = typeof WeakMap === 'function' ? new WeakMap() : null;
+            function makeStampSnapshotInert(fragment) {
+                if (!fragment) return;
+                ['__aurora_fragment_owner__', '__aurora_fragment_creation_stack__',
+                    '__aurora_fragment_trace_id__'].forEach(function(key) {
+                    try { delete fragment[key]; } catch (e) {}
+                });
+            }
+            function stampTraceId(value) {
+                if (!value || (typeof value !== 'object' && typeof value !== 'function')) return '-';
+                if (!stampTraceIds) return '?';
+                var id = stampTraceIds.get(value);
+                if (!id) { id = nextStampTraceId++; stampTraceIds.set(value, id); }
+                return String(id);
+            }
             var tracedUnresolvedRoots = typeof WeakSet === 'function' ? new WeakSet() : null;
             var activeLifecycleHost = null;
             var fragmentTraceCounter = 0;
@@ -339,6 +356,7 @@
             function adoptLogicalShadowRoot(root) {
                 if (!root) return null;
                 try { if (root.nodeType !== 11) return null; } catch (e) { return null; }
+                try { if (root.__aurora_template_content__) return null; } catch (e) {}
                 if (logicalHostCache) {
                     try {
                         var cached = logicalHostCache.get(root);
@@ -508,6 +526,7 @@
             // remains inside the temporary clone fragment. Recover the intended
             // composition by moving that fragment into the owner's render root;
             // native DocumentFragment insertion consumes its children.
+            var reclaimingComposedFragment = false;
             function composeDetachedStamp(el) {
                 var skipSpec = globalThis.__AURORA_SKIP_COMPOSE_TAGS__;
                 if (skipSpec) {
@@ -528,6 +547,10 @@
                         }
                     }
                 }
+                // Refilling a fragment for the caller's real insertion re-runs
+                // upgrade/connect for its elements; don't compose them straight
+                // back out again.
+                if (reclaimingComposedFragment) return false;
                 var fragment = detachedFragmentFor(el);
                 if (!fragment) return false;
                 var ownerKeys = ['__dataHost', 'dataHost', '_methodHost', '__templatizeOwner', '__host'];
@@ -567,7 +590,9 @@
                                     value: true, configurable: true
                                 });
                                 ceLog('logical-root-adopted', host,
-                                    'via=data-host rootKids=' + (fragment.childNodes ? fragment.childNodes.length : '?'));
+                                    'via=data-host rootKids=' + (fragment.childNodes ? fragment.childNodes.length : '?') +
+                                    ' el=' + (el.localName || '?') + ' frag#' + (fragment.__aurora_fragment_trace_id__ || '?') +
+                                    ' stack=' + String(fragment.__aurora_fragment_creation_stack__ || '').split('\n').slice(1, 7).join('>').replace(/\s+/g, ' '));
                                 return true;
                             }
                             continue;
@@ -577,9 +602,31 @@
                                 typeof host.__aurora_adoptShadowRoot === 'function') {
                                 host.__aurora_adoptShadowRoot(target, 'open');
                             }
+                            var preKids = target.childNodes ? target.childNodes.length : -1;
+                            var fragKids = fragment.childNodes ? fragment.childNodes.length : -1;
+                            var fragFirst = fragment.firstChild ? (fragment.firstChild.localName || fragment.firstChild.nodeName) : '-';
+                            var composedNodes = Array.prototype.slice.call(fragment.childNodes || []);
                             target.appendChild(fragment);
+                            // Remember what was moved: the fragment's creator
+                            // may still insert it itself (YouTube's renderer
+                            // stamper fills a fragment, which upgrades and
+                            // composes its elements here, and only then calls
+                            // `#primary.appendChild(fragment)`). The native
+                            // insert hands the emptied fragment to
+                            // __aurora_reclaim_composed_fragment__ so the
+                            // content follows the caller's real insertion.
+                            try {
+                                Object.defineProperty(fragment, '__aurora_composed_nodes__', {
+                                    value: { nodes: composedNodes, target: target },
+                                    configurable: true, writable: true
+                                });
+                            } catch (e) {}
                             ceLog('detached-stamp-composed', host,
-                                'target=shadow-root');
+                                'target=shadow-root el=' + (el.localName || '?') +
+                                ' owner#=' + oi + '/' + owners.length +
+                                ' frag#' + (fragment.__aurora_fragment_trace_id__ || '?') +
+                                ' fragKids=' + fragKids + ' first=' + fragFirst +
+                                ' targetKids=' + preKids + '->' + (target.childNodes ? target.childNodes.length : -1));
                             return true;
                         }
                     } catch (e) {
@@ -1420,6 +1467,100 @@
                     !el._stampTemplate.__aurora_connect_suppressed__) {
                     var originalStampTemplate = el._stampTemplate;
                     var wrappedStampTemplate = function() {
+                        var traceStamp = !!globalThis.__AURORA_TRACE_STAMP__;
+                        var templateInfo = traceStamp ? arguments[1] : null;
+                        var traceSourceContent = null;
+                        var traceSourceBefore = -1;
+                        function templateNodeShape(root) {
+                            var out = [], nodes = [root], guard = 0;
+                            while (nodes.length && guard++ < 500) {
+                                var n = nodes.shift();
+                                if (!n) { out.push('undefined'); continue; }
+                                out.push((n.localName || n.nodeName || '?') + ':' + n.childNodes.length +
+                                    (n.localName === 'template' && n.content ? '/content=' + n.content.childNodes.length : ''));
+                                for (var i = 0; i < n.childNodes.length; i++) nodes.push(n.childNodes[i]);
+                                if (n.localName === 'template' && n.content) nodes.push(n.content);
+                            }
+                            return out.join(',');
+                        }
+                        function templateLinkMismatches(root) {
+                            var out = [], nodes = [root], guard = 0;
+                            while (nodes.length && guard++ < 500) {
+                                var n = nodes.shift();
+                                if (!n) continue;
+                                var list = [], chain = [], child = n.firstChild, childGuard = 0;
+                                for (var i = 0; i < n.childNodes.length; i++) list.push(n.childNodes[i]);
+                                while (child && childGuard++ < 200) {
+                                    chain.push(child);
+                                    child = child.nextSibling;
+                                }
+                                var differs = list.length !== chain.length;
+                                for (var j = 0; !differs && j < list.length; j++) differs = list[j] !== chain[j];
+                                if (differs) {
+                                    out.push((n.localName || n.nodeName || '?') + ':list=' + list.length +
+                                        '/links=' + chain.length + '/first=' + (list[0] && (list[0].localName || list[0].nodeName)) +
+                                        '/' + (chain[0] && (chain[0].localName || chain[0].nodeName)));
+                                }
+                                for (var k = 0; k < list.length; k++) nodes.push(list[k]);
+                                if (n.localName === 'template' && n.content) nodes.push(n.content);
+                            }
+                            return out.join(',');
+                        }
+                        function stampInfoShape(info) {
+                            if (!info || typeof info !== 'object') return String(info);
+                            var nodes, infos, firstInfo;
+                            try { nodes = info.nodeList; } catch (e) {}
+                            try { infos = info.nodeInfoList; } catch (e) {}
+                            try { firstInfo = infos && infos[0]; } catch (e) {}
+                            return 'nodes=' + (nodes && nodes.length) + '/info=' + (infos && infos.length) +
+                                '/first=' + (firstInfo && Object.keys(firstInfo).join('+'));
+                        }
+                        function stampMappingFailures(info, root) {
+                            var infos;
+                            try { infos = info && info.nodeInfoList; } catch (e) {}
+                            if (!infos || !root) return '';
+                            function mapNode(nodeInfo, depth) {
+                                if (!nodeInfo || depth > 80) return undefined;
+                                // Polymer's root context is { parent: null };
+                                // it has no parentIndex and maps directly to
+                                // the imported template fragment.
+                                if (nodeInfo.parentIndex === undefined) return root;
+                                var parent = nodeInfo.parentInfo ? mapNode(nodeInfo.parentInfo, depth + 1) : root;
+                                if (!parent) return undefined;
+                                var child = parent.firstChild;
+                                for (var i = 0; child; child = child.nextSibling, i++) {
+                                    if (i === nodeInfo.parentIndex) return child;
+                                }
+                                return undefined;
+                            }
+                            var missing = [];
+                            for (var i = 0; i < infos.length; i++) {
+                                if (!mapNode(infos[i], 0)) {
+                                    missing.push(i + ':parentIndex=' + infos[i].parentIndex +
+                                        '/parentInfo=' + (infos[i].parentInfo && infos[i].parentInfo.infoIndex) +
+                                        '/keys=' + Object.keys(infos[i]).join('+'));
+                                }
+                            }
+                            return missing.join(',');
+                        }
+                        function nestedStampInfo(info) {
+                            var infos;
+                            try { infos = info && info.nodeInfoList; } catch (e) {}
+                            if (!infos) return '';
+                            var out = [];
+                            for (var i = 0; i < infos.length; i++) {
+                                var nested = infos[i] && infos[i].templateInfo;
+                                if (!nested) continue;
+                                var source = nested.content;
+                                var clone = null;
+                                try { clone = document.importNode(source, true); } catch (e) {}
+                                out.push(i + ':info=' + (nested.nodeInfoList && nested.nodeInfoList.length) +
+                                    '/source=' + templateNodeShape(source) +
+                                    '/clone=' + templateNodeShape(clone) +
+                                    '/missing=' + stampMappingFailures(nested, clone));
+                            }
+                            return out.join(' || ');
+                        }
                         if (globalThis.__AURORA_TRACE_STAMP__) {
                             var host = '?';
                             try {
@@ -1429,14 +1570,140 @@
                             var via = '';
                             try { via = new Error().stack.split('\n').slice(2, 12).join(' < '); }
                             catch (e) {}
-                            console.log('[stamp] ' + host + ' :: ' + via);
+                            var argTemplateInfo = arguments[0] && (arguments[0]._templateInfo || arguments[0].__templateInfo);
+                            var metadataContent = argTemplateInfo && argTemplateInfo.content;
+                            var argumentContent = arguments[0] && (arguments[0].content || arguments[0]);
+                            var sourceContent = metadataContent || argumentContent;
+                            traceSourceContent = sourceContent;
+                            traceSourceBefore = sourceContent && sourceContent.childNodes ? sourceContent.childNodes.length : -1;
+                            if (sourceContent && typeof globalThis.MutationObserver === 'function') {
+                                try {
+                                    var sourceObserver = arguments[0].__aurora_stamp_source_observer__;
+                                    if (sourceObserver) {
+                                        var priorMutations = sourceObserver.takeRecords();
+                                        if (priorMutations.length) {
+                                            var summary = [];
+                                            for (var mi = 0; mi < priorMutations.length; mi++) {
+                                                var rec = priorMutations[mi], removed = [];
+                                                for (var ri = 0; ri < rec.removedNodes.length; ri++) {
+                                                    var removedNode = rec.removedNodes[ri];
+                                                    removed.push(removedNode.localName || removedNode.nodeName || '?');
+                                                }
+                                                summary.push('target=' + (rec.target.localName || rec.target.nodeName || '?') +
+                                                    '/removed=' + removed.join('+') + '/added=' + rec.addedNodes.length);
+                                            }
+                                            console.log('[stamp-source-prior-mutations] ' + stampTraceId(arguments[0]) +
+                                                ' ' + summary.join(','));
+                                        }
+                                    } else {
+                                        sourceObserver = new MutationObserver(function() {});
+                                        sourceObserver.observe(sourceContent, { childList: true, subtree: true });
+                                        Object.defineProperty(arguments[0], '__aurora_stamp_source_observer__', {
+                                            value: sourceObserver, configurable: true
+                                        });
+                                    }
+                                } catch (observerError) {}
+                            }
+                            var importedContent = null;
+                            var importedShape = 'unavailable';
+                            try {
+                                importedContent = document.importNode(sourceContent, true);
+                                importedShape = templateNodeShape(importedContent);
+                            } catch (cloneError) { importedShape = 'clone-error:' + cloneError; }
+                            console.log('[stamp] ' + host + ' :: ' + via +
+                                ' metadata=' + (templateInfo && templateInfo.nodeInfoList && templateInfo.nodeInfoList.length) +
+                                ' args=' + arguments.length +
+                                ' arg0=' + (arguments[0] && (arguments[0].localName || arguments[0].nodeName || typeof arguments[0])) +
+                                ' arg0Id=' + stampTraceId(arguments[0]) +
+                                ' arg0Info=' + stampInfoShape(arguments[0] && (arguments[0]._templateInfo || arguments[0].__templateInfo)) +
+                                ' infoId=' + stampTraceId(arguments[0] && (arguments[0]._templateInfo || arguments[0].__templateInfo)) +
+                                ' arg0Content=' + templateNodeShape(argumentContent) +
+                                ' metadataContent=' + templateNodeShape(metadataContent) +
+                                ' hostInfo=' + stampInfoShape(this && (this._templateInfo || this.__templateInfo)) +
+                                ' mappingFailures=' + stampMappingFailures(arguments[0] && (arguments[0]._templateInfo || arguments[0].__templateInfo), importedContent) +
+                                ' nestedInfo=' + nestedStampInfo(arguments[0] && (arguments[0]._templateInfo || arguments[0].__templateInfo)) +
+                                ' template=' + templateNodeShape(sourceContent) +
+                                ' imported=' + importedShape +
+                                ' sourceLinkMismatches=' + templateLinkMismatches(sourceContent) +
+                                ' cloneLinkMismatches=' + templateLinkMismatches(importedContent));
+                        }
+                        // Some YouTube template instances reuse their cached
+                        // nodeInfoList after the template's content fragment
+                        // has been emptied. The next normal Polymer stamp then
+                        // indexes the stale metadata into an empty clone and
+                        // attempts to set __dataHost on undefined. Keep one
+                        // pristine copy per template and restore it only when
+                        // metadata still expects nodes but the source was
+                        // consumed between stamp calls.
+                        try {
+                            var stampTemplate = arguments[0];
+                            var stampInfo = arguments[1] || (stampTemplate &&
+                                (stampTemplate._templateInfo || stampTemplate.__templateInfo));
+                            var source = stampInfo && stampInfo.content ||
+                                (stampTemplate && (stampTemplate.content || stampTemplate));
+                            var expected = stampInfo && stampInfo.nodeInfoList && stampInfo.nodeInfoList.length || 0;
+                            var childCount = source && source.childNodes ? source.childNodes.length : 0;
+                            var snapshot = stampTemplateSnapshots && stampTemplateSnapshots.get(stampTemplate);
+                            if (childCount && !snapshot && stampTemplateSnapshots) {
+                                snapshot = document.importNode(source, true);
+                                makeStampSnapshotInert(snapshot);
+                                stampTemplateSnapshots.set(stampTemplate, snapshot);
+                                if (traceStamp) console.log('[stamp-template-snapshot] ' + stampTraceId(stampTemplate) +
+                                    ' source=' + childCount + ' cached=' + (snapshot.childNodes && snapshot.childNodes.length));
+                            } else if (!childCount && expected && snapshot) {
+                                suppressTrackedConnect++;
+                                try {
+                                    var restored = document.importNode(snapshot, true);
+                                    makeStampSnapshotInert(restored);
+                                    while (restored && restored.firstChild) source.appendChild(restored.firstChild);
+                                }
+                                finally { suppressTrackedConnect--; }
+                                if (traceStamp) {
+                                    console.log('[stamp-template-restored] ' +
+                                        (this.localName || (this.hostElement && this.hostElement.localName) || '?') +
+                                        ' expected=' + expected + ' cached=' + (snapshot.childNodes && snapshot.childNodes.length) +
+                                        ' restored=' + (source.childNodes && source.childNodes.length) +
+                                        ' tree=' + templateNodeShape(source) +
+                                        ' missingAfterRestore=' + stampMappingFailures(stampInfo, document.importNode(source, true)));
+                                }
+                            }
+                        } catch (restoreError) {
+                            if (traceStamp) console.log('[stamp-template-restore-error] ' + restoreError);
                         }
                         suppressTrackedConnect++;
                         try {
-                            return originalStampTemplate.apply(this, arguments);
+                            var stamped = originalStampTemplate.apply(this, arguments);
+                            if (traceStamp) {
+                                var missing = [];
+                                var stampedNodes = stamped && stamped.nodeList;
+                                for (var ni = 0; stampedNodes && ni < stampedNodes.length; ni++) {
+                                    if (!stampedNodes[ni]) missing.push(ni);
+                                }
+                                console.log('[stamp-result] ' + (this.localName || '?') +
+                                    ' nodes=' + (stamped && stamped.nodeList && stamped.nodeList.length) +
+                                    ' info=' + (stamped && stamped.templateInfo && stamped.templateInfo.nodeInfoList && stamped.templateInfo.nodeInfoList.length) +
+                                    ' missing=' + missing.join(',') +
+                                    ' sourceKids=' + traceSourceBefore + '->' + (traceSourceContent && traceSourceContent.childNodes ? traceSourceContent.childNodes.length : -1));
+                            }
+                            return stamped;
+                        } catch (error) {
+                            if (traceStamp) {
+                                console.log('[stamp-error] ' + (this.localName || '?') +
+                                    ' nodes=' + (templateInfo && templateInfo.nodeList && templateInfo.nodeList.length) +
+                                    ' info=' + (templateInfo && templateInfo.nodeInfoList && templateInfo.nodeInfoList.length) +
+                                    ' error=' + error);
+                            }
+                            throw error;
                         } finally {
                             suppressTrackedConnect--;
-                            if (!suppressTrackedConnect) flushDeferredStampedUpgrades();
+                            if (!suppressTrackedConnect) {
+                                flushDeferredStampedUpgrades();
+                                if (traceStamp && traceSourceContent && traceSourceContent.childNodes &&
+                                    traceSourceContent.childNodes.length !== traceSourceBefore) {
+                                    console.log('[stamp-source-mutated-after-flush] ' + (this.localName || '?') +
+                                        ' kids=' + traceSourceBefore + '->' + traceSourceContent.childNodes.length);
+                                }
+                            }
                         }
                     };
                     try {
@@ -1524,6 +1791,14 @@
 
             function normalizeAttributedStringProps(el) {
                 if (!el || el.localName !== 'yt-attributed-string') return;
+                // Only before the component sets up its props. Afterwards
+                // `rawProps` *is* `componentProps` and its functions are the
+                // component's own signal getters: resolving them to plain
+                // values makes the next render apply e.g. `style: undefined`
+                // straight to the host (`host.style.cssText = ''`), which
+                // throws because the component's `style` prop accessor has
+                // no getter — and aborts yt-formatted-string text rendering.
+                if (el.hasRendered || el.componentProps) return;
                 var props = [
                     'ariaHidden', 'ariaLabel', 'ellipsisTruncate', 'isOverlay',
                     'linkInheritColor', 'noEndpoints', 'noStyleRuns', 'noLinkColor',
@@ -1570,9 +1845,12 @@
                     ctor.prototype.__aurora_setUpProps_hooked__ = true;
                 }
                 ctor.prototype.setUpProps = function() {
-                    sanitizePropBag(this.rawProps);
-                    sanitizePropBag(this.componentProps);
-                    sanitizePropBag(this.slotProps);
+                    // See installInstanceSetUpPropsHook: never flatten the
+                    // component's signal getters once props are set up.
+                    if (!this.componentProps) {
+                        sanitizePropBag(this.rawProps);
+                        sanitizePropBag(this.slotProps);
+                    }
                     return original.apply(this, arguments);
                 };
             }
@@ -1612,6 +1890,65 @@
                 }
             }
 
+            // Everything a constructor's caller must do once construction has
+            // finished, regardless of which side ran the constructor: restore
+            // any lifecycle methods an ES5 adapter's prototype swap dropped,
+            // attach `__aurora_ce_definition__`/`__aurora_ce_name__`/
+            // `__aurora_ce_ctor__`, wrap the property-effects methods for
+            // tracing, and run `created()`/`ready()`. Shared by `tryUpgrade`
+            // (the shim's own construction) and
+            // `__aurora_ce_after_construct_native__` (native construction —
+            // see js_v8/custom_elements.rs's `run_upgrade_constructor`), so a
+            // natively-upgraded element gets the same Polymer compensation a
+            // shim-upgraded one does. Every step here is independently
+            // idempotent, so calling this twice for the same element (once
+            // from each side, in the case `run_upgrade_constructor` finds the
+            // shim already got there first) is a safe no-op the second time.
+            //
+            // `ctor` is optional: when known (native always knows it — it has
+            // the definition in hand) it registers/refreshes the shim's
+            // definition metadata even for a name the shim's own
+            // `customElements.define` never saw, so a purely natively-defined
+            // element still gets `attachDefinitionMetadata`. When omitted,
+            // falls back to whatever the shim's own registry already has.
+            function afterConstruct(el, name, ctor) {
+                var definition = ctor ? ensureDefinitionMetadata(name, ctor) : getDefinition(name);
+                var definitionCtor = definition && definition.ctor;
+                if (definitionCtor) {
+                    var registeredLifecycle = {};
+                    ['connectedCallback', 'disconnectedCallback', 'adoptedCallback', 'attributeChangedCallback']
+                        .forEach(function(key) {
+                            try {
+                                var fn = definitionCtor.prototype && definitionCtor.prototype[key];
+                                if (typeof fn === 'function') registeredLifecycle[key] = fn;
+                            } catch (e) {}
+                        });
+                    // ES5 adapters and proxy constructors can replace the
+                    // instance prototype during `super()`. The registered
+                    // definition remains the lifecycle authority; preserve
+                    // callbacks that were present on it but disappeared
+                    // during construction.
+                    Object.keys(registeredLifecycle).forEach(function(key) {
+                        try {
+                            if (typeof el[key] !== 'function') {
+                                Object.defineProperty(el, key, {
+                                    value: registeredLifecycle[key],
+                                    configurable: true,
+                                    writable: true
+                                });
+                            }
+                        } catch (e) {}
+                    });
+                }
+                if (definition) attachDefinitionMetadata(el, definition);
+                ceWrapPropMethods(el, name);
+                ceLog('post-construct', el, 'instChain=' + ceChain(Object.getPrototypeOf(el)) +
+                    ' own=' + ceOwnStamp(el) +
+                    ' connectedType=' + typeof el.connectedCallback + ' ' + ceContent(el));
+                maybeCallCreated(el, name);
+                readyUpgraded(el, name);
+            }
+
             function installInstanceSetUpPropsHook(el) {
                 if (!el || el.localName !== 'yt-attributed-string' || el.__aurora_setUpProps_instance_hooked__) return;
                 var original = el.setUpProps;
@@ -1625,53 +1962,19 @@
                     el.__aurora_setUpProps_instance_hooked__ = true;
                 }
                 el.setUpProps = function() {
-                    // YouTube's setUpProps copies declared prop values into
-                    // `rawProps` and then throws "Function props must be
-                    // configured as STATIC, not SIGNAL." if any SIGNAL prop's
-                    // value is a Function. The validation reads `rawProps[name]`
-                    // for every declared prop, which walks the prototype chain.
-                    // Our bootstrap installs a callable fallback `style` (and
-                    // `__shady_*` helpers) on Object.prototype, so for the
-                    // declared `style` prop `rawProps.style` resolves to that
-                    // callable and trips the check. Wrap rawProps in a Proxy that
-                    // neutralizes any such function to its resolved (unset) value,
-                    // while leaving genuine Object.prototype builtins intact.
-                    try {
-                        var realRaw = this.rawProps;
-                        if (realRaw && typeof realRaw === 'object' && !realRaw.__aurora_raw_proxy__) {
-                            this.rawProps = new Proxy(realRaw, {
-                                set: function(target, key, value) {
-                                    if (typeof value === 'function') value = resolveSignalValue(value);
-                                    target[key] = value;
-                                    return true;
-                                },
-                                get: function(target, key) {
-                                    var value = target[key];
-                                    // Neutralize own data-prop functions and any
-                                    // inherited callable that isn't a genuine
-                                    // Object.prototype builtin (e.g. our polluting
-                                    // `style`/`__shady_*` shims). Use own-property
-                                    // checks throughout: the builtin table itself
-                                    // inherits the polluted `style` getter.
-                                    if (typeof value === 'function'
-                                        && (hasOwn.call(target, key)
-                                            || !hasOwn.call(BUILTIN_OBJECT_METHODS, key))) {
-                                        return resolveSignalValue(value);
-                                    }
-                                    return value;
-                                }
-                            });
-                            try {
-                                Object.defineProperty(realRaw, '__aurora_raw_proxy__', {
-                                    value: true,
-                                    configurable: true
-                                });
-                            } catch (e) {}
-                        }
-                    } catch (e) {}
-                    sanitizePropBag(this.rawProps);
-                    sanitizePropBag(this.componentProps);
-                    sanitizePropBag(this.slotProps);
+                    // YouTube's setUpProps throws "Function props must be
+                    // configured as STATIC, not SIGNAL." if a SIGNAL prop's raw
+                    // value is a Function, so resolve stray functions in the
+                    // incoming bags first. Only before the first set-up: after
+                    // it, `rawProps` *is* `componentProps` and holds the
+                    // component's own signal getters, which must stay functions
+                    // (flattening them — as an earlier rawProps Proxy did — makes
+                    // the host render apply `style: undefined` to `host.style`
+                    // and throw, aborting yt-formatted-string text).
+                    if (!this.componentProps) {
+                        sanitizePropBag(this.rawProps);
+                        sanitizePropBag(this.slotProps);
+                    }
                     return original.apply(this, arguments);
                 };
             }
@@ -1889,153 +2192,78 @@
                 }
             }
 
-            function shouldReplayConstructor(ctor) {
-                if (typeof ctor !== 'function') return false;
-                var source = '';
-                try {
-                    source = Function.prototype.toString.call(ctor);
-                } catch (e) {}
-                return source.indexOf('class ') !== 0;
-            }
-
-            // Upgrade: swap the plain stub element's prototype to the
-            // registered class/constructor's prototype and run it bound to
-            // the element, then fire connectedCallback. This is exactly what
-            // function-style definitions (`function MyEl(){...}`) expect.
-            // ES6 `class X extends HTMLElement` constructors throw "class
-            // constructor cannot be invoked without 'new'" when called this
-            // way. Keep the prototype swap and still fire connectedCallback;
-            // most framework element work happens there, and skipping it
-            // leaves upgraded nodes inert.
+            // Upgrade: schedule construction of the plain stub element
+            // against its registered definition, then fire connectedCallback.
+            //
+            // Construction itself — prototype assignment, ES5-adapter vs.
+            // class-style replay, and the afterConstruct Polymer compensation
+            // — is entirely native now (js_v8/custom_elements.rs's
+            // run_upgrade_constructor, reached via
+            // __aurora_ce_upgrade_now_native__). This function's job is
+            // everything AROUND that: recognizing an already-upgraded element,
+            // the debug tracing, and driving connectUpgraded — the scheduling
+            // this function's callers do (rememberPending's pending-definition
+            // tracking, deferStampedUpgrade's during-stamping deferral,
+            // ensureCreateElementPatch, the connect-retry ladder in
+            // connectUpgraded) still matters and is untouched.
             function tryUpgrade(el, connect) {
                 if (!el || el.nodeType !== 1) return;
                 var name = el.localName || (el.tagName ? el.tagName.toLowerCase() : '');
-                var definition = getDefinition(name);
-                if (!definition) return;
-                var ctor = definition.ctor;
-                if (!ctor) return;
-                var registeredLifecycle = {};
-                ['connectedCallback', 'disconnectedCallback', 'adoptedCallback', 'attributeChangedCallback']
-                    .forEach(function(key) {
-                        try {
-                            var fn = ctor.prototype && ctor.prototype[key];
-                            if (typeof fn === 'function') registeredLifecycle[key] = fn;
-                        } catch (e) {}
-                    });
                 if (el.__ce_upgraded__) {
                     connectUpgraded(el, name, connect);
                     return;
                 }
-                el.__ce_upgraded__ = true;
-                attachDefinitionMetadata(el, definition);
-                ceLog('upgrade-enter', el, 'upgradeCtor=' + ceCtorTag(ctor) +
-                    ' protoBefore=' + ceChain(Object.getPrototypeOf(el)));
+                // beforeRegister must run before construction, and — unlike
+                // afterConstruct — cannot simply be re-run natively after the
+                // fact each time: it is a class-level hook invoked with
+                // ctor.prototype as `this` (see invokeBeforeRegister), so
+                // running it late is fine, but skipping it here would mean
+                // never running it at all for a `beforeRegister` attached to
+                // the prototype after `define()` already ran (define() also
+                // calls this, but its own idempotency guard means whichever
+                // call happens first — define-time or upgrade-time — is the
+                // one that finds `beforeRegister` if it was added in between).
+                var definitionForBeforeRegister = getDefinition(name);
+                if (definitionForBeforeRegister && definitionForBeforeRegister.ctor) {
+                    invokeBeforeRegister(definitionForBeforeRegister.ctor, name);
+                }
                 if (shouldTraceName(name)) trace('upgrade ' + name + ' connect=' + (connect !== false));
+                // __aurora_track_fragment__'s ownership heuristic falls back to
+                // activeLifecycleHost when upgradeStack is empty (construction
+                // no longer pushes onto it); set it for the duration of native
+                // construction so a fragment the constructor creates still
+                // attributes to this element.
+                var previousHost = activeLifecycleHost;
+                activeLifecycleHost = el;
+                var upgraded = false;
                 try {
-                    if (globalThis.__aurora_debug_youtube__ && debugProbeName(name)) {
-                        trace('upgrade-stage ' + name + ' proto-start');
-                    }
-                    Object.setPrototypeOf(el, ctor.prototype);
-                    ceLog('set-proto', el, 'toCtor=' + ceCtorTag(ctor) +
-                        ' assignedChain=' + ceChain(ctor.prototype));
-                    if (globalThis.__aurora_debug_youtube__ && debugProbeName(name)) {
-                        trace('upgrade-stage ' + name + ' proto-done');
-                    }
-                    attachDefinitionMetadata(el, definition);
-                    if (globalThis.__aurora_debug_youtube__ && debugProbeName(name)) {
-                        trace('upgrade-stage ' + name + ' metadata-done');
-                    }
-                    if (globalThis.__aurora_debug_youtube__ && debugProbeName(name)) {
-                        trace('upgrade-stage ' + name + ' beforeRegister-start');
-                    }
-                    invokeBeforeRegister(ctor, name);
-                    if (globalThis.__aurora_debug_youtube__ && debugProbeName(name)) {
-                        trace('upgrade-stage ' + name + ' beforeRegister-done');
-                    }
-                    if (globalThis.__aurora_debug_youtube__ && debugProbeName(name)) {
-                        trace('upgrade-stage ' + name + ' ctor-start');
-                    }
-                    if (shouldReplayConstructor(ctor)) {
-                        var hadObjectInitializeProperties = hasOwn.call(Object.prototype, '_initializeProperties');
-                        var oldObjectInitializeProperties = Object.prototype._initializeProperties;
-                        if (typeof el._initializeProperties !== 'function') {
-                            try {
-                                Object.defineProperty(el, '_initializeProperties', {
-                                    value: function(){},
-                                    configurable: true,
-                                    writable: true
-                                });
-                            } catch (e) {
-                                el._initializeProperties = function(){};
-                            }
-                        }
-                        if (typeof Object.prototype._initializeProperties !== 'function') {
-                            Object.defineProperty(Object.prototype, '_initializeProperties', {
-                                value: function(){},
-                                configurable: true,
-                                writable: true
-                            });
-                        }
-                        upgradeStack.push(el);
-                        try {
-                            ctor.call(el);
-                        } finally {
-                            upgradeStack.pop();
-                            if (hadObjectInitializeProperties) {
-                                Object.prototype._initializeProperties = oldObjectInitializeProperties;
-                            } else {
-                                delete Object.prototype._initializeProperties;
-                            }
-                        }
-                    } else {
-                        // Class-style constructor: replay using Reflect.construct under upgradeStack.
-                        upgradeStack.push(el);
-                        try {
-                            Reflect.construct(ctor, []);
-                        } finally {
-                            upgradeStack.pop();
-                        }
-                    }
-                    if (globalThis.__aurora_debug_youtube__ && debugProbeName(name)) {
-                        trace('upgrade-stage ' + name + ' ctor-done');
+                    if (typeof globalThis.__aurora_ce_upgrade_now_native__ === 'function') {
+                        upgraded = !!globalThis.__aurora_ce_upgrade_now_native__(el);
                     }
                 } catch (e) {
                     traceError('constructor ' + name, e);
+                } finally {
+                    activeLifecycleHost = previousHost;
                 }
-                // ES5 adapters and proxy constructors can replace the instance
-                // prototype during `super()`. The registered definition remains
-                // the lifecycle authority; preserve callbacks that were present
-                // at define/upgrade time but disappeared during construction.
-                Object.keys(registeredLifecycle).forEach(function(key) {
-                    try {
-                        if (typeof el[key] !== 'function') {
-                            Object.defineProperty(el, key, {
-                                value: registeredLifecycle[key],
-                                configurable: true,
-                                writable: true
-                            });
-                        }
-                    } catch (e) {}
-                });
-                ceWrapPropMethods(el, name);
-                ceLog('post-construct', el, 'instChain=' + ceChain(Object.getPrototypeOf(el)) +
-                    ' instIsCtorProto=' + (Object.getPrototypeOf(el) === ctor.prototype) +
-                    ' ctorProtoAfter=' + ceChain(ctor.prototype) +
-                    ' own=' + ceOwnStamp(el) +
+                // `false` here means either there is no definition for `name`,
+                // or (the common case, once native's own insertion-time path
+                // has already constructed this element — e.g. it reached
+                // native before this call did) it is already resolved.
+                // Either way there is nothing left for this call to do:
+                // native's insertion-time path independently guarantees
+                // connectedCallback delivery for an already-resolved element
+                // that becomes connected, via the same trampoline
+                // connectUpgraded below is reached through.
+                if (upgraded) el.__ce_upgraded__ = true;
+                if (!el.__ce_upgraded__) return;
+                ceLog('post-construct-native', el, 'chain=' + ceChain(Object.getPrototypeOf(el)) +
                     ' connectedType=' + typeof el.connectedCallback + ' ' + ceContent(el));
-                maybeCallCreated(el, name);
-                readyUpgraded(el, name);
-                if (globalThis.__aurora_debug_youtube__ && debugProbeName(name)) {
-                    trace('upgrade-stage ' + name + ' connect-start');
-                }
                 connectUpgraded(el, name, connect);
-                if (globalThis.__aurora_debug_youtube__ && debugProbeName(name)) {
-                    trace('upgrade-stage ' + name + ' connect-done');
-                }
                 if (name === 'dom-module') {
                     registerDomModule(el);
                 }
-                probeCustomElementState(name, el, ctor);
+                var definition = getDefinition(name);
+                probeCustomElementState(name, el, definition && definition.ctor);
             }
 
             function readyUpgraded(el, name) {
@@ -2062,27 +2290,30 @@
                 rebuildPolymerIdMap(el);
                 var previousHost = activeLifecycleHost;
                 activeLifecycleHost = el;
-                // Polymer drives ready() itself from _enableProperties, which
-                // connectUpgraded calls moments later. Calling it here as well
-                // readies the element twice and stamps its template twice, which
-                // publishes every child of the template a second time.
-                var polymerDrivesReady = false;
-                if (globalThis.__AURORA_READY_GUARD__) {
-                    try {
-                        // Exactly the condition connectUpgraded uses to decide
-                        // it must call _enableProperties. When that is about to
-                        // happen, Polymer runs ready() itself, so calling it
-                        // here too stamps the template twice.
-                        polymerDrivesReady = el.__dataEnabled === false &&
-                            typeof el._enableProperties === 'function' &&
-                            !shouldSuppressLifecycle(name);
-                    } catch (e) {}
-                }
                 try {
-                    if (!polymerDrivesReady) el.ready();
+                    // Enable Polymer's data system through its own lifecycle:
+                    // it calls ready() and records that the template was stamped.
+                    if (el.__dataEnabled === false &&
+                        typeof el._enableProperties === 'function' &&
+                        !shouldSuppressLifecycle(name)) {
+                        el._enableProperties();
+                    } else {
+                        el.ready();
+                    }
                 } catch (error) {
                     if (globalThis.__aurora_debug_youtube__ || ceOn()) {
                         traceError('ready ' + name, error);
+                        if (globalThis.__AURORA_TRACE_STAMP__) {
+                            try {
+                                var info = el.__templateInfo;
+                                var chain = [];
+                                for (var depth = 0; info && depth < 40; depth++, info = info.firstChild) {
+                                    chain.push(depth + ':nodes=' + (info.nodeList && info.nodeList.length) +
+                                        '/info=' + (info.nodeInfoList && info.nodeInfoList.length));
+                                }
+                                trace('template-info ' + name + ' ' + chain.join(' | '));
+                            } catch (infoError) { traceError('template-info ' + name, infoError); }
+                        }
                     }
                     throw error;
                 } finally {
@@ -2446,6 +2677,18 @@
                 var name = this.localName || (this.tagName ? this.tagName.toLowerCase() : '');
                 connectUpgraded(this, name, true);
             };
+            // Native construction's counterpart to the trampoline above: run
+            // once a natively-run constructor succeeds (see
+            // `run_upgrade_constructor`), so an element native constructed
+            // gets the same `afterConstruct` compensation (ready(), id-map
+            // hooks, created(), lifecycle-method preservation) a
+            // shim-constructed one does via `tryUpgrade`. `ctor` is passed in
+            // because native may be upgrading a name the shim's own
+            // `customElements.define` never ran for.
+            globalThis.__aurora_ce_after_construct_native__ = function(ctor) {
+                var name = this.localName || (this.tagName ? this.tagName.toLowerCase() : '');
+                afterConstruct(this, name, ctor);
+            };
             globalThis.__aurora_track_fragment__ = function(fragment) {
                 try { if (!fragment || fragment.nodeType !== 11) return fragment; }
                 catch (e) { return fragment; }
@@ -2466,6 +2709,7 @@
                 var owner = upgradeStack.length
                     ? upgradeStack[upgradeStack.length - 1]
                     : activeLifecycleHost;
+                try { if (fragment && fragment.__aurora_template_content__) owner = null; } catch (e) {}
                 if (fragment && owner) {
                     try {
                         Object.defineProperty(fragment, '__aurora_fragment_owner__', {
@@ -2475,6 +2719,38 @@
                     } catch (e) { fragment.__aurora_fragment_owner__ = owner; }
                 }
                 return fragment;
+            };
+            // Called by native appendChild/insertBefore when handed an empty
+            // DocumentFragment. If composeDetachedStamp emptied it into an
+            // owner's shadow root, put the composed nodes back so this (the
+            // caller's intended) insertion places them. Nodes the page has
+            // moved elsewhere since composition are left alone.
+            globalThis.__aurora_reclaim_composed_fragment__ = function(fragment) {
+                var record = null;
+                try { record = fragment.__aurora_composed_nodes__; } catch (e) { return; }
+                if (!record) return;
+                try { fragment.__aurora_composed_nodes__ = null; } catch (e) {}
+                try { if (fragment.firstChild) return; } catch (e) { return; }
+                var reclaimed = 0;
+                var wasReclaiming = reclaimingComposedFragment;
+                reclaimingComposedFragment = true;
+                try {
+                    for (var i = 0; i < record.nodes.length; i++) {
+                        var node = record.nodes[i];
+                        try {
+                            if (node && node.parentNode === record.target) {
+                                fragment.appendChild(node);
+                                reclaimed++;
+                            }
+                        } catch (e) {}
+                    }
+                } finally {
+                    reclaimingComposedFragment = wasReclaiming;
+                }
+                if (reclaimed) {
+                    ceLog('detached-stamp-reclaimed', record.target.host || null,
+                        'nodes=' + reclaimed + '/' + record.nodes.length);
+                }
             };
             globalThis.__aurora_apply_stamped_bindings__ = applyStampedBindings;
 

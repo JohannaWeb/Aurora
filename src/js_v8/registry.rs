@@ -2,7 +2,7 @@ use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::rc::Rc;
 
-use crate::dom::NodePtr;
+use crate::dom::{Node, NodePtr, ShadowTreeBackend};
 use crate::window::SnapshotRebuildReason;
 
 type EventListeners = BTreeMap<u32, BTreeMap<String, Vec<v8::Global<v8::Function>>>>;
@@ -312,6 +312,9 @@ impl NodeRegistry {
         name: &str,
         value: &str,
     ) -> bool {
+        if self.is_unmirrored_detached_node(node) {
+            return true;
+        }
         self.render_document
             .borrow()
             .as_ref()
@@ -328,6 +331,9 @@ impl NodeRegistry {
         node: &NodePtr,
         name: &str,
     ) -> bool {
+        if self.is_unmirrored_detached_node(node) {
+            return true;
+        }
         self.render_document
             .borrow()
             .as_ref()
@@ -340,12 +346,18 @@ impl NodeRegistry {
     }
 
     pub(super) fn sync_all_attributes_to_render_document(&self, node: &NodePtr) {
+        if self.is_unmirrored_detached_node(node) {
+            return;
+        }
         if let Some(render_document) = self.render_document.borrow().as_ref().cloned() {
             render_document.borrow_mut().sync_all_attributes(node);
         }
     }
 
     pub(super) fn sync_text_to_render_document(&self, node: &NodePtr, text: &str) -> bool {
+        if self.is_unmirrored_detached_node(node) {
+            return true;
+        }
         self.render_document
             .borrow()
             .as_ref()
@@ -369,6 +381,9 @@ impl NodeRegistry {
         shadow_root: &NodePtr,
         mode: &str,
     ) -> bool {
+        if self.is_unmirrored_detached_node(host) {
+            return true;
+        }
         self.render_document
             .borrow()
             .as_ref()
@@ -380,21 +395,37 @@ impl NodeRegistry {
             })
     }
 
-    pub(super) fn sync_clear_children_in_render_document(&self, parent: &NodePtr) -> bool {
-        self.render_document
-            .borrow()
-            .as_ref()
-            .cloned()
-            .is_none_or(|render_document| render_document.borrow_mut().sync_clear_children(parent))
+    fn is_unmirrored_detached_node(&self, node: &NodePtr) -> bool {
+        // Detached templates acquire a render mapping when inserted. Their
+        // local mutations must still succeed and notify MutationObservers.
+        !self.has_render_mapping(node)
+            && self.document.borrow().as_ref().is_some_and(|document| {
+                !super::tree::mutation::is_connected_to(document, node)
+            })
     }
 
     pub(super) fn sync_children_to_render_document(&self, parent: &NodePtr) -> bool {
+        let backend = crate::dom::SyntheticShadowTreeBackend;
+        if let Some(root) = backend.nearest_shadow_root(parent)
+            && let Some(host) = backend.host_for_shadow_root(&root)
+        {
+            backend.distribute_slots(&host);
+        }
+        // Slots are flattened by the renderer, so rebuild their containing tree.
+        let mut target = parent.clone();
+        while matches!(&*target.borrow(), Node::Element(el) if el.tag_name == "slot") {
+            let Some(ancestor) = crate::dom::parent_ptr(&target) else { return true };
+            target = ancestor;
+        }
+        if !self.has_render_mapping(&target) {
+            return true;
+        }
         self.render_document
             .borrow()
             .as_ref()
             .cloned()
             .is_none_or(|render_document| {
-                render_document.borrow_mut().sync_replace_children(parent)
+                render_document.borrow_mut().sync_replace_children(&target)
             })
     }
 

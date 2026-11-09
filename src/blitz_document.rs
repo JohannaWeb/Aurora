@@ -314,6 +314,12 @@ impl BlitzDocument {
         self.resolve_inner()
     }
 
+    /// Whether render-blocking resources (stylesheets linked from `<head>`)
+    /// are still loading. They are applied on the next `perform_layout`.
+    pub fn has_pending_critical_resources(&self) -> bool {
+        self.inner.has_pending_critical_resources()
+    }
+
     pub fn last_mirror_mutation_trace(&self) -> Option<&MirrorMutationTrace> {
         self.last_mirror_mutation.as_ref()
     }
@@ -566,14 +572,26 @@ impl BlitzDocument {
             .into_iter()
             .filter_map(|child| self.blitz_node_id_for_dom(&child))
             .collect::<Vec<_>>();
-        if blitz_node.children != expected_children {
+        // Blitz gives native input controls internal button/label/text children.
+        // Those have no JS DOM counterparts; mapped children still must match.
+        let native_input = matches!(&*dom_node.borrow(), Node::Element(el)
+            if el.tag_name == "input" && matches!(el.attributes.get("type").map(String::as_str),
+                Some("file" | "button" | "submit" | "reset")));
+        let actual_children: Vec<_> = blitz_node.children.iter().copied()
+            .filter(|id| !native_input || self.blitz_to_legacy.contains_key(id))
+            .collect();
+        if actual_children != expected_children {
             return Err(MirrorIntegrityError::new(
                 operation,
                 Some(legacy_id),
                 Some(blitz_id),
                 format!(
-                    "child mapping mismatch: blitz={:?} expected={expected_children:?}",
-                    blitz_node.children
+                    "child mapping mismatch for {}: blitz={:?} expected={expected_children:?}",
+                    match &*dom_node.borrow() {
+                        Node::Element(el) => el.tag_name.as_str(),
+                        _ => "#node",
+                    },
+                    actual_children,
                 ),
             ));
         }
@@ -647,7 +665,7 @@ impl BlitzDocument {
             std::env::var("AURORA_DEBUG_MIRROR_MUTATIONS").as_deref(),
             Ok("1") | Ok("true") | Ok("TRUE") | Ok("yes") | Ok("YES")
         ) {
-            log::debug!("Blitz mirror mutation trace: {:?}", trace);
+            log::info!("Blitz mirror mutation trace: {:?}", trace);
         }
         self.last_mirror_mutation = Some(trace);
     }
@@ -1212,27 +1230,6 @@ impl BlitzDocument {
         updated
     }
 
-    pub fn sync_clear_children(&mut self, parent: &NodePtr) -> bool {
-        let op = MirrorOp::for_parent("sync_clear_children", parent);
-        let Some(parent_id) = self.blitz_node_id_for_dom(parent) else {
-            self.record_mirror_failure(&op, MirrorMutationFailure::MissingMapping);
-            return false;
-        };
-        remove_subtree_mappings_for_children(
-            parent,
-            &mut self.legacy_to_blitz,
-            &mut self.blitz_to_legacy,
-        );
-        let updated = catch_stylo_panic("clearing DOM children in Blitz document", || {
-            let mut mutator = self.inner.mutate();
-            mutator.remove_and_drop_all_children(parent_id);
-            true
-        })
-        .unwrap_or(false);
-        self.finish_mirror_mutation(&op, Some(parent_id), updated);
-        updated
-    }
-
     pub fn sync_replace_children(&mut self, parent: &NodePtr) -> bool {
         let op = MirrorOp::for_parent("sync_replace_children", parent);
         let Some(parent_id) = self.blitz_node_id_for_dom(parent) else {
@@ -1557,6 +1554,10 @@ fn create_shadow_root_node(
         .unwrap_or_default();
     let attrs = vec![
         Attribute {
+            name: attr_qual_name_from_str("style"),
+            value: "display: contents".to_string(),
+        },
+        Attribute {
             name: attr_qual_name_from_str("data-aurora-shadow-root"),
             value: "true".to_string(),
         },
@@ -1633,16 +1634,6 @@ fn attr_qual_name_to_string(name: &QualName) -> String {
     match name.prefix.as_ref() {
         Some(prefix) => format!("{}:{}", prefix, name.local),
         None => name.local.to_string(),
-    }
-}
-
-fn remove_subtree_mappings_for_children(
-    node: &NodePtr,
-    legacy_to_blitz: &mut BTreeMap<usize, usize>,
-    blitz_to_legacy: &mut BTreeMap<usize, NodePtr>,
-) {
-    for child in child_nodes_for_blitz(node) {
-        remove_subtree_mapping(&child, legacy_to_blitz, blitz_to_legacy);
     }
 }
 
@@ -2307,5 +2298,130 @@ mod tests {
         assert!(!blitz_to_legacy.contains_key(&3));
         assert_eq!(legacy_to_blitz.get(&legacy_node_key(&retained)), Some(&4));
         assert!(blitz_to_legacy.contains_key(&4));
+    }
+
+    fn styled_document(css: &str, body_children: Vec<NodePtr>) -> NodePtr {
+        let document = Node::document(vec![Node::element(
+            "html",
+            vec![
+                Node::element("head", vec![Node::element("style", vec![Node::text(css)])]),
+                Node::element("body", body_children),
+            ],
+        )]);
+        crate::dom::reparent_subtree(&document);
+        document
+    }
+
+    fn laid_out(document: &NodePtr) -> BlitzDocument {
+        let mut blitz_doc = BlitzDocument::try_from_dom(document, None, &test_identity(), 800, 600)
+            .expect("Blitz document should build");
+        assert!(blitz_doc.perform_layout());
+        blitz_doc
+    }
+
+    fn with_shadow_root(host: &NodePtr, shadow_children: Vec<NodePtr>) {
+        let shadow_root = Node::document_fragment(shadow_children);
+        if let Node::Element(host_el) = &mut *host.borrow_mut() {
+            host_el.shadow_root = Some(shadow_root.clone());
+        }
+        set_parent(&shadow_root, host);
+        crate::dom::reparent_subtree(&shadow_root);
+    }
+
+    #[test]
+    fn abspos_root_beside_display_none_siblings_spans_viewport() {
+        // Regression (YouTube home): <body> held only display:none <script>s
+        // plus an absolutely positioned `ytd-app{left:0;right:0}`. The
+        // display:none children left the body classified as an inline root,
+        // so the app root was laid out as a shrink-to-fit inline box.
+        let _guard = BLITZ_DOCUMENT_TEST_LOCK.lock().unwrap();
+        let app = Node::element(
+            "x-app",
+            vec![Node::element_with_attributes("div", attr("id", "bar"), Vec::new())],
+        );
+        let document = styled_document(
+            "body{margin:0} script{display:none} \
+             x-app{display:block;position:absolute;left:0;right:0;top:0} \
+             #bar{display:block;height:10px}",
+            vec![
+                Node::element("script", Vec::new()),
+                app.clone(),
+                Node::element("script", Vec::new()),
+            ],
+        );
+        let blitz_doc = laid_out(&document);
+
+        let metrics = blitz_doc.dom_node_layout_metrics(&app).unwrap();
+        assert_eq!(metrics.width, 800.0);
+    }
+
+    #[test]
+    fn display_contents_shadow_container_keeps_host_a_block_container() {
+        // Regression: a host's only Blitz child is the `display: contents`
+        // synthetic shadow container. Its block children must be classified
+        // through it, not treated as inline boxes laid out side by side.
+        let _guard = BLITZ_DOCUMENT_TEST_LOCK.lock().unwrap();
+        let host = Node::element("x-host", Vec::new());
+        let first = Node::element_with_attributes("div", attr("class", "a"), Vec::new());
+        let second = Node::element_with_attributes("div", attr("class", "b"), Vec::new());
+        with_shadow_root(&host, vec![first.clone(), second.clone()]);
+        let document = styled_document(
+            "body{margin:0} x-host{display:block} \
+             .a{display:block;height:10px} .b{display:block;height:20px}",
+            vec![host],
+        );
+        let blitz_doc = laid_out(&document);
+
+        let a = blitz_doc.dom_node_layout_metrics(&first).unwrap();
+        let b = blitz_doc.dom_node_layout_metrics(&second).unwrap();
+        assert_eq!((a.x, a.width), (0.0, 800.0));
+        assert_eq!((b.x, b.y, b.width), (0.0, a.y + 10.0, 800.0));
+    }
+
+    #[test]
+    fn child_combinator_matches_through_synthetic_shadow_container() {
+        // ShadyDOM-scoped CSS (`ytd-page-manager > .ytd-page-manager`)
+        // expects shadow content to be the host's direct children.
+        let _guard = BLITZ_DOCUMENT_TEST_LOCK.lock().unwrap();
+        let host = Node::element("x-host", Vec::new());
+        let item = Node::element_with_attributes("div", attr("class", "item"), Vec::new());
+        with_shadow_root(&host, vec![item.clone()]);
+        let document = styled_document(
+            "body{margin:0} x-host{display:block} \
+             x-host > .item{display:block;width:123px;height:5px}",
+            vec![host],
+        );
+        let blitz_doc = laid_out(&document);
+
+        assert_eq!(blitz_doc.dom_node_layout_metrics(&item).unwrap().width, 123.0);
+    }
+
+    #[test]
+    fn fixed_box_is_anchored_to_viewport_not_parent() {
+        // Taffy positions `position: fixed` like `absolute` against the layout
+        // parent; a parent pushed down by a (collapsed) margin must not drag
+        // a `top: 0` fixed header down with it.
+        let _guard = BLITZ_DOCUMENT_TEST_LOCK.lock().unwrap();
+        let bar = Node::element_with_attributes("div", attr("id", "bar"), Vec::new());
+        let wrap = Node::element_with_attributes(
+            "div",
+            attr("id", "wrap"),
+            vec![
+                bar.clone(),
+                Node::element_with_attributes("div", attr("id", "inner"), Vec::new()),
+            ],
+        );
+        let document = styled_document(
+            "body{margin:0} #wrap{display:block;margin-top:56px;margin-left:30px} \
+             #inner{display:block;height:10px} \
+             #bar{display:block;position:fixed;top:0;right:0;width:100px;height:20px}",
+            vec![wrap.clone()],
+        );
+        let blitz_doc = laid_out(&document);
+
+        let wrap_metrics = blitz_doc.dom_node_layout_metrics(&wrap).unwrap();
+        assert_eq!((wrap_metrics.x, wrap_metrics.y), (30.0, 56.0));
+        let bar_metrics = blitz_doc.dom_node_layout_metrics(&bar).unwrap();
+        assert_eq!((bar_metrics.x, bar_metrics.y), (700.0, 0.0));
     }
 }

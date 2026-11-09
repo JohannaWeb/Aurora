@@ -2,6 +2,9 @@
 // event_constructors.js, the customElements registry) and on `document`
 // already being installed. Runs last in the V8 bootstrap.
 (function() {
+    if (globalThis.DOMTokenList && typeof Symbol === 'function' && Symbol.iterator) {
+        DOMTokenList.prototype[Symbol.iterator] = Array.prototype[Symbol.iterator];
+    }
     // Event subtypes on top of the shared Event polyfill.
     globalThis.Event.prototype.initEvent = function(type, bubbles, cancelable) {
         this.type = type || '';
@@ -140,9 +143,44 @@
         return { root: root, nextNode: function() { return walker.nextNode(); }, previousNode: function() { return null; }, detach: function() {} };
     };
 
+    // ShadyDOM renders a ShadyRoot's content as its host's *physical*
+    // children: a logical insert into the root ends in a captured-native
+    // `host.appendChild/insertBefore` (reaching us via these prototype
+    // forwarders — page code calling `el.appendChild` hits the wrapper's own
+    // native method instead). Aurora adopts ShadyDOM roots as real shadow roots
+    // and renders those, so such content must go into the root; left in the
+    // host's light DOM it is never painted (e.g. yt-formatted-string text set
+    // via `root.textContent`). Existing light children are left alone: they
+    // are distributed through slots.
+    function adoptedShadyRootFor(host, node) {
+        var root = null;
+        try { root = host.shadowRoot; } catch (e) { return null; }
+        if (!root || !root.__aurora_registered_shadow_root__ || root.host !== host) return null;
+        try { if (node && node.parentNode === host) return null; } catch (e) { return null; }
+        return root;
+    }
+
     function installPrototypeForward(proto, name) {
         if (!proto || !name) return;
+        var redirectsToShadyRoot = name === 'appendChild' || name === 'insertBefore';
         var forward = function() {
+            // The matching physical removal: ShadyDOM removes a root child
+            // from the host, but Aurora keeps it in the adopted root.
+            if (name === 'removeChild') {
+                var removing = arguments[0];
+                var shadyRoot = adoptedShadyRootFor(this, removing);
+                if (shadyRoot && removing && removing.parentNode === shadyRoot) {
+                    return shadyRoot.removeChild(removing);
+                }
+            }
+            if (redirectsToShadyRoot) {
+                var root = adoptedShadyRootFor(this, arguments[0]);
+                if (root) {
+                    var ref = name === 'insertBefore' ? arguments[1] : null;
+                    if (ref && ref.parentNode === root) return root.insertBefore(arguments[0], ref);
+                    return root.appendChild(arguments[0]);
+                }
+            }
             var own = Object.prototype.hasOwnProperty.call(this, name) ? this[name] : null;
             if (typeof own === 'function' && own !== forward) {
                 return own.apply(this, arguments);
@@ -242,6 +280,8 @@
     // Element decoration — called from the native bridge for every element
     // wrapper. Installs per-element JS APIs that are simpler here than native.
     globalThis.__aurora_decorate_element__ = function(el) {
+        // The native classList bridge returns an array-like snapshot; DOMTokenList
+        // is iterable, and YouTube spreads it in its element-name diagnostics.
         // Most wrappers inherit these through HTMLElement -> Node -> EventTarget,
         // but template/shadow stamping can surface older wrappers whose prototype
         // chain was established before the JS skeletons existed. Keep event

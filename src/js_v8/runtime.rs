@@ -342,6 +342,7 @@ impl V8Runtime {
             );
             install_global_fn!("__aurora_ce_state_native", ce_state_native);
             install_global_fn!("__aurora_ce_upgrade_native", ce_upgrade_native);
+            install_global_fn!("__aurora_ce_upgrade_now_native__", ce_upgrade_now_native);
 
             let ce_has_pending_reaction_fn =
                 v8::FunctionTemplate::builder(ce_has_pending_connected_reaction_native)
@@ -1078,10 +1079,6 @@ impl V8Runtime {
                     Ok("1") | Ok("true") | Ok("TRUE") | Ok("yes") | Ok("YES")
                 ) {
                     let _ = compile_and_run(scope, "globalThis.__aurora_debug_youtube__ = true;");
-                }
-
-                if std::env::var("AURORA_READY_GUARD").is_ok() {
-                    let _ = compile_and_run(scope, "globalThis.__AURORA_READY_GUARD__ = true;");
                 }
 
                 if std::env::var("AURORA_TRACE_STAMP").is_ok() {
@@ -1883,6 +1880,34 @@ fn ce_upgrade_native<'s>(
         }
     }
     retval.set(v8::Integer::new(scope, upgraded).into());
+}
+
+/// `__aurora_ce_upgrade_now_native__(el)` — synchronously run "upgrade an
+/// element" for a single element. Stage 3 of the custom-element migration:
+/// the JS shim's `tryUpgrade` no longer does its own prototype swap and
+/// ES5-adapter/class-style constructor replay — it schedules (handling all
+/// of YouTube's Polymer-specific timing: pending-definition tracking,
+/// deferred-during-stamping upgrades, the connect retry ladder), and this is
+/// what it calls to actually construct. Differs from `ce_upgrade_native`
+/// (`try_upgrade_element`, the insertion path's entry point) by running
+/// `run_upgrade_constructor` immediately instead of enqueueing a reaction to
+/// run at the next drain — required because a synchronous
+/// `document.createElement` of an already-defined name must return a fully
+/// constructed element, not one that upgrades on a later microtask. Returns
+/// whether an upgrade was attempted.
+fn ce_upgrade_now_native<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut retval: v8::ReturnValue,
+) {
+    let external = v8::Local::<v8::External>::try_from(args.data())
+        .expect("callback data is always the External we installed");
+    let doc_data = unsafe { &*(external.value() as *const DocumentData) };
+    let attempted = match js_value_to_node(scope, args.get(0), &doc_data.registry) {
+        Some(node) => super::custom_elements::upgrade_element_now(scope, &doc_data.registry, &node),
+        None => false,
+    };
+    retval.set(v8::Boolean::new(scope, attempted).into());
 }
 
 /// `__aurora_ce_is_defined_native(name)` — whether a tag name has a native
