@@ -7,6 +7,7 @@ mod capability;
 mod data_url;
 mod errors;
 pub mod http;
+mod recording;
 mod resolve;
 mod url;
 
