@@ -5,19 +5,31 @@ on:
     branches: [ "main" ]
   pull_request:
     branches: [ "main" ]
+  workflow_dispatch:
+
+# A newer push to the same branch or PR makes the older run pointless.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  build:
-    runs-on: ubuntu-latest
+  test:
+    # Pinned rather than ubuntu-latest: visual snapshots depend on fontconfig
+    # and the installed fonts, which must match the machine the baselines were
+    # rendered on (Ubuntu 24.04 / fontconfig 2.15).
+    runs-on: ubuntu-24.04
 
     steps:
     - name: Checkout Aurora
       uses: actions/checkout@v4
 
-    - name: Install Linux dependencies
+    - name: Install Linux dependencies and fonts
+      # fonts-noto-core provides `sans-serif` (Noto Sans), fonts-liberation the
+      # `Arial` substitute and fonts-dejavu-core `monospace`, as on the dev
+      # machine the snapshots were rendered on.
       run: |
         sudo apt-get update
         sudo apt-get install -y --no-install-recommends \
@@ -30,20 +42,38 @@ jobs:
           libxcb-shape0-dev \
           libxcb-xfixes0-dev \
           libxkbcommon-dev \
-          pkg-config
+          pkg-config \
+          fonts-noto-core \
+          fonts-liberation \
+          fonts-dejavu-core
+        fc-match sans-serif
+        fc-match Arial
+        fc-match monospace
+
+    # Caches ~/.cargo and target/, which also holds the prebuilt V8 archive the
+    # v8 crate downloads at build time.
+    - name: Cache cargo build
+      uses: Swatinem/rust-cache@v2
 
     - name: Build
-      run: cargo build --locked --verbose
+      run: cargo build --locked
 
     - name: Run unit tests
-      # Run serially: the render/style tests drive Blitz+Stylo, which share global
-      # state (the Stylo style thread pool and per-thread LAYOUT state). Running
-      # them concurrently trips a thread-state assertion and fails non-
-      # deterministically. The suite is small, so single-threaded is cheap.
-      run: cargo test --locked --lib --bins --verbose -- --test-threads=1
+      run: cargo test --locked --lib --bins
+
+    - name: Run visual regression tests
+      run: cargo test --locked --test visual_regression
+
+    - name: Upload visual diffs
+      if: failure()
+      uses: actions/upload-artifact@v4
+      with:
+        name: visual-diffs
+        path: tests/screenshots/*-diff.png
+        if-no-files-found: ignore
 
   clippy:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     steps:
     - name: Checkout Aurora
@@ -68,6 +98,9 @@ jobs:
     # rustup; we only need to add the clippy component to it.
     - name: Add clippy component
       run: rustup component add clippy
+
+    - name: Cache cargo build
+      uses: Swatinem/rust-cache@v2
 
     - name: Run clippy
       # Lint the crate's own code (lib + bins). `-D warnings` makes any clippy
