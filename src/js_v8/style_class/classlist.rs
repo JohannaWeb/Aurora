@@ -19,6 +19,38 @@ pub(crate) fn build_classlist_object<'s>(
     let obj = template
         .new_instance(scope)
         .expect("object template instantiation failed");
+    let global = scope.get_current_context().global(scope);
+    let ctor = global.get(scope, v8_str(scope, "DOMTokenList").into()).and_then(|value| value.to_object(scope));
+    if let Some(proto) = ctor.and_then(|ctor| ctor.get(scope, v8_str(scope, "prototype").into())) {
+        let _ = obj.set_prototype(scope, proto);
+    }
+    // Some YouTube bundles/polyfills replace DOMTokenList's prototype after
+    // Aurora's bootstrap. Set the iterator on the snapshot itself as well, so
+    // every fresh native `classList` result remains iterable regardless of
+    // those later prototype changes.
+    if let Some(symbol_ctor) = global
+        .get(scope, v8_str(scope, "Symbol").into())
+        .and_then(|value| value.to_object(scope))
+    {
+        if let Some(iterator_key) = symbol_ctor
+            .get(scope, v8_str(scope, "iterator").into())
+            .and_then(|value| v8::Local::<v8::Symbol>::try_from(value).ok())
+        {
+            if let Some(array_ctor) = global
+                .get(scope, v8_str(scope, "Array").into())
+                .and_then(|value| value.to_object(scope))
+            {
+                if let Some(array_proto) = array_ctor
+                    .get(scope, v8_str(scope, "prototype").into())
+                    .and_then(|value| value.to_object(scope))
+                {
+                    if let Some(iterator) = array_proto.get(scope, iterator_key.into()) {
+                        let _ = obj.set(scope, iterator_key.into(), iterator);
+                    }
+                }
+            }
+        }
+    }
 
     // Array-like shape (length + indexed tokens) so iteration helpers work.
     // The classList object is rebuilt on every `.classList` access, so a

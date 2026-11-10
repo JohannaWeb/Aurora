@@ -425,8 +425,6 @@ checksum = "6099cdc01846bc367c4e7dd630dc5966dccf36b652fae7a74e17b640411a91b2"
 [[package]]
 name = "blitz-dom"
 version = "0.3.0-alpha.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "54a2d33883a7d11ba425088ebe809afec50a502b26477b0627ebf4e1beb6183f"
 dependencies = [
  "accesskit",
  "anyrender",
@@ -482,8 +480,6 @@ dependencies = [
 [[package]]
 name = "blitz-paint"
 version = "0.3.0-alpha.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "75b2735a4b647014cfa350c32d8fc2f53c4d985ad4c93eb84910237014af09f8"
 dependencies = [
  "anyrender",
  "anyrender_svg",

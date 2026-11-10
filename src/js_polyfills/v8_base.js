@@ -108,14 +108,26 @@
     globalThis.Element = function Element() {};
     Element.prototype = Object.create(Node.prototype);
     Element.prototype.constructor = Element;
+    // `style` is a prototype accessor on Element.prototype, matching Blink
+    // (spec puts it on HTMLElement/SVGElement; YouTube's wrapped components
+    // key their prop accessors off `Object.getOwnPropertyNames(
+    // Element.prototype)`, so the placement is observable). Native element
+    // wrappers carry their CSSStyleDeclaration in the hidden
+    // `__aurora_style__` slot; anything else gets a JS fallback declaration.
     Object.defineProperty(Element.prototype, 'style', {
         get: function() {
+            if (this.__aurora_style__) return this.__aurora_style__;
             if (!this.__aurora_proto_style__) {
                 this.__aurora_proto_style__ = createFallbackStyleDeclaration();
             }
             return this.__aurora_proto_style__;
         },
         set: function(value) {
+            var native = this.__aurora_style__;
+            if (native) {
+                native.cssText = value == null ? '' : String(value);
+                return;
+            }
             this.__aurora_proto_style__ = normalizeFallbackStyle(value);
         },
         configurable: true

@@ -155,7 +155,11 @@ pub(crate) fn apply_dom_mutation(
             let child_id = registry.register(child.clone());
             enqueue_disconnected_reactions(registry, child);
             remove_child_ptr(parent, child);
-            let render_synced = sync_removed_node_from_render_document(registry, child);
+            let render_synced = if needs_composed_sync(parent, std::slice::from_ref(child)) {
+                registry.sync_children_to_render_document(parent)
+            } else {
+                sync_removed_node_from_render_document(registry, child)
+            };
             if render_synced {
                 mutation_observer::queue_childlist(registry, target_id, vec![], vec![child_id]);
             } else {
@@ -269,7 +273,7 @@ pub(crate) fn apply_dom_mutation(
             let mut render_synced = true;
             // Apply the structural mutation under the borrow, then release it
             // BEFORE syncing. The render-sync hooks (`sync_text_node`,
-            // `sync_clear_children`) walk parent pointers via `parent_ptr`/
+            // `sync_replace_children`) walk parent pointers via `parent_ptr`/
             // `is_shadow_root_node`, which re-borrow `node`; holding the
             // `borrow_mut` across the sync call aborts with "already mutably
             // borrowed" (hit constantly by Polymer rewriting `textContent`).
@@ -300,10 +304,8 @@ pub(crate) fn apply_dom_mutation(
                     }
                 }
                 TextTarget::Element => {
-                    let cleared = registry.sync_clear_children_in_render_document(node);
                     crate::dom::reparent_subtree(node);
-                    let reattached = registry.sync_children_to_render_document(node);
-                    render_synced = cleared && reattached;
+                    render_synced = registry.sync_children_to_render_document(node);
                     if !render_synced {
                         schedule_sync_failure(registry);
                     }
@@ -355,11 +357,9 @@ pub(crate) fn apply_dom_mutation(
             };
             let mut render_synced = true;
             if changed {
-                let cleared = registry.sync_clear_children_in_render_document(node);
                 crate::dom::reparent_subtree(node);
                 enqueue_connected_reactions(registry, &new_children);
-                let reattached = registry.sync_children_to_render_document(node);
-                render_synced = cleared && reattached;
+                render_synced = registry.sync_children_to_render_document(node);
                 if !render_synced {
                     schedule_sync_failure(registry);
                 }
@@ -607,6 +607,10 @@ fn sync_inserted_nodes_to_render_document(
         return true;
     }
 
+    if needs_composed_sync(parent, nodes) {
+        return registry.sync_children_to_render_document(parent);
+    }
+
     let parent_is_mirrored = registry.has_render_mapping(parent);
     for node in nodes {
         if !sync_removed_node_from_render_document(registry, node) {
@@ -625,6 +629,11 @@ fn sync_inserted_nodes_to_render_document(
         }
     }
     true
+}
+
+fn needs_composed_sync(parent: &NodePtr, nodes: &[NodePtr]) -> bool {
+    matches!(&*parent.borrow(), Node::Element(el) if el.shadow_root.is_some() || el.tag_name == "slot")
+        || nodes.iter().any(|node| matches!(&*node.borrow(), Node::Element(el) if el.tag_name == "slot"))
 }
 
 fn next_render_mapped_sibling(
@@ -1203,7 +1212,9 @@ mod tests {
         let registry = registry();
         let identity = test_identity();
         let render_dom =
-            crate::html::Parser::new("<html><body><div></div></body></html>").parse_document();
+            crate::html::Parser::new("<html><body><div id='parent'></div></body></html>").parse_document();
+        crate::dom::reparent_subtree(&render_dom);
+        *registry.document.borrow_mut() = Some(render_dom.clone());
         let render_doc = crate::blitz_document::BlitzDocument::try_from_dom(
             &render_dom,
             None,
@@ -1215,6 +1226,9 @@ mod tests {
         registry.set_render_document(Some(Rc::new(RefCell::new(render_doc))));
 
         let node = Node::element("div", Vec::new());
+        // Simulate a genuinely missing mapping on a connected node.
+        let parent = find_element_by_id(&render_dom, "parent").unwrap();
+        append_child_ptr(&parent, &node);
         let result = apply_dom_mutation(
             &registry,
             DomMutation::SetAttribute {

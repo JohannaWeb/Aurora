@@ -291,6 +291,14 @@ pub(super) fn create_js_node<'s>(
         set_class_name,
         node_external,
     );
+    install_accessor(
+        scope,
+        template,
+        "hidden",
+        get_hidden,
+        set_hidden,
+        node_external,
+    );
 
     // classList
     install_readonly_accessor(scope, template, "classList", get_classlist, node_external);
@@ -474,7 +482,19 @@ pub(super) fn create_js_node<'s>(
     if node_type(&node) == 1 {
         let node_data = unsafe { &*(node_external.value() as *const NodeData) };
         let style_obj = style::build_style_object(scope, node_data);
-        obj.set(scope, v8_str(scope, "style").into(), style_obj.into());
+        // Hidden slot, exposed as `style` by the HTMLElement/SVGElement
+        // prototype accessor in v8_base.js. An own `style` data property would
+        // shadow custom-element class accessors: YouTube's wrapped components
+        // declare `style` as a prop on their prototype, and an own property
+        // makes `setUpProps` capture the declaration object as a user-supplied
+        // style prop, which later crashes their host render.
+        let key = v8_str(scope, "__aurora_style__");
+        obj.define_own_property(
+            scope,
+            key.into(),
+            style_obj.into(),
+            v8::PropertyAttribute::DONT_ENUM,
+        );
     }
 
     // Give the wrapper the DOM prototype chain so it inherits real `EventTarget`
@@ -622,11 +642,6 @@ pub(super) fn create_js_node<'s>(
                 v8_str(scope, "tabIndex").into(),
                 v8::Integer::new(scope, 0).into(),
             );
-            obj.set(
-                scope,
-                v8_str(scope, "hidden").into(),
-                v8::Boolean::new(scope, el.attributes.contains_key("hidden")).into(),
-            );
             is_custom_element = el.tag_name.contains('-');
         }
         if el.tag_name.eq_ignore_ascii_case("template") {
@@ -663,6 +678,13 @@ pub(super) fn create_js_node<'s>(
         // Script-created/template-parsed content fragments bypass
         // document.createDocumentFragment and cloneNode, so explicitly pass
         // them through the lifecycle owner tracker as well.
+        // A template's own content is the pristine stamping source, never a
+        // render root: flag it so the owner tracker / shadow adoption skip it
+        // (otherwise the first host to be upgraded adopts it as its shadow
+        // root and every stamp then pollutes the template itself).
+        let flag_key = v8_str(scope, "__aurora_template_content__");
+        let flag_val = v8::Boolean::new(scope, true);
+        content_obj.create_data_property(scope, flag_key.into(), flag_val.into());
         call_global_hook(scope, "__aurora_track_fragment__", content_obj);
         obj.set(scope, v8_str(scope, "content").into(), content_obj.into());
     }
@@ -686,6 +708,22 @@ pub(super) fn create_js_node<'s>(
     }
 
     obj
+}
+
+/// Inserting an *empty* DocumentFragment: give the JS custom-element shim a
+/// chance to refill it with nodes its detached-stamp composition moved out
+/// earlier, so they land where the fragment's creator actually inserts it.
+fn reclaim_composed_fragment(
+    scope: &mut v8::PinScope<'_, '_>,
+    arg: v8::Local<v8::Value>,
+    node: &NodePtr,
+) {
+    if !is_document_fragment(node) || !child_nodes_of(node).is_empty() {
+        return;
+    }
+    if let Ok(obj) = v8::Local::<v8::Object>::try_from(arg) {
+        call_global_hook(scope, "__aurora_reclaim_composed_fragment__", obj);
+    }
 }
 
 fn call_global_hook(scope: &mut v8::PinScope<'_, '_>, name: &str, arg: v8::Local<v8::Object>) {
@@ -1063,6 +1101,7 @@ fn append_child(
     let _reactions = CeReactionsGuard::new(scope, &node_data.registry);
 
     if let Some(child) = node_from_js(scope, args.get(0), &node_data.registry) {
+        reclaim_composed_fragment(scope, args.get(0), &child);
         let fragment_children = if is_document_fragment(&child) {
             child_nodes_of(&child)
         } else {
@@ -1130,6 +1169,7 @@ fn insert_before(
     let ref_child = node_from_js(scope, args.get(1), &node_data.registry);
 
     if let Some(new_c) = new_child {
+        reclaim_composed_fragment(scope, args.get(0), &new_c);
         let fragment_children = if is_document_fragment(&new_c) {
             child_nodes_of(&new_c)
         } else {
@@ -1594,6 +1634,34 @@ fn build_named_node_map<'s>(
         named_node_map_remove_named_item,
         node_external,
     );
+    // The bridge returns a fresh array-like NamedNodeMap snapshot on every
+    // access. Web components commonly iterate `element.attributes` directly.
+    // Put the array iterator on this instance so later polyfills cannot make
+    // the native snapshot non-iterable by replacing NamedNodeMap's prototype.
+    let global = scope.get_current_context().global(scope);
+    if let Some(symbol_ctor) = global
+        .get(scope, v8_str(scope, "Symbol").into())
+        .and_then(|value| value.to_object(scope))
+    {
+        if let Some(iterator_key) = symbol_ctor
+            .get(scope, v8_str(scope, "iterator").into())
+            .and_then(|value| v8::Local::<v8::Symbol>::try_from(value).ok())
+        {
+            if let Some(array_ctor) = global
+                .get(scope, v8_str(scope, "Array").into())
+                .and_then(|value| value.to_object(scope))
+            {
+                if let Some(array_proto) = array_ctor
+                    .get(scope, v8_str(scope, "prototype").into())
+                    .and_then(|value| value.to_object(scope))
+                {
+                    if let Some(iterator) = array_proto.get(scope, iterator_key.into()) {
+                        let _ = obj.set(scope, iterator_key.into(), iterator);
+                    }
+                }
+            }
+        }
+    }
     obj
 }
 
@@ -1794,6 +1862,41 @@ fn set_class_name(
     _retval: v8::ReturnValue<()>,
 ) {
     set_attr_value(scope, value, args, "class");
+}
+
+fn get_hidden(
+    scope: &mut v8::PinScope<'_, '_>,
+    _name: v8::Local<v8::Name>,
+    args: v8::PropertyCallbackArguments,
+    mut retval: v8::ReturnValue,
+) {
+    let node_data = node_data_from(args.data());
+    let hidden = matches!(&*node_data.node.borrow(), Node::Element(el) if el.attributes.contains_key("hidden"));
+    retval.set(v8::Boolean::new(scope, hidden).into());
+}
+
+fn set_hidden(
+    scope: &mut v8::PinScope<'_, '_>,
+    _name: v8::Local<v8::Name>,
+    value: v8::Local<v8::Value>,
+    args: v8::PropertyCallbackArguments,
+    _retval: v8::ReturnValue<()>,
+) {
+    let node_data = node_data_from(args.data());
+    let _reactions = CeReactionsGuard::new(scope, &node_data.registry);
+    let mutation = if value.boolean_value(scope) {
+        mutation::DomMutation::SetAttribute {
+            node: &node_data.node,
+            name: "hidden",
+            value: "",
+        }
+    } else {
+        mutation::DomMutation::RemoveAttribute {
+            node: &node_data.node,
+            name: "hidden",
+        }
+    };
+    let _mutation_result = mutation::apply_dom_mutation(&node_data.registry, mutation);
 }
 
 fn get_parent_node(

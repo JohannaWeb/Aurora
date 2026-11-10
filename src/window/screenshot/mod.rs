@@ -24,6 +24,7 @@ pub(super) fn render_to_file(mut input: WindowInput, path: &str) {
         .or_else(|| env_u32("AURORA_VIEWPORT_HEIGHT"))
         .unwrap_or(1024);
 
+    wait_for_critical_resources(&input);
     flush_ready_frame_tasks(&mut input, width, height);
 
     let mut img = ImageBuffer::new(width, height);
@@ -118,6 +119,32 @@ fn blit_rgba(
 
 fn env_u32(name: &str) -> Option<u32> {
     std::env::var(name).ok()?.parse::<u32>().ok()
+}
+
+/// A browser holds first paint for render-blocking stylesheets; a one-shot
+/// screenshot must too, or large sheets (YouTube's ~3MB component CSS) land
+/// after the capture and the page is painted with only its inline styles.
+/// Bounded by `AURORA_SCREENSHOT_RESOURCE_TIMEOUT_MS` (default 15s).
+fn wait_for_critical_resources(input: &WindowInput) {
+    let Some(blitz_doc) = input.blitz_doc.as_ref() else {
+        return;
+    };
+    let timeout = std::time::Duration::from_millis(
+        env_u32("AURORA_SCREENSHOT_RESOURCE_TIMEOUT_MS").unwrap_or(15_000) as u64,
+    );
+    let started = Instant::now();
+    loop {
+        // Resolving drains finished loads into the document.
+        let pending = {
+            let mut doc = blitz_doc.borrow_mut();
+            let _ = doc.perform_layout();
+            doc.has_pending_critical_resources()
+        };
+        if !pending || started.elapsed() >= timeout {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(25));
+    }
 }
 
 fn flush_ready_frame_tasks(input: &mut WindowInput, width: u32, height: u32) {

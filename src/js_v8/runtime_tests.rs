@@ -7,6 +7,9 @@ use crate::window::SnapshotRebuildReason;
 use std::cell::RefCell;
 use std::rc::Rc;
 
+#[path = "mirror_mutation_tests.rs"]
+mod mirror_mutation_tests;
+
 fn blank_dom() -> crate::dom::NodePtr {
     Parser::new("<html><body></body></html>").parse_document()
 }
@@ -633,7 +636,7 @@ fn v8_attributed_string_setup_props_tolerates_inherited_callable_style() {
         runtime.eval_to_string(
             r#"
             (() => {
-            class YtAttributedString {
+            class YtAttributedString extends HTMLElement {
                 // A non-function own style so normalizeAttributedStringProps
                 // leaves rawProps.style resolving to the inherited callable.
                 get style() { return { color: 'red' }; }
@@ -1023,6 +1026,42 @@ fn v8_native_first_upgrade_marks_failed_on_throwing_constructor() {
     );
 }
 
+/// Stage 2: a genuinely native-constructed element must get the same Polymer
+/// compensation (`created()`, `ready()`) a shim-constructed one gets from
+/// `tryUpgrade` — previously `run_upgrade_constructor`'s real-construction
+/// branch ran the constructor and moved straight to attribute/connect
+/// reactions, calling neither. Both are legacy Polymer lifecycle hooks (not
+/// part of the custom-element spec), invoked only when present on the
+/// element, so this exercises `afterConstruct`/
+/// `__aurora_ce_after_construct_native__` specifically.
+#[test]
+fn v8_native_first_upgrade_runs_polymer_created_and_ready_hooks() {
+    let mut runtime = V8Runtime::new(blank_dom());
+    runtime.set_native_ce_reactions(true);
+
+    assert_eq!(
+        runtime.eval_to_string(
+            r#"(() => {
+                globalThis.__hooks_order__ = [];
+                const el = document.createElement('x-native-polymer');
+
+                class C extends HTMLElement {
+                    constructor() { super(); globalThis.__hooks_order__.push('ctor'); }
+                    created() { globalThis.__hooks_order__.push('created'); }
+                    ready() { globalThis.__hooks_order__.push('ready'); }
+                    connectedCallback() { globalThis.__hooks_order__.push('connected'); }
+                }
+                __aurora_ce_define_native('x-native-polymer', C);
+
+                document.body.appendChild(el);
+
+                return globalThis.__hooks_order__.join(',');
+            })()"#,
+        ),
+        Ok("ctor,created,ready,connected".to_string())
+    );
+}
+
 /// `__aurora_ce_has_pending_connected_reaction_native` must report only
 /// pending `connectedCallback` reactions, not just "some reaction queued".
 /// The JS shim (`connectUpgraded`) defers to the native trampoline when this
@@ -1215,6 +1254,43 @@ fn v8_defers_stamped_child_upgrade_until_polymer_finishes_indexing() {
     assert_eq!(
         runtime.eval_to_string("String(globalThis.stampChildConnected)"),
         Ok("true".to_string())
+    );
+}
+
+#[test]
+fn v8_restores_consumed_template_content_when_cached_metadata_is_reused() {
+    let mut runtime = V8Runtime::new(blank_dom());
+
+    assert_eq!(
+        runtime.eval_to_string(
+            r#"
+            (() => {
+                function ReusedTemplateHost() { HTMLElement.call(this); }
+                ReusedTemplateHost.prototype = Object.create(HTMLElement.prototype);
+                ReusedTemplateHost.prototype.constructor = ReusedTemplateHost;
+                ReusedTemplateHost.prototype._stampTemplate = function(template) {
+                    return document.importNode(template.content, true);
+                };
+                ReusedTemplateHost.prototype.ready = function() {
+                    const template = document.createElement('template');
+                    template.innerHTML = '<yt-button-shape></yt-button-shape><tp-yt-paper-tooltip><slot></slot></tp-yt-paper-tooltip>';
+                    template._templateInfo = { nodeInfoList: [{}, {}, {}] };
+                    this._stampTemplate(template);
+                    while (template.content.firstChild) {
+                        template.content.removeChild(template.content.firstChild);
+                    }
+                    const second = this._stampTemplate(template);
+                    this.result = second.childNodes.length + '|' + second.childNodes[0].localName + '|' +
+                        second.childNodes[1].localName + '|' + second.childNodes[1].firstChild.localName;
+                };
+                customElements.define('x-reused-template-host', ReusedTemplateHost);
+                const host = document.createElement('x-reused-template-host');
+                document.body.appendChild(host);
+                return host.result;
+            })()
+            "#
+        ),
+        Ok("2|yt-button-shape|tp-yt-paper-tooltip|slot".to_string())
     );
 }
 
@@ -2060,8 +2136,11 @@ fn v8_element_style_survives_custom_element_prototype_swap() {
         runtime.eval_to_string(
             r#"
             (() => {
+            // The upgrade swaps the wrapper's prototype to the class; `style`
+            // must still resolve (via Element.prototype) to the native
+            // declaration. A class that *overrides* `style` wins, as in
+            // browsers — see v8_element_style_is_a_prototype_accessor_not_an_own_property.
             class StyleProbe extends HTMLElement {
-                get style() { return undefined; }
                 connectedCallback() {
                     this.style.cssText = 'color: red';
                     this.__probe = this.getAttribute('style') + '|' + typeof this.style.cssText;
@@ -2493,7 +2572,7 @@ fn v8_text_node_move_detaches_from_previous_parent() {
 }
 
 #[test]
-fn v8_failed_render_sync_does_not_deliver_observer_records() {
+fn v8_detached_attribute_mutation_delivers_observer_records_without_rebuild() {
     let dom = blank_dom();
     let identity = test_identity();
     let render_doc = BlitzDocument::try_from_dom(&dom, None, &identity, 800, 600)
@@ -2512,14 +2591,14 @@ fn v8_failed_render_sync_does_not_deliver_observer_records() {
         )
         .unwrap();
 
-    assert!(!runtime.deliver_mutation_records());
+    assert!(runtime.deliver_mutation_records());
     assert_eq!(
         runtime.eval_to_string("globalThis.hits"),
-        Ok("0".to_string())
+        Ok("1".to_string())
     );
     assert_eq!(
         runtime.take_snapshot_rebuild_reason(),
-        Some(SnapshotRebuildReason::SyncOperationFailed)
+        None
     );
 }
 
@@ -3288,4 +3367,104 @@ fn multiple_runtimes_interleave_and_drop_in_any_order() {
     assert_eq!(third.eval_to_string("who"), Ok("third".to_string()));
     drop(first);
     assert_eq!(third.eval_to_string("who"), Ok("third".to_string()));
+}
+
+#[test]
+fn v8_element_style_is_a_prototype_accessor_not_an_own_property() {
+    // An own `style` data property on every wrapper shadowed custom-element
+    // class accessors; YouTube's wrapped components then captured the
+    // declaration object as a user-supplied `style` prop and crashed their
+    // host render.
+    let mut runtime = V8Runtime::new(blank_dom());
+    assert_eq!(
+        runtime.eval_to_string(
+            r#"
+            (() => {
+            const div = document.createElement('div');
+            const own = Object.prototype.hasOwnProperty.call(div, 'style');
+            div.style.width = '5px';
+            div.style = 'height: 7px';
+            function Wrapped() { HTMLElement.call(this); }
+            Wrapped.prototype = Object.create(HTMLElement.prototype);
+            Wrapped.prototype.constructor = Wrapped;
+            Object.defineProperty(Wrapped.prototype, 'style', { set(v) {}, configurable: true });
+            customElements.define('x-wrapped-style', Wrapped);
+            const wrapped = document.createElement('x-wrapped-style');
+            return [own, div.style.height, typeof wrapped.style].join(',');
+            })()
+            "#
+        ),
+        Ok("false,7px,undefined".to_string())
+    );
+}
+
+#[test]
+fn v8_inserting_an_emptied_composed_fragment_reclaims_its_nodes() {
+    // composeDetachedStamp may move a fragment's content into an owner's
+    // shadow root before the fragment's creator inserts it (YouTube's renderer
+    // stamper). The creator's own insertion must still place the content.
+    let mut runtime = V8Runtime::new(blank_dom());
+    assert_eq!(
+        runtime.eval_to_string(
+            r#"
+            (() => {
+            const host = document.createElement('div');
+            document.body.appendChild(host);
+            const root = host.attachShadow({ mode: 'open' });
+            const container = document.createElement('div');
+            const moved = document.createElement('span');
+            const stolen = document.createElement('b');
+            const elsewhere = document.createElement('i');
+            root.appendChild(container);
+            const fragment = document.createDocumentFragment();
+            root.appendChild(moved);
+            root.appendChild(stolen);
+            elsewhere.appendChild(stolen); // page moved it after composition
+            Object.defineProperty(fragment, '__aurora_composed_nodes__', {
+                value: { nodes: [moved, stolen], target: root },
+                configurable: true, writable: true
+            });
+            container.appendChild(fragment);
+            return [moved.parentNode === container, stolen.parentNode === elsewhere,
+                    fragment.childNodes.length].join(',');
+            })()
+            "#
+        ),
+        Ok("true,true,0".to_string())
+    );
+}
+
+#[test]
+fn v8_shady_physical_insert_into_adopted_host_lands_in_shadow_root() {
+    // ShadyDOM renders a ShadyRoot's content as the host's physical children
+    // via captured natives (`Node.prototype.appendChild.call(host, …)`).
+    // Aurora renders the adopted root instead, so that content must go there;
+    // the host's own light children stay put for slot distribution.
+    let mut runtime = V8Runtime::new(blank_dom());
+    assert_eq!(
+        runtime.eval_to_string(
+            r#"
+            (() => {
+            const host = document.createElement('div');
+            const light = document.createElement('p');
+            host.appendChild(light);
+            document.body.appendChild(host);
+            const root = document.createDocumentFragment();
+            host.__aurora_adoptShadowRoot(root, 'open');
+            Object.defineProperty(host, 'shadowRoot', { value: root, configurable: true });
+            Object.defineProperty(root, 'host', { value: host, configurable: true });
+            Object.defineProperty(root, '__aurora_registered_shadow_root__', { value: true, configurable: true });
+            const text = document.createTextNode('hello');
+            Node.prototype.appendChild.call(host, text);
+            Node.prototype.insertBefore.call(host, light, null);
+            const plainHost = document.createElement('div');
+            const plainText = document.createTextNode('x');
+            Node.prototype.appendChild.call(plainHost, plainText);
+            return [text.parentNode === root, light.parentNode === host,
+                    plainText.parentNode === plainHost].join(',');
+            })()
+            "#
+        ),
+        Ok("true,true,true".to_string())
+    );
 }
