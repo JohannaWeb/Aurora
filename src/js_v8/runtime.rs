@@ -1171,6 +1171,7 @@ impl V8Runtime {
         super::custom_elements::drain_reactions(scope, &self.registry)
     }
 
+    #[cfg(test)]
     pub(crate) fn eval_to_string(&mut self, source: &str) -> Result<String, String> {
         let _entered = self.entered();
         v8::scope_with_context!(let scope, &mut self.isolate, &self.context);
