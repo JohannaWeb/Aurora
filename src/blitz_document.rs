@@ -69,7 +69,18 @@ impl NetProvider for AuroraNetProvider {
 
 const MAX_CONSECUTIVE_PANICS: u32 = 5;
 
-#[cfg(debug_assertions)]
+/// Serializes Stylo style traversals across the whole process.
+///
+/// Stylo keeps its style-sharing cache in a thread-local `AtomicRefCell` on
+/// each thread of its global style pool. Two documents resolving at the same
+/// time on different threads can land on the same pool thread through rayon
+/// work-stealing, and the second traversal panics with `already mutably
+/// borrowed` (DioxusLabs/blitz#430). The windowed app resolves from a single
+/// thread, so this lock is uncontended there; it is what lets tests build and
+/// resolve documents in parallel while keeping the parallel traversal.
+static STYLO_TRAVERSAL_LOCK: Mutex<()> = Mutex::new(());
+
+#[cfg(any(test, debug_assertions))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MirrorIntegrityError {
     pub operation: &'static str,
@@ -78,7 +89,7 @@ pub struct MirrorIntegrityError {
     pub message: String,
 }
 
-#[cfg(debug_assertions)]
+#[cfg(any(test, debug_assertions))]
 impl MirrorIntegrityError {
     fn new(
         operation: &'static str,
@@ -324,13 +335,13 @@ impl BlitzDocument {
         self.last_mirror_mutation.as_ref()
     }
 
-    #[cfg(debug_assertions)]
+    #[cfg(any(test, debug_assertions))]
     #[allow(dead_code)]
     pub fn validate_mirror_integrity(&self) -> Result<(), MirrorIntegrityError> {
         self.validate_mirror_integrity_for("manual validation")
     }
 
-    #[cfg(debug_assertions)]
+    #[cfg(any(test, debug_assertions))]
     fn validate_mirror_integrity_for(
         &self,
         operation: &'static str,
@@ -400,7 +411,7 @@ impl BlitzDocument {
         Ok(())
     }
 
-    #[cfg(debug_assertions)]
+    #[cfg(any(test, debug_assertions))]
     fn validate_mapped_node_state(
         &self,
         operation: &'static str,
@@ -1440,10 +1451,15 @@ impl BlitzDocument {
         if !self.healthy {
             return false;
         }
-        let resolved = catch_stylo_panic("resolving Blitz document", || {
-            self.inner.resolve(0.0);
-        })
-        .is_some();
+        let resolved = {
+            let _traversal = STYLO_TRAVERSAL_LOCK
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            catch_stylo_panic("resolving Blitz document", || {
+                self.inner.resolve(0.0);
+            })
+            .is_some()
+        };
         if resolved {
             self.healthy = true;
             self.consecutive_panics = 0;
@@ -1620,7 +1636,7 @@ fn query_can_see(start: &NodePtr, found: &NodePtr) -> bool {
     }
 }
 
-#[cfg(debug_assertions)]
+#[cfg(any(test, debug_assertions))]
 fn blitz_attrs_to_map(element: &blitz_dom::ElementData) -> BTreeMap<String, String> {
     element
         .attrs
@@ -1629,7 +1645,7 @@ fn blitz_attrs_to_map(element: &blitz_dom::ElementData) -> BTreeMap<String, Stri
         .collect()
 }
 
-#[cfg(debug_assertions)]
+#[cfg(any(test, debug_assertions))]
 fn attr_qual_name_to_string(name: &QualName) -> String {
     match name.prefix.as_ref() {
         Some(prefix) => format!("{}:{}", prefix, name.local),
@@ -1837,9 +1853,6 @@ mod tests {
     use super::*;
     use crate::dom::{Node, set_parent};
     use crate::identity::{Capability, IdentityKind};
-    use std::sync::Mutex;
-
-    static BLITZ_DOCUMENT_TEST_LOCK: Mutex<()> = Mutex::new(());
 
     fn test_identity() -> Identity {
         Identity::new(
@@ -1854,6 +1867,7 @@ mod tests {
         BTreeMap::from([(name.to_string(), value.to_string())])
     }
 
+    #[cfg(debug_assertions)] // only used by debug-only mirror tests
     fn body_from_document(document: &NodePtr) -> NodePtr {
         let Node::Document { children, .. } = &*document.borrow() else {
             panic!("expected document node");
@@ -1885,7 +1899,6 @@ mod tests {
     #[cfg(debug_assertions)]
     #[test]
     fn debug_mirror_integrity_accepts_initial_dom_snapshot() {
-        let _guard = BLITZ_DOCUMENT_TEST_LOCK.lock().unwrap();
         let document = document_with_body_children(vec![Node::element_with_attributes(
             "p",
             attr("data-role", "greeting"),
@@ -1902,7 +1915,6 @@ mod tests {
     fn catch_stylo_panic_repairs_leaked_layout_thread_state() {
         use style::thread_state::{self, ThreadState};
 
-        let _guard = BLITZ_DOCUMENT_TEST_LOCK.lock().unwrap();
 
         // Model `resolve_stylist`: it enters the LAYOUT thread-state, then the
         // style traversal panics (stylo#387) before the matching `exit`.
@@ -1923,7 +1935,6 @@ mod tests {
     #[cfg(debug_assertions)]
     #[test]
     fn debug_mirror_integrity_accepts_synced_dom_mutations() {
-        let _guard = BLITZ_DOCUMENT_TEST_LOCK.lock().unwrap();
         let text = Node::text("old");
         let item = Node::element_with_attributes("p", attr("id", "item"), vec![text.clone()]);
         let document = document_with_body_children(vec![item.clone()]);
@@ -1973,7 +1984,6 @@ mod tests {
         // forcing a snapshot rebuild on every Polymer attribute re-stamp. The
         // diffing path must keep unchanged/updated attributes as in-place sets
         // and only clear attributes that the DOM actually dropped.
-        let _guard = BLITZ_DOCUMENT_TEST_LOCK.lock().unwrap();
         let mut starting = BTreeMap::new();
         starting.insert("rel".to_string(), "stylesheet".to_string());
         starting.insert("href".to_string(), "/a.css".to_string());
@@ -2023,7 +2033,6 @@ mod tests {
     #[cfg(debug_assertions)]
     #[test]
     fn debug_mirror_integrity_accepts_synced_shadow_root() {
-        let _guard = BLITZ_DOCUMENT_TEST_LOCK.lock().unwrap();
         let host = Node::element("x-host", Vec::new());
         let document = document_with_body_children(vec![host.clone()]);
         let mut blitz_doc =
@@ -2046,7 +2055,6 @@ mod tests {
     #[cfg(debug_assertions)]
     #[test]
     fn sync_shadow_root_replaces_previously_mirrored_light_children() {
-        let _guard = BLITZ_DOCUMENT_TEST_LOCK.lock().unwrap();
         let light = Node::element("span", vec![Node::text("light")]);
         let host = Node::element("x-host", vec![light.clone()]);
         let document = document_with_body_children(vec![host.clone()]);
@@ -2072,7 +2080,6 @@ mod tests {
     #[cfg(debug_assertions)]
     #[test]
     fn initial_snapshot_uses_synthetic_container_for_existing_shadow_root() {
-        let _guard = BLITZ_DOCUMENT_TEST_LOCK.lock().unwrap();
         let host = Node::element("x-host", Vec::new());
         let shadow_root =
             Node::document_fragment(vec![Node::element("span", vec![Node::text("shadow")])]);
@@ -2091,7 +2098,6 @@ mod tests {
     #[cfg(debug_assertions)]
     #[test]
     fn debug_mirror_integrity_reports_corrupt_reverse_mapping() {
-        let _guard = BLITZ_DOCUMENT_TEST_LOCK.lock().unwrap();
         let document = document_with_body_children(vec![Node::element("p", vec![Node::text("x")])]);
         let mut blitz_doc =
             BlitzDocument::try_from_dom(&document, None, &test_identity(), 800, 600)
@@ -2111,7 +2117,6 @@ mod tests {
 
     #[test]
     fn mirror_mutation_trace_records_monotonic_operation_ids() {
-        let _guard = BLITZ_DOCUMENT_TEST_LOCK.lock().unwrap();
         let item = Node::element_with_attributes("p", attr("id", "item"), vec![Node::text("old")]);
         let document = document_with_body_children(vec![item.clone()]);
         let mut blitz_doc =
@@ -2150,7 +2155,6 @@ mod tests {
 
     #[test]
     fn mirror_mutation_trace_records_missing_mapping_failures() {
-        let _guard = BLITZ_DOCUMENT_TEST_LOCK.lock().unwrap();
         let document = document_with_body_children(vec![Node::element("p", vec![Node::text("x")])]);
         let mut blitz_doc =
             BlitzDocument::try_from_dom(&document, None, &test_identity(), 800, 600)
@@ -2173,7 +2177,6 @@ mod tests {
 
     #[test]
     fn paint_to_scene_reports_painted_current_frame_on_success() {
-        let _guard = BLITZ_DOCUMENT_TEST_LOCK.lock().unwrap();
         let document = document_with_body_children(vec![Node::element("p", vec![Node::text("x")])]);
         let mut blitz_doc =
             BlitzDocument::try_from_dom(&document, None, &test_identity(), 800, 600)
@@ -2188,7 +2191,6 @@ mod tests {
 
     #[test]
     fn paint_failure_state_distinguishes_recoverable_from_unhealthy() {
-        let _guard = BLITZ_DOCUMENT_TEST_LOCK.lock().unwrap();
         let document = document_with_body_children(vec![Node::element("p", vec![Node::text("x")])]);
         let mut blitz_doc =
             BlitzDocument::try_from_dom(&document, None, &test_identity(), 800, 600)
@@ -2334,7 +2336,6 @@ mod tests {
         // plus an absolutely positioned `ytd-app{left:0;right:0}`. The
         // display:none children left the body classified as an inline root,
         // so the app root was laid out as a shrink-to-fit inline box.
-        let _guard = BLITZ_DOCUMENT_TEST_LOCK.lock().unwrap();
         let app = Node::element(
             "x-app",
             vec![Node::element_with_attributes("div", attr("id", "bar"), Vec::new())],
@@ -2360,7 +2361,6 @@ mod tests {
         // Regression: a host's only Blitz child is the `display: contents`
         // synthetic shadow container. Its block children must be classified
         // through it, not treated as inline boxes laid out side by side.
-        let _guard = BLITZ_DOCUMENT_TEST_LOCK.lock().unwrap();
         let host = Node::element("x-host", Vec::new());
         let first = Node::element_with_attributes("div", attr("class", "a"), Vec::new());
         let second = Node::element_with_attributes("div", attr("class", "b"), Vec::new());
@@ -2382,7 +2382,6 @@ mod tests {
     fn child_combinator_matches_through_synthetic_shadow_container() {
         // ShadyDOM-scoped CSS (`ytd-page-manager > .ytd-page-manager`)
         // expects shadow content to be the host's direct children.
-        let _guard = BLITZ_DOCUMENT_TEST_LOCK.lock().unwrap();
         let host = Node::element("x-host", Vec::new());
         let item = Node::element_with_attributes("div", attr("class", "item"), Vec::new());
         with_shadow_root(&host, vec![item.clone()]);
@@ -2401,7 +2400,6 @@ mod tests {
         // Taffy positions `position: fixed` like `absolute` against the layout
         // parent; a parent pushed down by a (collapsed) margin must not drag
         // a `top: 0` fixed header down with it.
-        let _guard = BLITZ_DOCUMENT_TEST_LOCK.lock().unwrap();
         let bar = Node::element_with_attributes("div", attr("id", "bar"), Vec::new());
         let wrap = Node::element_with_attributes(
             "div",
