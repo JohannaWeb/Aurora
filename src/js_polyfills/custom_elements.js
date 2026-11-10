@@ -528,25 +528,6 @@
             // native DocumentFragment insertion consumes its children.
             var reclaimingComposedFragment = false;
             function composeDetachedStamp(el) {
-                var skipSpec = globalThis.__AURORA_SKIP_COMPOSE_TAGS__;
-                if (skipSpec) {
-                    var ln = '';
-                    try { ln = el.localName || ''; } catch (e) {}
-                    if (ln) {
-                        var parts = String(skipSpec).split(',');
-                        for (var si = 0; si < parts.length; si++) {
-                            var pat = parts[si];
-                            if (!pat) continue;
-                            if (pat.charAt(0) === '*') {
-                                var suffix = pat.slice(1);
-                                if (suffix && ln.length >= suffix.length &&
-                                    ln.slice(-suffix.length) === suffix) return false;
-                            } else if (pat === ln) {
-                                return false;
-                            }
-                        }
-                    }
-                }
                 // Refilling a fragment for the caller's real insertion re-runs
                 // upgrade/connect for its elements; don't compose them straight
                 // back out again.
@@ -2592,12 +2573,6 @@
                 installSetUpPropsHook(ctor, name);
                 probeCustomElementState(name, null, ctor);
                 flushPending(name);
-                // The native registry is the source of truth; it already ran
-                // (and may have thrown) at the top of define.
-                if (false) {
-                    try { globalThis.__aurora_ce_define_native(name, ctor); }
-                    catch (e) {}
-                }
             },
                 get: function(name) {
                     if (typeof globalThis.__aurora_ce_get_native === 'function') {

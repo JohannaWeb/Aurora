@@ -341,7 +341,6 @@ impl V8Runtime {
                 ce_construction_stack_top_native
             );
             install_global_fn!("__aurora_ce_state_native", ce_state_native);
-            install_global_fn!("__aurora_ce_upgrade_native", ce_upgrade_native);
             install_global_fn!("__aurora_ce_upgrade_now_native__", ce_upgrade_now_native);
 
             let ce_has_pending_reaction_fn =
@@ -1083,19 +1082,6 @@ impl V8Runtime {
 
                 if std::env::var("AURORA_TRACE_STAMP").is_ok() {
                     let _ = compile_and_run(scope, "globalThis.__AURORA_TRACE_STAMP__ = true;");
-                }
-
-                if let Ok(tags) = std::env::var("AURORA_SKIP_COMPOSE_TAGS") {
-                    let sanitized: String = tags
-                        .chars()
-                        .filter(|c| {
-                            c.is_ascii_alphanumeric() || *c == '-' || *c == ',' || *c == '*'
-                        })
-                        .collect();
-                    let _ = compile_and_run(
-                        scope,
-                        &format!("globalThis.__AURORA_SKIP_COMPOSE_TAGS__ = \"{sanitized}\";"),
-                    );
                 }
                 // Custom-element lifecycle tracer (see custom_elements.js). AURORA_TRACE_CE
                 // enables it; AURORA_TRACE_CE_FILTER (comma-separated name substrings) narrows
@@ -1853,43 +1839,14 @@ fn ce_state_native<'s>(
     retval.set(v8_str(scope, text).into());
 }
 
-/// `__aurora_ce_upgrade_native(root)` — run "try to upgrade" over a subtree,
-/// the native half of `customElements.upgrade(root)`.
-fn ce_upgrade_native<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut retval: v8::ReturnValue,
-) {
-    let external = v8::Local::<v8::External>::try_from(args.data())
-        .expect("callback data is always the External we installed");
-    let doc_data = unsafe { &*(external.value() as *const DocumentData) };
-    let Some(root) = js_value_to_node(scope, args.get(0), &doc_data.registry) else {
-        retval.set(v8::Integer::new(scope, 0).into());
-        return;
-    };
-    let connected = crate::js_v8::tree::mutation::is_connected_to(&doc_data.document, &root);
-    let mut upgraded = 0;
-    if super::custom_elements::try_upgrade_element(&doc_data.registry, &root, connected) {
-        upgraded += 1;
-    }
-    for node in query::query_all(&root, "*", &root) {
-        let node_connected =
-            crate::js_v8::tree::mutation::is_connected_to(&doc_data.document, &node);
-        if super::custom_elements::try_upgrade_element(&doc_data.registry, &node, node_connected) {
-            upgraded += 1;
-        }
-    }
-    retval.set(v8::Integer::new(scope, upgraded).into());
-}
-
 /// `__aurora_ce_upgrade_now_native__(el)` — synchronously run "upgrade an
 /// element" for a single element. Stage 3 of the custom-element migration:
 /// the JS shim's `tryUpgrade` no longer does its own prototype swap and
 /// ES5-adapter/class-style constructor replay — it schedules (handling all
 /// of YouTube's Polymer-specific timing: pending-definition tracking,
 /// deferred-during-stamping upgrades, the connect retry ladder), and this is
-/// what it calls to actually construct. Differs from `ce_upgrade_native`
-/// (`try_upgrade_element`, the insertion path's entry point) by running
+/// what it calls to actually construct. Differs from `try_upgrade_element`
+/// (the insertion path's entry point) by running
 /// `run_upgrade_constructor` immediately instead of enqueueing a reaction to
 /// run at the next drain — required because a synchronous
 /// `document.createElement` of an already-defined name must return a fully
