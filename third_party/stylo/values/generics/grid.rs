@@ -7,20 +7,15 @@
 
 use crate::derives::*;
 use crate::parser::{Parse, ParserContext};
+use crate::typed_om::{NumericType, NumericValue, ToTyped, TypedValue, UnitValue};
 use crate::values::specified;
 use crate::values::{CSSFloat, CustomIdent};
 use crate::{One, Zero};
 use cssparser::Parser;
 use std::fmt::{self, Write};
-use std::{cmp, usize};
-use style_traits::{CssWriter, ParseError, StyleParseErrorKind, ToCss};
-
-/// These are the limits that we choose to clamp grid line numbers to.
-/// http://drafts.csswg.org/css-grid/#overlarge-grids
-/// line_num is clamped to this range at parse time.
-pub const MIN_GRID_LINE: i32 = -10000;
-/// See above.
-pub const MAX_GRID_LINE: i32 = 10000;
+use style_traits::values::specified::AllowedNumericType;
+use style_traits::{CssString, CssWriter, ParseError, StyleParseErrorKind, ToCss};
+use thin_vec::ThinVec;
 
 /// A `<grid-line>` type.
 ///
@@ -45,12 +40,6 @@ pub struct GenericGridLine<Integer> {
     /// <https://drafts.csswg.org/css-grid/#grid-placement-slot>
     pub ident: CustomIdent,
     /// Denotes the nth grid line from grid item's placement.
-    ///
-    /// This is clamped by MIN_GRID_LINE and MAX_GRID_LINE.
-    ///
-    /// NOTE(emilio): If we ever allow animating these we need to either do
-    /// something more complicated for the clamping, or do this clamping at
-    /// used-value time.
     pub line_num: Integer,
     /// Flag to check whether it's a `span` keyword.
     pub is_span: bool,
@@ -145,14 +134,14 @@ where
 }
 
 impl Parse for GridLine<specified::Integer> {
-    fn parse<'i, 't>(
-        context: &ParserContext,
-        input: &mut Parser<'i, 't>,
-    ) -> Result<Self, ParseError<'i>> {
-        let mut grid_line = Self::auto();
+    fn parse(context: &ParserContext, input: &mut Parser) -> Result<Self, ParseError> {
         if input.try_parse(|i| i.expect_ident_matching("auto")).is_ok() {
-            return Ok(grid_line);
+            return Ok(Self::auto());
         }
+
+        let mut is_span = false;
+        let mut line_num: Option<specified::Integer> = None;
+        let mut ident: Option<CustomIdent> = None;
 
         // <custom-ident> | [ <integer> && <custom-ident>? ] | [ span && [ <integer> || <custom-ident> ] ]
         // This <grid-line> horror is simply,
@@ -162,57 +151,123 @@ impl Parse for GridLine<specified::Integer> {
 
         for _ in 0..3 {
             // Maximum possible entities for <grid-line>
-            let location = input.current_source_location();
             if input.try_parse(|i| i.expect_ident_matching("span")).is_ok() {
-                if grid_line.is_span {
-                    return Err(location.new_custom_error(StyleParseErrorKind::UnspecifiedError));
+                if is_span {
+                    return Err(ParseError::custom(StyleParseErrorKind::UnspecifiedError));
                 }
 
-                if !grid_line.line_num.is_zero() || grid_line.ident.0 != atom!("") {
+                if line_num.is_some() || ident.is_some() {
                     val_before_span = true;
                 }
 
-                grid_line.is_span = true;
-            } else if let Ok(i) = input.try_parse(|i| specified::Integer::parse(context, i)) {
-                // FIXME(emilio): Probably shouldn't reject if it's calc()...
-                let value = i.value();
-                if value == 0 || val_before_span || !grid_line.line_num.is_zero() {
-                    return Err(location.new_custom_error(StyleParseErrorKind::UnspecifiedError));
+                is_span = true;
+                continue;
+            }
+            if let Ok(i) = input.try_parse(|i| specified::Integer::parse(context, i)) {
+                if val_before_span || line_num.is_some() {
+                    return Err(ParseError::custom(StyleParseErrorKind::UnspecifiedError));
                 }
 
-                grid_line.line_num = specified::Integer::new(cmp::max(
-                    MIN_GRID_LINE,
-                    cmp::min(value, MAX_GRID_LINE),
-                ));
-            } else if let Ok(name) = input.try_parse(|i| CustomIdent::parse(i, &["auto"])) {
-                if val_before_span || grid_line.ident.0 != atom!("") {
-                    return Err(location.new_custom_error(StyleParseErrorKind::UnspecifiedError));
+                if matches!(i.get(), Some(0)) {
+                    return Err(ParseError::custom(StyleParseErrorKind::UnspecifiedError));
+                }
+
+                line_num = Some(i);
+                continue;
+            }
+            if let Ok(name) = input.try_parse(|i| CustomIdent::parse(i, &["auto"])) {
+                if val_before_span || ident.is_some() {
+                    return Err(ParseError::custom(StyleParseErrorKind::UnspecifiedError));
                 }
                 // NOTE(emilio): `span` is consumed above, so we only need to
                 // reject `auto`.
-                grid_line.ident = name;
-            } else {
-                break;
+                ident = Some(name);
+                continue;
             }
+            break;
         }
 
-        if grid_line.is_auto() {
-            return Err(input.new_custom_error(StyleParseErrorKind::UnspecifiedError));
+        if line_num.is_none() && ident.is_none() {
+            return Err(ParseError::custom(StyleParseErrorKind::UnspecifiedError));
         }
 
-        if grid_line.is_span {
-            if !grid_line.line_num.is_zero() {
-                if grid_line.line_num.value() <= 0 {
-                    // disallow negative integers for grid spans
-                    return Err(input.new_custom_error(StyleParseErrorKind::UnspecifiedError));
-                }
-            } else if grid_line.ident.0 == atom!("") {
-                // integer could be omitted
-                return Err(input.new_custom_error(StyleParseErrorKind::UnspecifiedError));
+        let mut grid_line = Self::auto();
+        grid_line.is_span = is_span;
+        if let Some(mut line_num) = line_num {
+            if is_span
+                && line_num
+                    .ensure_clamping_mode(AllowedNumericType::AtLeastOne)
+                    .is_err()
+            {
+                // Disallow negative integers for grid spans.
+                return Err(ParseError::custom(StyleParseErrorKind::UnspecifiedError));
             }
+            grid_line.line_num = line_num;
         }
-
+        if let Some(ident) = ident {
+            grid_line.ident = ident;
+        }
         Ok(grid_line)
+    }
+}
+
+/// The unit of a `<frequency>` value.
+pub struct FlexUnit;
+
+impl FlexUnit {
+    /// Returns whether the given string is the flex unit.
+    #[inline]
+    pub fn matches(unit: &str) -> bool {
+        unit.eq_ignore_ascii_case("fr")
+    }
+
+    /// Returns the flex unit name as a string.
+    #[inline]
+    pub fn name() -> &'static str {
+        "fr"
+    }
+}
+
+/// A CSS `<flex>` value.
+///
+/// https://drafts.csswg.org/css-grid-2/#typedef-flex
+#[derive(
+    Animate,
+    Clone,
+    Copy,
+    Debug,
+    MallocSizeOf,
+    PartialEq,
+    SpecifiedValueInfo,
+    ToAnimatedValue,
+    ToComputedValue,
+    ToResolvedValue,
+    ToShmem,
+)]
+#[repr(C)]
+pub struct Flex(pub CSSFloat);
+
+impl ToCss for Flex {
+    fn to_css<W>(&self, dest: &mut CssWriter<W>) -> fmt::Result
+    where
+        W: Write,
+    {
+        self.0.to_css(dest)?;
+        dest.write_str(FlexUnit::name())
+    }
+}
+
+impl ToTyped for Flex {
+    fn to_typed(&self, dest: &mut ThinVec<TypedValue>) -> Result<(), ()> {
+        let numeric_type = NumericType::flex();
+        let value = self.0;
+        let unit = CssString::from("fr");
+        dest.push(TypedValue::Numeric(NumericValue::Unit(UnitValue {
+            numeric_type,
+            value,
+            unit,
+        })));
+        Ok(())
     }
 }
 
@@ -232,14 +287,14 @@ impl Parse for GridLine<specified::Integer> {
     ToCss,
     ToResolvedValue,
     ToShmem,
+    ToTyped,
 )]
 #[repr(C, u8)]
 pub enum GenericTrackBreadth<L> {
     /// The generic type is almost always a non-negative `<length-percentage>`
     Breadth(L),
     /// A flex fraction specified in `fr` units.
-    #[css(dimension)]
-    Fr(CSSFloat),
+    Flex(Flex),
     /// `auto`
     Auto,
     /// `min-content`
@@ -327,7 +382,7 @@ impl<L> TrackSize<L> {
                 }
 
                 match *breadth_1 {
-                    TrackBreadth::Fr(_) => false, // should be <inflexible-breadth> at this point
+                    TrackBreadth::Flex(_) => false, // should be <inflexible-breadth> at this point
                     _ => breadth_2.is_fixed(),
                 }
             },
@@ -353,7 +408,7 @@ impl<L: ToCss> ToCss for TrackSize<L> {
                 // According to gecko minmax(auto, <flex>) is equivalent to <flex>,
                 // and both are serialized as <flex>.
                 if let TrackBreadth::Auto = *min {
-                    if let TrackBreadth::Fr(_) = *max {
+                    if let TrackBreadth::Flex(_) = *max {
                         return max.to_css(dest);
                     }
                 }
@@ -369,6 +424,15 @@ impl<L: ToCss> ToCss for TrackSize<L> {
                 lp.to_css(dest)?;
                 dest.write_char(')')
             },
+        }
+    }
+}
+
+impl<L: ToTyped> ToTyped for TrackSize<L> {
+    fn to_typed(&self, dest: &mut ThinVec<TypedValue>) -> Result<(), ()> {
+        match *self {
+            TrackSize::Breadth(ref breadth) => breadth.to_typed(dest),
+            _ => Err(()),
         }
     }
 }
@@ -390,7 +454,6 @@ impl<L: ToCss> ToCss for TrackSize<L> {
     ToTyped,
 )]
 #[repr(transparent)]
-#[typed(todo_derive_fields)]
 pub struct GenericImplicitGridTracks<T>(
     #[css(if_empty = "auto", iterable)] pub crate::OwnedSlice<T>,
 );
@@ -461,14 +524,8 @@ pub enum RepeatCount<Integer> {
 }
 
 impl Parse for RepeatCount<specified::Integer> {
-    fn parse<'i, 't>(
-        context: &ParserContext,
-        input: &mut Parser<'i, 't>,
-    ) -> Result<Self, ParseError<'i>> {
-        if let Ok(mut i) = input.try_parse(|i| specified::Integer::parse_positive(context, i)) {
-            if i.value() > MAX_GRID_LINE {
-                i = specified::Integer::new(MAX_GRID_LINE);
-            }
+    fn parse(context: &ParserContext, input: &mut Parser) -> Result<Self, ParseError> {
+        if let Ok(i) = input.try_parse(|i| specified::Integer::parse_positive(context, i)) {
             return Ok(RepeatCount::Number(i));
         }
         try_match_ident_ignore_ascii_case! { input,
@@ -517,7 +574,7 @@ impl<L: ToCss, I: ToCss> ToCss for TrackRepeat<L, I> {
         dest.write_str(", ")?;
 
         let mut line_names_iter = self.line_names.iter();
-        for (i, (ref size, ref names)) in self
+        for (i, (ref size, names)) in self
             .track_sizes
             .iter()
             .zip(&mut line_names_iter)
@@ -554,12 +611,14 @@ impl<L: ToCss, I: ToCss> ToCss for TrackRepeat<L, I> {
     ToCss,
     ToResolvedValue,
     ToShmem,
+    ToTyped,
 )]
 #[repr(C, u8)]
 pub enum GenericTrackListValue<LengthPercentage, Integer> {
     /// A <track-size> value.
     TrackSize(#[animation(field_bound)] GenericTrackSize<LengthPercentage>),
     /// A <track-repeat> value.
+    #[typed(skip)]
     TrackRepeat(#[animation(field_bound)] GenericTrackRepeat<LengthPercentage, Integer>),
 }
 
@@ -657,7 +716,7 @@ impl<L: ToCss, I: ToCss> ToCss for TrackList<L, I> {
             }
 
             if values_iter.peek().is_some()
-                || line_names_iter.peek().map_or(false, |v| !v.is_empty())
+                || line_names_iter.peek().is_some_and(|v| !v.is_empty())
                 || (idx + 1 == self.auto_repeat_index)
             {
                 dest.write_char(' ')?;
@@ -665,6 +724,24 @@ impl<L: ToCss, I: ToCss> ToCss for TrackList<L, I> {
         }
 
         Ok(())
+    }
+}
+
+impl<L: ToTyped, I: ToTyped> ToTyped for TrackList<L, I> {
+    // Note: The specification does not currently define how grid track lists
+    // should be reified into Typed OM. The current behavior follows existing
+    // WPT coverage (grid-template-columns-rows.html). Syncing spec with UA/WPT
+    // behavior tracked in https://github.com/w3c/csswg-drafts/issues/13907
+    fn to_typed(&self, dest: &mut ThinVec<TypedValue>) -> Result<(), ()> {
+        if self.values.len() != 1 {
+            return Err(());
+        }
+
+        if self.line_names.iter().any(|names| !names.is_empty()) {
+            return Err(());
+        }
+
+        self.values[0].to_typed(dest)
     }
 }
 
@@ -704,7 +781,7 @@ impl<I: ToCss> ToCss for NameRepeat<I> {
         self.count.to_css(dest)?;
         dest.write_char(',')?;
 
-        for ref names in self.line_names.iter() {
+        for names in self.line_names.iter() {
             if names.is_empty() {
                 // Note: concat_serialize_idents() skip the empty list so we have to handle it
                 // manually for NameRepeat.
@@ -835,7 +912,6 @@ impl<I: ToCss> ToCss for LineNameList<I> {
 )]
 #[value_info(other_values = "subgrid")]
 #[repr(C, u8)]
-#[typed(todo_derive_fields)]
 pub enum GenericGridTemplateComponent<L, I> {
     /// `none` value.
     None,
@@ -850,9 +926,11 @@ pub enum GenericGridTemplateComponent<L, I> {
     /// A `subgrid <line-name-list>?`
     /// TODO: Support animations for this after subgrid is addressed in [grid-2] spec.
     #[animation(error)]
+    #[typed(skip)]
     Subgrid(Box<GenericLineNameList<I>>),
     /// `masonry` value.
     /// https://github.com/w3c/csswg-drafts/issues/4650
+    #[typed(skip)]
     Masonry,
 }
 

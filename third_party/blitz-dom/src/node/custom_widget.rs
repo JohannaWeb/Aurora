@@ -9,6 +9,7 @@ pub use style::properties::ComputedValues as ComputedStyles;
 pub use anyrender::{RenderContext, Scene};
 
 use crate::BaseDocument;
+use crate::layout::replaced::IntrinsicSizes;
 
 impl BaseDocument {
     pub fn can_create_surfaces(&mut self, render_context: &mut dyn RenderContext) {
@@ -96,9 +97,27 @@ pub trait Widget {
 
     // Other
 
+    /// Whether the widget currently requires redraws (e.g. because it is animating).
+    ///
+    /// Returning `true` causes the document to continuously schedule redraws
+    /// (and hence repaints of the widget). Static widgets should return `false`.
+    fn requires_redraw(&self) -> bool {
+        false
+    }
+
     /// Handle input events (mouse, keyboard, etc)
     fn handle_event(&mut self, event: &UiEvent) {
         let _ = event;
+    }
+
+    /// The widget's intrinsic dimensions: an intrinsic width, height and
+    /// aspect ratio, each of which may independently be absent.
+    ///
+    /// An absent dimension is sized as it would be without the widget (for a
+    /// replaced element, the element's own intrinsic dimension or the default
+    /// object size).
+    fn intrinsic_sizes(&self) -> IntrinsicSizes {
+        IntrinsicSizes::default()
     }
 
     /// Callback for the widget to paint it's content.

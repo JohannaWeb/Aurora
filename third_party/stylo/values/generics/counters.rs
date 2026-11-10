@@ -6,7 +6,6 @@
 
 use crate::counter_style::CounterStyle;
 use crate::derives::*;
-use crate::values::specified::Attr;
 use crate::values::CustomIdent;
 use std::fmt::{self, Write};
 use std::ops::Deref;
@@ -49,7 +48,7 @@ where
         self.name.to_css(dest)?;
         if self.is_reversed {
             dest.write_char(')')?;
-            if self.value == i32::min_value() {
+            if self.value == i32::MIN {
                 return Ok(());
             }
         }
@@ -189,7 +188,6 @@ pub struct GenericCounters<I>(
 );
 pub use self::GenericCounters as Counters;
 
-
 #[inline]
 fn is_decimal(counter_type: &CounterStyle) -> bool {
     *counter_type == CounterStyle::decimal()
@@ -315,8 +313,6 @@ pub enum GenericContentItem<I> {
     /// attr(value) otherwise.
     #[cfg(feature = "gecko")]
     MozLabelContent,
-    /// `attr([namespace? `|`]? ident)`
-    Attr(Attr),
     /// image-set(url) | url(url)
     Image(I),
 }

@@ -7,7 +7,6 @@
 
 #![allow(non_snake_case, missing_docs)]
 
-use crate::gecko::url::CssUrlData;
 use crate::media_queries::MediaList;
 use crate::properties::animated_properties::AnimationValue;
 use crate::properties::{ComputedValues, PropertyDeclarationBlock};
@@ -23,18 +22,23 @@ pub use crate::stylesheets::{
     LockedCounterStyleRule, LockedFontFaceRule, LockedImportRule, LockedKeyframesRule,
     LockedNestedDeclarationsRule, LockedPageRule, LockedPositionTryRule, LockedStyleRule,
 };
+use crate::url::gecko::CssUrlData;
 use servo_arc::Arc;
 
 macro_rules! impl_simple_arc_ffi {
     ($ty:ty, $addref:ident, $release:ident) => {
-        #[no_mangle]
+        #[unsafe(no_mangle)]
         pub unsafe extern "C" fn $addref(obj: *const $ty) {
-            std::mem::forget(Arc::from_raw_addrefed(obj));
+            unsafe {
+                std::mem::forget(Arc::from_raw_addrefed(obj));
+            }
         }
 
-        #[no_mangle]
+        #[unsafe(no_mangle)]
         pub unsafe extern "C" fn $release(obj: *const $ty) {
-            let _ = Arc::from_raw(obj);
+            unsafe {
+                let _ = Arc::from_raw(obj);
+            }
         }
     };
 }

@@ -1900,11 +1900,11 @@ fn js_value_to_node<'s>(
     }
     let blitz_key = v8_str(scope, "__aurora_blitz_node_id");
     let blitz_id_val = obj.get(scope, blitz_key.into())?;
-    if !blitz_id_val.is_int32() {
+    if !blitz_id_val.is_big_int() {
         return None;
     }
-    let blitz_id = blitz_id_val.int32_value(scope)? as usize;
-    registry.dom_node_for_blitz_id(blitz_id)
+    let blitz_id = blitz_id_val.to_big_int(scope)?.u64_value().0;
+    registry.dom_node_for_blitz_id(blitz_dom::NodeId::from_u64(blitz_id))
 }
 
 /// `__aurora_ce_has_pending_connected_reaction_native(el)` — whether the

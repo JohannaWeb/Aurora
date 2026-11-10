@@ -109,7 +109,7 @@ where
         ElementWrapper {
             element: el,
             cached_snapshot: Cell::new(None),
-            snapshot_map: snapshot_map,
+            snapshot_map,
         }
     }
 
@@ -237,6 +237,19 @@ where
             // CustomStateSet should match against the snapshot before element
             NonTSPseudoClass::CustomState(ref state) => return self.has_custom_state(&state.0),
 
+            // :paused and :playing require special handling because :playing negates the PAUSED
+            // state flag, which the generic snapshot_state.intersects(flag) path cannot express.
+            #[cfg(feature = "gecko")]
+            NonTSPseudoClass::Paused | NonTSPseudoClass::Playing => {
+                let state = self
+                    .snapshot()
+                    .and_then(|s| s.state())
+                    .unwrap_or_else(|| self.element.state());
+                return self.element.is_html_media_element()
+                    && (*pseudo_class == NonTSPseudoClass::Paused)
+                        == state.intersects(ElementState::PAUSED);
+            },
+
             _ => {},
         }
 
@@ -355,7 +368,7 @@ where
         match self.snapshot() {
             Some(snapshot) if snapshot.has_attrs() => snapshot
                 .id_attr()
-                .map_or(false, |atom| case_sensitivity.eq_atom(&atom, id)),
+                .is_some_and(|atom| case_sensitivity.eq_atom(atom, id)),
             _ => self.element.has_id(id, case_sensitivity),
         }
     }

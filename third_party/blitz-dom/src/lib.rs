@@ -31,9 +31,6 @@
 pub const DEFAULT_CSS: &str = include_str!("../assets/default.css");
 pub const BULLET_FONT: &[u8] = include_bytes!("../assets/moz-bullet-font.otf");
 
-const INCREMENTAL: bool = cfg!(feature = "incremental");
-const NON_INCREMENTAL: bool = !INCREMENTAL;
-
 /// The DOM implementation.
 ///
 /// This is the primary entry point for this crate.
@@ -43,26 +40,41 @@ mod document;
 pub mod node;
 
 mod config;
+/// CSSOM stylesheet access (`document.styleSheets`, `CSSStyleSheet`, `CSSRule`)
+mod cssom;
 mod debug;
 mod events;
 mod font_metrics;
 mod form;
 mod html;
+/// Loading of `<iframe>` elements into sub-documents.
+mod iframe;
 /// Integration of taffy and the DOM.
 mod layout;
 mod mutator;
 mod query_selector;
 mod resolve;
+/// Computation of resolved CSS property values (`getComputedStyle()`)
+mod resolved_style;
+/// Scrolling of nodes and the viewport, and scroll animations.
+mod scrolling;
 mod selection;
 /// Implementations that interact with servo's style engine
 mod stylo;
+mod stylo_device;
 mod stylo_to_cursor_icon;
 mod stylo_to_kurbo;
 mod stylo_to_parley;
-mod traversal;
+pub mod traversal;
+/// Versioned storage for the nodes of the DOM tree.
+mod tree;
 
 mod url;
 
+pub use cssom::{CssRuleInfo, CssomError};
+pub use resolved_style::{
+    css_property_is_supported, parse_transform_matrix, resolved_style_property_names,
+};
 pub use stylo_to_kurbo::resolve_2d_transform;
 
 pub mod net;
@@ -71,21 +83,44 @@ pub mod util;
 #[cfg(feature = "accessibility")]
 mod accessibility;
 
+pub use crate::layout::paint_tree::{HoistedPaintChild, StackingContext, hoisted_child_position};
+pub use crate::layout::replaced::IntrinsicSizes;
+pub use crate::layout::text_transform::{full_size_kana, full_width};
 #[cfg(feature = "custom-widget")]
 pub use crate::node::Widget;
 
+pub use blitz_traits::node_id::NodeId;
+// Re-export taffy: it is part of blitz-dom's public API (e.g. `Node::style`,
+// `Node::final_layout`)
 pub use config::{DocumentConfig, StyleThreading};
-pub use document::{BaseDocument, DocGuard, DocGuardMut, Document, PlainDocument};
+pub use document::{
+    BaseDocument, BoundingRect, DocGuard, DocGuardMut, Document, PlainDocument, UserAgentStylesheet,
+};
 pub use markup5ever::{
     LocalName, Namespace, NamespaceStaticSet, Prefix, PrefixStaticSet, QualName, local_name,
     namespace_prefix, namespace_url, ns,
 };
 pub use mutator::DocumentMutator;
-pub use node::{Attribute, ElementData, Node, NodeData, TextNodeData};
+pub use node::{Attribute, DocumentData, ElementData, Node, NodeData, TextNodeData};
 pub use parley::FontContext;
+pub use scrolling::{ScrollBehavior, ScrollLogicalPosition};
+pub use tree::NodeTree;
+
+/// Convert a Blitz [`NodeId`] into a [`taffy::NodeId`] (which wraps a `u64`).
+#[inline]
+pub fn taffy_node_id(id: NodeId) -> taffy::NodeId {
+    taffy::NodeId::from(id.as_u64())
+}
+
+/// Convert a [`taffy::NodeId`] produced by [`taffy_node_id`] back into a Blitz [`NodeId`].
+#[inline]
+pub fn dom_node_id(id: taffy::NodeId) -> NodeId {
+    NodeId::from_u64(u64::from(id))
+}
 pub use style::Atom;
 pub use style::invalidation::element::restyle_hints::RestyleHint;
 pub use style::media_queries::MediaType;
+pub use style::stylist::RegisterCustomPropertyResult;
 pub type SelectorList = selectors::SelectorList<style::selector_parser::SelectorImpl>;
 pub use events::{EventDriver, EventHandler, NoopEventHandler};
 pub use html::{DummyHtmlParserProvider, HtmlParserProvider};

@@ -151,7 +151,7 @@ impl TreeSink for AuroraTreeSink {
             .collect::<BTreeMap<_, _>>();
         let node = Node::element_with_attributes(name.local.to_string(), attributes, Vec::new());
 
-        if name.local.as_ref() == "template" {
+        if &*name.local == "template" {
             let content = Node::document_fragment(Vec::new());
             self.template_contents
                 .borrow_mut()

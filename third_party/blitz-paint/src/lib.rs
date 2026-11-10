@@ -16,7 +16,7 @@ mod text;
 use std::collections::HashMap;
 
 use anyrender::{PaintScene, Scene};
-use blitz_dom::{BaseDocument, util::Color};
+use blitz_dom::{BaseDocument, NodeId, util::Color};
 use render::BlitzDomPainter;
 
 const FONT_EMBOLDEN_ENABLED: bool = cfg!(any(
@@ -28,7 +28,8 @@ const FONT_EMBOLDEN_ENABLED: bool = cfg!(any(
 /// The default color for text selection highlights
 const SELECTION_COLOR: Color = Color::from_rgb8(180, 213, 255);
 
-type CustomWidgetSceneMap = HashMap<(usize, usize), Scene>;
+/// Pre-computed `Scene`s for each CustomWidget, keyed by `(document id, node id)`
+type CustomWidgetSceneMap = HashMap<(usize, NodeId), Scene>;
 
 /// Paint a [`blitz_dom::BaseDocument`] by pushing drawing commands into
 /// an impl [`anyrender::PaintScene`].
@@ -107,20 +108,20 @@ fn build_custom_widget_scenes(
 fn process_custom_widget_node(
     doc: &mut BaseDocument,
     render_ctx: &mut impl anyrender::RenderContext,
-    node_id: usize,
+    node_id: NodeId,
     scale: f64,
 ) -> Option<Scene> {
     use blitz_dom::node::{CustomWidgetStatus, ProxyRenderContext};
 
     let node = doc.get_node_mut(node_id)?;
-    let width = (node.final_layout.size.width as f64 * scale) as u32;
-    let height = (node.final_layout.size.height as f64 * scale) as u32;
+    let width = (node.final_layout().size.width as f64 * scale) as u32;
+    let height = (node.final_layout().size.height as f64 * scale) as u32;
 
     if width == 0 || height == 0 {
         return None;
     }
 
-    let style = node.stylo_element_data.primary_styles()?;
+    let style = (*node.stylo_element_data().primary_styles()?).clone();
     let element = node.data.downcast_element_mut()?;
     let widget_data = element.custom_widget_data_mut()?;
 

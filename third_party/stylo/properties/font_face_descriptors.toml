@@ -11,13 +11,14 @@ type = "FamilyName"
 type = "SourceList"
 
 [font-style]
-type = "FontStyle"
+type = "FontStyleRange"
 
 [font-weight]
 type = "FontWeightRange"
 
-[font-stretch]
-type = "FontStretchRange"
+[font-width]
+type = "FontWidthRange"
+aliases = ["font-stretch"]
 
 [font-display]
 type = "FontDisplay"
@@ -27,10 +28,11 @@ type = "Vec<cssparser::UnicodeRange>"
 
 [font-feature-settings]
 type = "FontFeatureSettings"
+parser = "parse_for_font_face_rule"
 
 [font-variation-settings]
 type = "FontVariationSettings"
-gecko_pref = "layout.css.font-variations.enabled"
+parser = "parse_for_font_face_rule"
 
 [font-language-override]
 type = "FontLanguageOverride"

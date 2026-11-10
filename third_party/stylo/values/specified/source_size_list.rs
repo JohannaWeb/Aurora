@@ -10,7 +10,8 @@ use crate::parser::{Parse, ParserContext};
 use crate::queries::{FeatureType, QueryCondition};
 use crate::stylesheets::CustomMediaEvaluator;
 use crate::values::computed::{self, ToComputedValue};
-use crate::values::specified::{Length, NoCalcLength, ViewportPercentageLength};
+use crate::values::specified::length::LengthUnit;
+use crate::values::specified::{Length, NoCalcLength};
 use app_units::Au;
 use cssparser::{Delimiter, Parser, Token};
 use selectors::context::QuirksMode;
@@ -19,17 +20,14 @@ use style_traits::ParseError;
 /// A value for a `<source-size>`:
 ///
 /// https://html.spec.whatwg.org/multipage/#source-size
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct SourceSize {
     condition: QueryCondition,
     value: Length,
 }
 
 impl Parse for SourceSize {
-    fn parse<'i, 't>(
-        context: &ParserContext,
-        input: &mut Parser<'i, 't>,
-    ) -> Result<Self, ParseError<'i>> {
+    fn parse(context: &ParserContext, input: &mut Parser) -> Result<Self, ParseError> {
         let condition = QueryCondition::parse(context, input, FeatureType::Media)?;
         let value = Length::parse_non_negative(context, input)?;
         Ok(Self { condition, value })
@@ -39,7 +37,7 @@ impl Parse for SourceSize {
 /// A value for a `<source-size-list>`:
 ///
 /// https://html.spec.whatwg.org/multipage/#source-size-list
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct SourceSizeList {
     source_sizes: Vec<SourceSize>,
     value: Option<Length>,
@@ -72,10 +70,8 @@ impl SourceSizeList {
                 Some(source_size) => source_size.value.to_computed_value(context),
                 None => match self.value {
                     Some(ref v) => v.to_computed_value(context),
-                    None => Length::NoCalc(NoCalcLength::ViewportPercentage(
-                        ViewportPercentageLength::Vw(100.),
-                    ))
-                    .to_computed_value(context),
+                    None => Length::new(NoCalcLength::new(LengthUnit::Vw, 100.))
+                        .to_computed_value(context),
                 },
             }
         })
@@ -89,10 +85,7 @@ enum SourceSizeOrLength {
 }
 
 impl Parse for SourceSizeOrLength {
-    fn parse<'i, 't>(
-        context: &ParserContext,
-        input: &mut Parser<'i, 't>,
-    ) -> Result<Self, ParseError<'i>> {
+    fn parse(context: &ParserContext, input: &mut Parser) -> Result<Self, ParseError> {
         if let Ok(size) = input.try_parse(|input| SourceSize::parse(context, input)) {
             return Ok(SourceSizeOrLength::SourceSize(size));
         }
@@ -106,7 +99,7 @@ impl SourceSizeList {
     /// NOTE(emilio): This doesn't match the grammar in the spec, see:
     ///
     /// https://html.spec.whatwg.org/multipage/#parsing-a-sizes-attribute
-    pub fn parse<'i, 't>(context: &ParserContext, input: &mut Parser<'i, 't>) -> Self {
+    pub fn parse(context: &ParserContext, input: &mut Parser) -> Self {
         let mut source_sizes = vec![];
 
         loop {

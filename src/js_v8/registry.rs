@@ -181,14 +181,14 @@ impl NodeRegistry {
         render_document.borrow().hit_test_dom_node(x, y)
     }
 
-    pub(super) fn blitz_node_id(&self, node: &NodePtr) -> Option<usize> {
+    pub(super) fn blitz_node_id(&self, node: &NodePtr) -> Option<blitz_dom::NodeId> {
         self.render_document
             .borrow()
             .as_ref()
             .and_then(|doc| doc.borrow().blitz_node_id_for_dom(node))
     }
 
-    pub(super) fn dom_node_for_blitz_id(&self, node_id: usize) -> Option<NodePtr> {
+    pub(super) fn dom_node_for_blitz_id(&self, node_id: blitz_dom::NodeId) -> Option<NodePtr> {
         self.render_document
             .borrow()
             .as_ref()

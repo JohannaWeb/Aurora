@@ -12,6 +12,7 @@ use crate::invalidation::element::restyle_hints::RestyleHint;
 use crate::properties::ComputedValues;
 use crate::selector_parser::{PseudoElement, RestyleDamage, EAGER_PSEUDO_COUNT};
 use crate::style_resolver::{PrimaryStyle, ResolvedElementStyles, ResolvedStyle};
+use crate::values::specified::TreeCountingFunction;
 #[cfg(feature = "gecko")]
 use malloc_size_of::MallocSizeOfOps;
 use selectors::matching::SelectorCaches;
@@ -109,7 +110,7 @@ impl fmt::Debug for EagerPseudoArray {
 
 // Can't use [None; EAGER_PSEUDO_COUNT] here because it complains
 // about Copy not being implemented for our Arc type.
-const EMPTY_PSEUDO_ARRAY: &'static EagerPseudoArrayInner = &[None, None, None, None];
+const EMPTY_PSEUDO_ARRAY: &EagerPseudoArrayInner = &[None, None, None, None];
 
 impl EagerPseudoStyles {
     /// Returns whether there are any pseudo styles.
@@ -223,13 +224,39 @@ impl ElementStyles {
         });
 
         for pseudo_style in self.pseudos.as_array() {
-            if let Some(ref pseudo_style) = pseudo_style {
+            if let Some(pseudo_style) = pseudo_style {
                 usage = std::cmp::max(usage, usage_from_flags(pseudo_style.flags));
                 // Also check cached lazy pseudos on eager pseudo styles.
                 pseudo_style.each_cached_lazy_pseudo(|style| {
                     usage = std::cmp::max(usage, usage_from_flags(style.flags));
                 });
             }
+        }
+
+        usage
+    }
+
+    /// Whether this element uses sibling-count() or sibling-index().
+    pub fn uses_tree_counting_function(&self, t: TreeCountingFunction) -> bool {
+        let usage_from_flags = |flags: ComputedValueFlags| -> bool {
+            if t == TreeCountingFunction::SiblingCount
+                && flags.intersects(ComputedValueFlags::USES_SIBLING_COUNT)
+            {
+                return true;
+            }
+            if t == TreeCountingFunction::SiblingIndex
+                && flags.intersects(ComputedValueFlags::USES_SIBLING_INDEX)
+            {
+                return true;
+            }
+            false
+        };
+
+        let primary = self.primary();
+        let mut usage = usage_from_flags(primary.flags);
+
+        for pseudo_style in self.pseudos.as_array().iter().flatten() {
+            usage |= usage_from_flags(pseudo_style.flags);
         }
 
         usage
@@ -338,7 +365,7 @@ impl<'a> Deref for ElementDataRef<'a> {
     type Target = ElementData;
     #[inline]
     fn deref(&self) -> &Self::Target {
-        &*self.v
+        self.v
     }
 }
 
@@ -380,10 +407,10 @@ fn needs_to_match_self(hint: RestyleHint, style: &ComputedValues) -> bool {
     if hint.intersects(RestyleHint::RESTYLE_SELF_IF_PSEUDO) && style.is_pseudo_style() {
         return true;
     }
-    if hint.intersects(RestyleHint::RESTYLE_IF_AFFECTED_BY_ANCESTOR_FONT_METRICS)
+    if hint.intersects(RestyleHint::RESTYLE_IF_AFFECTED_BY_WM_OR_ANCESTOR_FONT)
         && style
             .flags
-            .contains(ComputedValueFlags::DEPENDS_ON_FONT_METRICS_IN_CONTAINER_QUERY)
+            .intersects(ComputedValueFlags::USES_FONT_OR_WM_RELATIVE_UNITS_ON_CONTAINER_QUERIES)
     {
         return true;
     }
@@ -392,19 +419,40 @@ fn needs_to_match_self(hint: RestyleHint, style: &ComputedValues) -> bool {
             | RestyleHint::RESTYLE_IF_AFFECTED_BY_NAMED_STYLE_CONTAINER,
     ) && style
         .flags
-        .contains(ComputedValueFlags::DEPENDS_ON_CONTAINER_STYLE_QUERY)
+        .intersects(ComputedValueFlags::DEPENDS_ON_CONTAINER_STYLE_QUERY)
+}
+
+fn needs_to_recascade_self(hint: RestyleHint, style: &ComputedValues) -> bool {
+    if hint.intersects(RestyleHint::RECASCADE_SELF) {
+        return true;
+    }
+    if hint.intersects(RestyleHint::RECASCADE_SELF_IF_INHERIT_RESET_STYLE)
+        && style
+            .flags
+            .contains(ComputedValueFlags::INHERITS_RESET_STYLE)
+    {
+        return true;
+    }
+    if hint.intersects(RestyleHint::RESTYLE_IF_AFFECTED_BY_WM_OR_ANCESTOR_FONT)
+        && style
+            .flags
+            .contains(ComputedValueFlags::USES_FONT_OR_WM_RELATIVE_UNITS)
+    {
+        return true;
+    }
+    false
 }
 
 impl ElementData {
     /// Invalidates style for this element, its descendants, and later siblings,
     /// based on the snapshot of the element that we took when attributes or
     /// state changed.
-    pub fn invalidate_style_if_needed<'a, E: TElement>(
+    pub fn invalidate_style_if_needed<E: TElement>(
         &mut self,
         element: E,
         shared_context: &SharedStyleContext,
         stack_limit_checker: Option<&StackLimitChecker>,
-        selector_caches: &'a mut SelectorCaches,
+        selector_caches: &mut SelectorCaches,
     ) -> InvalidationResult {
         // In animation-only restyle we shouldn't touch snapshot at all.
         if shared_context.traversal_flags.for_animation_only() {
@@ -521,12 +569,7 @@ impl ElementData {
             ));
         }
 
-        let needs_to_recascade_self = hint.intersects(RestyleHint::RECASCADE_SELF)
-            || (hint.intersects(RestyleHint::RECASCADE_SELF_IF_INHERIT_RESET_STYLE)
-                && style
-                    .flags
-                    .contains(ComputedValueFlags::INHERITS_RESET_STYLE));
-        if needs_to_recascade_self {
+        if needs_to_recascade_self(hint, style) {
             return Some(RestyleKind::CascadeOnly);
         }
 
@@ -563,15 +606,10 @@ impl ElementData {
             ));
         }
 
-        let needs_to_recascade_self = hint.intersects(RestyleHint::RECASCADE_SELF)
-            || (hint.intersects(RestyleHint::RECASCADE_SELF_IF_INHERIT_RESET_STYLE)
-                && style
-                    .flags
-                    .contains(ComputedValueFlags::INHERITS_RESET_STYLE));
-        if needs_to_recascade_self {
+        if needs_to_recascade_self(hint, style) {
             return Some(RestyleKind::CascadeOnly);
         }
-        return None;
+        None
     }
 
     /// Drops any restyle state from the element.

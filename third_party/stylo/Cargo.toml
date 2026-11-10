@@ -10,9 +10,9 @@
 # See Cargo.toml.orig for the original contents.
 
 [package]
-edition = "2021"
+edition = "2024"
 name = "stylo"
-version = "0.18.0"
+version = "0.22.0"
 authors = ["The Servo Project Developers"]
 build = "build.rs"
 links = "servo_style_crate"
@@ -25,6 +25,7 @@ description = "The Stylo CSS engine"
 readme = "README.md"
 license = "MPL-2.0"
 repository = "https://github.com/servo/stylo"
+resolver = "2"
 
 [features]
 default = ["servo"]
@@ -80,7 +81,7 @@ version = "2"
 version = "1.0"
 
 [dependencies.cssparser]
-version = "0.37"
+version = "0.38"
 
 [dependencies.derive_more]
 version = "2"
@@ -93,7 +94,7 @@ features = [
 ]
 
 [dependencies.dom]
-version = "0.18.0"
+version = "0.22.0"
 package = "stylo_dom"
 
 [dependencies.encoding_rs]
@@ -125,7 +126,7 @@ version = "1.0"
 version = "0.4"
 
 [dependencies.malloc_size_of]
-version = "0.18.0"
+version = "0.22.0"
 features = ["servo"]
 package = "stylo_malloc_size_of"
 
@@ -134,6 +135,10 @@ version = "0.1"
 
 [dependencies.mime]
 version = "0.3.13"
+optional = true
+
+[dependencies.mozbuild]
+version = "0.1"
 optional = true
 
 [dependencies.new_debug_unreachable]
@@ -167,7 +172,7 @@ version = "1"
 version = "2.1.1"
 
 [dependencies.selectors]
-version = "0.38.0"
+version = "0.41.0"
 
 [dependencies.serde]
 version = "1.0"
@@ -175,7 +180,7 @@ features = ["derive"]
 optional = true
 
 [dependencies.servo_arc]
-version = "0.4.3"
+version = "0.5.0"
 
 [dependencies.smallbitvec]
 version = "2.3.0"
@@ -187,11 +192,11 @@ version = "1.0"
 version = "1.1"
 
 [dependencies.static_prefs]
-version = "0.18.0"
+version = "0.22.0"
 package = "stylo_static_prefs"
 
 [dependencies.string_cache]
-version = "0.9"
+version = "0.11"
 optional = true
 
 [dependencies.strum]
@@ -201,27 +206,27 @@ version = "0.28"
 version = "0.28"
 
 [dependencies.style_derive]
-version = "0.18.0"
+version = "0.22.0"
 package = "stylo_derive"
 
 [dependencies.style_traits]
-version = "0.18.0"
+version = "0.22.0"
 features = ["servo"]
 package = "stylo_traits"
 
 [dependencies.stylo_atoms]
-version = "0.18.0"
+version = "0.22.0"
 optional = true
 
 [dependencies.thin-vec]
 version = "0.2.1"
 
 [dependencies.to_shmem]
-version = "0.4.0"
+version = "0.6.0"
 features = ["servo"]
 
 [dependencies.to_shmem_derive]
-version = "0.1.0"
+version = "0.2.0"
 
 [dependencies.uluru]
 version = "3.0"
@@ -235,7 +240,7 @@ optional = true
 version = "1.0.2"
 
 [dependencies.web_atoms]
-version = "0.2.0"
+version = "0.3.0"
 optional = true
 
 [build-dependencies.bindgen]

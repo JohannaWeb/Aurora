@@ -6,6 +6,7 @@
 
 use crate::derives::*;
 use crate::parser::{Parse, ParserContext};
+use crate::typed_om::{ToTyped, TypedValue};
 use crate::values::computed::border::BorderSideWidth as ComputedBorderSideWidth;
 use crate::values::computed::{Context, ToComputedValue};
 use crate::values::generics::border::{
@@ -21,17 +22,18 @@ use app_units::Au;
 use cssparser::Parser;
 use std::fmt::{self, Write};
 use style_traits::{CssWriter, ParseError, ToCss};
+use thin_vec::ThinVec;
 
 /// A specified value for a single side of a `border-style` property.
 ///
 /// The order here corresponds to the integer values from the border conflict
 /// resolution rules in CSS 2.1 § 17.6.2.1. Higher values override lower values.
 #[allow(missing_docs)]
-#[cfg_attr(feature = "servo", derive(Deserialize, Serialize))]
 #[derive(
     Clone,
     Copy,
     Debug,
+    Deserialize,
     Eq,
     FromPrimitive,
     MallocSizeOf,
@@ -39,6 +41,7 @@ use style_traits::{CssWriter, ParseError, ToCss};
     Parse,
     PartialEq,
     PartialOrd,
+    Serialize,
     SpecifiedValueInfo,
     ToComputedValue,
     ToCss,
@@ -71,12 +74,46 @@ impl BorderStyle {
 /// A specified value for the `border-image-width` property.
 pub type BorderImageWidth = Rect<BorderImageSideWidth>;
 
+impl ToTyped for BorderImageWidth {
+    // Note: The specification does not currently define how border image width
+    // should be reified into Typed OM. The current behavior follows existing
+    // WPT coverage (border-image-width.html). Syncing spec with UA/WPT
+    // behavior tracked in https://github.com/w3c/csswg-drafts/issues/13907
+    fn to_typed(&self, dest: &mut ThinVec<TypedValue>) -> Result<(), ()> {
+        if !self.all_sides_equal() {
+            return Err(());
+        }
+
+        self.0.to_typed(dest)
+    }
+}
+
 /// A specified value for a single side of a `border-image-width` property.
 pub type BorderImageSideWidth =
     GenericBorderImageSideWidth<NonNegativeLengthPercentage, NonNegativeNumber>;
 
 /// A specified value for the `border-image-slice` property.
 pub type BorderImageSlice = GenericBorderImageSlice<NonNegativeNumberOrPercentage>;
+
+impl ToTyped for BorderImageSlice {
+    // Note: The specification does not currently define how border image slice
+    // should be reified into Typed OM. The current behavior follows existing
+    // WPT coverage (border-image-slice.html). Syncing spec with UA/WPT
+    // behavior tracked in https://github.com/w3c/csswg-drafts/issues/13907
+    fn to_typed(&self, dest: &mut ThinVec<TypedValue>) -> Result<(), ()> {
+        if self.fill {
+            return Err(());
+        }
+
+        let offsets = &self.offsets;
+
+        if !offsets.all_sides_equal() {
+            return Err(());
+        }
+
+        offsets.0.to_typed(dest)
+    }
+}
 
 /// A specified value for the `border-radius` property.
 pub type BorderRadius = GenericBorderRadius<NonNegativeLengthPercentage>;
@@ -118,11 +155,11 @@ impl LineWidth {
         Self::Length(NonNegativeLength::zero())
     }
 
-    fn parse_quirky<'i, 't>(
+    fn parse_quirky(
         context: &ParserContext,
-        input: &mut Parser<'i, 't>,
+        input: &mut Parser,
         allow_quirks: AllowQuirks,
-    ) -> Result<Self, ParseError<'i>> {
+    ) -> Result<Self, ParseError> {
         if let Ok(length) =
             input.try_parse(|i| NonNegativeLength::parse_quirky(context, i, allow_quirks))
         {
@@ -137,10 +174,7 @@ impl LineWidth {
 }
 
 impl Parse for LineWidth {
-    fn parse<'i>(
-        context: &ParserContext,
-        input: &mut Parser<'i, '_>,
-    ) -> Result<Self, ParseError<'i>> {
+    fn parse(context: &ParserContext, input: &mut Parser) -> Result<Self, ParseError> {
         Self::parse_quirky(context, input, AllowQuirks::No)
     }
 }
@@ -182,20 +216,17 @@ impl BorderSideWidth {
     }
 
     /// Parses, with quirks.
-    pub fn parse_quirky<'i, 't>(
+    pub fn parse_quirky(
         context: &ParserContext,
-        input: &mut Parser<'i, 't>,
+        input: &mut Parser,
         allow_quirks: AllowQuirks,
-    ) -> Result<Self, ParseError<'i>> {
+    ) -> Result<Self, ParseError> {
         Ok(Self(LineWidth::parse_quirky(context, input, allow_quirks)?))
     }
 }
 
 impl Parse for BorderSideWidth {
-    fn parse<'i>(
-        context: &ParserContext,
-        input: &mut Parser<'i, '_>,
-    ) -> Result<Self, ParseError<'i>> {
+    fn parse(context: &ParserContext, input: &mut Parser) -> Result<Self, ParseError> {
         Self::parse_quirky(context, input, AllowQuirks::No)
     }
 }
@@ -243,7 +274,7 @@ impl ToComputedValue for BorderSideOffset {
     #[inline]
     fn to_computed_value(&self, context: &Context) -> Self::ComputedValue {
         let offset = Au::from_f32_px(self.0.to_computed_value(context).px());
-        let should_snap = match static_prefs::pref!("layout.css.outline-offset.snapping") {
+        let should_snap = match crate::pref!("layout.css.outline-offset.snapping") {
             1 => true,
             2 => context.device().chrome_rules_enabled_for_document(),
             _ => false,
@@ -273,10 +304,7 @@ impl BorderImageSideWidth {
 }
 
 impl Parse for BorderImageSlice {
-    fn parse<'i, 't>(
-        context: &ParserContext,
-        input: &mut Parser<'i, 't>,
-    ) -> Result<Self, ParseError<'i>> {
+    fn parse(context: &ParserContext, input: &mut Parser) -> Result<Self, ParseError> {
         let mut fill = input.try_parse(|i| i.expect_ident_matching("fill")).is_ok();
         let offsets = Rect::parse_with(context, input, NonNegativeNumberOrPercentage::parse)?;
         if !fill {
@@ -287,10 +315,7 @@ impl Parse for BorderImageSlice {
 }
 
 impl Parse for BorderRadius {
-    fn parse<'i, 't>(
-        context: &ParserContext,
-        input: &mut Parser<'i, 't>,
-    ) -> Result<Self, ParseError<'i>> {
+    fn parse(context: &ParserContext, input: &mut Parser) -> Result<Self, ParseError> {
         let widths = Rect::parse_with(context, input, NonNegativeLengthPercentage::parse)?;
         let heights = if input.try_parse(|i| i.expect_delim('/')).is_ok() {
             Rect::parse_with(context, input, NonNegativeLengthPercentage::parse)?
@@ -308,20 +333,14 @@ impl Parse for BorderRadius {
 }
 
 impl Parse for BorderCornerRadius {
-    fn parse<'i, 't>(
-        context: &ParserContext,
-        input: &mut Parser<'i, 't>,
-    ) -> Result<Self, ParseError<'i>> {
+    fn parse(context: &ParserContext, input: &mut Parser) -> Result<Self, ParseError> {
         Size2D::parse_with(context, input, NonNegativeLengthPercentage::parse)
             .map(GenericBorderCornerRadius)
     }
 }
 
 impl Parse for BorderSpacing {
-    fn parse<'i, 't>(
-        context: &ParserContext,
-        input: &mut Parser<'i, 't>,
-    ) -> Result<Self, ParseError<'i>> {
+    fn parse(context: &ParserContext, input: &mut Parser) -> Result<Self, ParseError> {
         Size2D::parse_with(context, input, |context, input| {
             NonNegativeLength::parse_quirky(context, input, AllowQuirks::Yes)
         })
@@ -331,15 +350,16 @@ impl Parse for BorderSpacing {
 
 /// A single border-image-repeat keyword.
 #[allow(missing_docs)]
-#[cfg_attr(feature = "servo", derive(Deserialize, Serialize))]
 #[derive(
     Clone,
     Copy,
     Debug,
+    Deserialize,
     Eq,
     MallocSizeOf,
     Parse,
     PartialEq,
+    Serialize,
     SpecifiedValueInfo,
     ToComputedValue,
     ToCss,
@@ -399,10 +419,7 @@ impl BorderImageRepeat {
 }
 
 impl Parse for BorderImageRepeat {
-    fn parse<'i, 't>(
-        _context: &ParserContext,
-        input: &mut Parser<'i, 't>,
-    ) -> Result<Self, ParseError<'i>> {
+    fn parse(_context: &ParserContext, input: &mut Parser) -> Result<Self, ParseError> {
         let horizontal = BorderImageRepeatKeyword::parse(input)?;
         let vertical = input.try_parse(BorderImageRepeatKeyword::parse).ok();
         Ok(BorderImageRepeat(

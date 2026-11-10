@@ -3,7 +3,7 @@ use std::str::FromStr;
 
 use style::servo_arc::Arc as ServoArc;
 use style::stylesheets::UrlExtraData;
-use url::Url;
+use url::{Position, Url};
 
 #[derive(Clone)]
 pub(crate) struct DocumentUrl {
@@ -18,6 +18,16 @@ impl DocumentUrl {
 
     pub(crate) fn resolve_relative(&self, raw: &str) -> Option<url::Url> {
         self.base_url.join(raw).ok()
+    }
+
+    /// Returns `true` if `other` refers to the same document as this URL, i.e. it is
+    /// identical to this URL except (possibly) for the fragment (`#...`) component.
+    ///
+    /// This is used to decide whether following a link should perform in-page fragment
+    /// navigation (scrolling) rather than a full navigation.
+    pub(crate) fn is_same_document(&self, other: &Url) -> bool {
+        let this: &Url = &self.base_url;
+        this[..Position::AfterQuery] == other[..Position::AfterQuery]
     }
 }
 

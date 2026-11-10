@@ -5,23 +5,24 @@
 //! Computed types for box properties.
 
 use crate::derives::*;
-use crate::values::animated::{Animate, Procedure, ToAnimatedValue};
+use crate::values::animated::ToAnimatedValue;
 use crate::values::computed::length::{LengthPercentage, NonNegativeLength};
 use crate::values::computed::{Context, Integer, Number, ToComputedValue};
 use crate::values::generics::box_::{
     GenericBaselineShift, GenericContainIntrinsicSize, GenericLineClamp, GenericOverflowClipMargin,
-    GenericPerspective,
+    GenericPerspective, GenericScrollbarInset,
 };
+use crate::values::generics::GreaterThanOrEqualToOne;
 use crate::values::specified::box_ as specified;
 use std::fmt;
 use style_traits::{CssWriter, ToCss};
 
 pub use crate::values::specified::box_::{
     AlignmentBaseline, Appearance, BaselineSource, BreakBetween, BreakWithin, Clear, Contain,
-    ContainerName, ContainerType, ContentVisibility, Display, DominantBaseline, Float, Overflow,
-    OverflowAnchor, OverscrollBehavior, PositionProperty, ScrollSnapAlign, ScrollSnapAxis,
-    ScrollSnapStop, ScrollSnapStrictness, ScrollSnapType, ScrollbarGutter, TouchAction, WillChange,
-    WritingModeProperty,
+    ContainerName, ContainerType, ContentVisibility, Display, DominantBaseline, Float, MarginTrim,
+    Overflow, OverflowAnchor, OverscrollBehavior, PositionProperty, ScrollSnapAlign,
+    ScrollSnapAxis, ScrollSnapStop, ScrollSnapStrictness, ScrollSnapType, ScrollbarGutter,
+    TouchAction, WillChange, WritingModeProperty,
 };
 
 /// A computed value for the `baseline-shift` property.
@@ -29,6 +30,9 @@ pub type BaselineShift = GenericBaselineShift<LengthPercentage>;
 
 /// A computed value for the `overflow-clip-margin` property.
 pub type OverflowClipMargin = GenericOverflowClipMargin<NonNegativeLength>;
+
+/// A computed value for the `-moz-scrollbar-inset-block` / `-inline` properties.
+pub type ScrollbarInset = GenericScrollbarInset<NonNegativeLength>;
 
 /// A computed value for the `contain-intrinsic-size` property.
 pub type ContainIntrinsicSize = GenericContainIntrinsicSize<NonNegativeLength>;
@@ -45,29 +49,27 @@ impl ContainIntrinsicSize {
 }
 
 /// A computed value for the `line-clamp` property.
-pub type LineClamp = GenericLineClamp<Integer>;
-
-impl Animate for LineClamp {
-    #[inline]
-    fn animate(&self, other: &Self, procedure: Procedure) -> Result<Self, ()> {
-        if self.is_none() != other.is_none() {
-            return Err(());
-        }
-        if self.is_none() {
-            return Ok(Self::none());
-        }
-        Ok(Self(self.0.animate(&other.0, procedure)?.max(1)))
-    }
-}
+pub type LineClamp = GenericLineClamp<GreaterThanOrEqualToOne<Integer>>;
 
 /// A computed value for the `perspective` property.
 pub type Perspective = GenericPerspective<NonNegativeLength>;
 
 /// A computed value for the `resize` property.
 #[allow(missing_docs)]
-#[cfg_attr(feature = "servo", derive(Deserialize, Serialize))]
 #[derive(
-    Clone, Copy, Debug, Eq, Hash, MallocSizeOf, Parse, PartialEq, ToCss, ToResolvedValue, ToTyped,
+    Clone,
+    Copy,
+    Debug,
+    Deserialize,
+    Eq,
+    Hash,
+    MallocSizeOf,
+    Parse,
+    PartialEq,
+    Serialize,
+    ToCss,
+    ToResolvedValue,
+    ToTyped,
 )]
 #[repr(u8)]
 pub enum Resize {
@@ -130,13 +132,14 @@ impl ToComputedValue for specified::Resize {
     ComputeSquaredDistance,
     Copy,
     Debug,
+    Deserialize,
     MallocSizeOf,
     PartialEq,
     PartialOrd,
+    Serialize,
     ToResolvedValue,
     ToTyped,
 )]
-#[cfg_attr(feature = "servo", derive(Deserialize, Serialize))]
 #[repr(C)]
 pub struct Zoom(f32);
 
@@ -144,11 +147,15 @@ impl ToComputedValue for specified::Zoom {
     type ComputedValue = Zoom;
 
     #[inline]
-    fn to_computed_value(&self, _: &Context) -> Self::ComputedValue {
-        let n = match *self {
+    fn to_computed_value(&self, context: &Context) -> Self::ComputedValue {
+        let c = match *self {
             Self::Normal => return Zoom::ONE,
             Self::Document => return Zoom::DOCUMENT,
-            Self::Value(ref n) => n.0.to_number().get(),
+            Self::Value(ref n) => n.0.to_computed_value(context),
+        };
+        let n = match c {
+            super::NumberOrPercentage::Percentage(p) => p.0,
+            super::NumberOrPercentage::Number(n) => n,
         };
         if n == 0.0 {
             // For legacy reasons, zoom: 0 (and 0%) computes to 1. ¯\_(ツ)_/¯

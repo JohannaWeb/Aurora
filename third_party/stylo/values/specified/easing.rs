@@ -9,6 +9,7 @@ use crate::values::computed::easing::TimingFunction as ComputedTimingFunction;
 use crate::values::computed::{Context, ToComputedValue};
 use crate::values::generics::easing::TimingFunction as GenericTimingFunction;
 use crate::values::generics::easing::{StepPosition, TimingKeyword};
+use crate::values::specified::percentage::ToPercentage;
 use crate::values::specified::{AnimationName, Integer, Number, Percentage};
 use cssparser::{match_ignore_ascii_case, Delimiter, Parser, Token};
 use selectors::parser::SelectorParseErrorKind;
@@ -18,10 +19,7 @@ use style_traits::{ParseError, StyleParseErrorKind};
 pub type TimingFunction = GenericTimingFunction<Integer, Number, PiecewiseLinearFunction>;
 
 impl Parse for TimingFunction {
-    fn parse<'i, 't>(
-        context: &ParserContext,
-        input: &mut Parser<'i, 't>,
-    ) -> Result<Self, ParseError<'i>> {
+    fn parse(context: &ParserContext, input: &mut Parser) -> Result<Self, ParseError> {
         if let Ok(keyword) = input.try_parse(TimingKeyword::parse) {
             return Ok(GenericTimingFunction::Keyword(keyword));
         }
@@ -30,31 +28,27 @@ impl Parse for TimingFunction {
                 "step-start" => StepPosition::Start,
                 "step-end" => StepPosition::End,
                 _ => {
-                    return Err(input.new_custom_error(
-                        SelectorParseErrorKind::UnexpectedIdent(ident.clone())
+                    return Err(ParseError::custom(
+                        SelectorParseErrorKind::UnexpectedIdent
                     ));
                 },
             };
             return Ok(GenericTimingFunction::Steps(Integer::new(1), position));
         }
-        let location = input.current_source_location();
         let function = input.expect_function()?.clone();
         input.parse_nested_block(move |i| {
             match_ignore_ascii_case! { &function,
                 "cubic-bezier" => Self::parse_cubic_bezier(context, i),
                 "steps" => Self::parse_steps(context, i),
                 "linear" => Self::parse_linear_function(context, i),
-                _ => Err(location.new_custom_error(StyleParseErrorKind::UnexpectedFunction(function.clone()))),
+                _ => Err(ParseError::custom(StyleParseErrorKind::UnexpectedFunction)),
             }
         })
     }
 }
 
 impl TimingFunction {
-    fn parse_cubic_bezier<'i, 't>(
-        context: &ParserContext,
-        input: &mut Parser<'i, 't>,
-    ) -> Result<Self, ParseError<'i>> {
+    fn parse_cubic_bezier(context: &ParserContext, input: &mut Parser) -> Result<Self, ParseError> {
         let x1 = Number::parse(context, input)?;
         input.expect_comma()?;
         let y1 = Number::parse(context, input)?;
@@ -63,17 +57,22 @@ impl TimingFunction {
         input.expect_comma()?;
         let y2 = Number::parse(context, input)?;
 
-        if x1.get() < 0.0 || x1.get() > 1.0 || x2.get() < 0.0 || x2.get() > 1.0 {
-            return Err(input.new_custom_error(StyleParseErrorKind::UnspecifiedError));
+        // TODO(Bug 2037743) - Enable calc()-expressions that can only be resolved at
+        // computed value time (due to relative lengths, sibling-index(), etc.).
+        if let (Some(x1), Some(_), Some(x2), Some(_)) =
+            (x1.resolve(), y1.resolve(), x2.resolve(), y2.resolve())
+        {
+            if !(0.0..=1.0).contains(&x1) || !(0.0..=1.0).contains(&x2) {
+                return Err(ParseError::custom(StyleParseErrorKind::UnspecifiedError));
+            }
+        } else {
+            return Err(ParseError::custom(StyleParseErrorKind::UnspecifiedError));
         }
 
         Ok(GenericTimingFunction::CubicBezier { x1, y1, x2, y2 })
     }
 
-    fn parse_steps<'i, 't>(
-        context: &ParserContext,
-        input: &mut Parser<'i, 't>,
-    ) -> Result<Self, ParseError<'i>> {
+    fn parse_steps(context: &ParserContext, input: &mut Parser) -> Result<Self, ParseError> {
         let steps = Integer::parse_positive(context, input)?;
         let position = input
             .try_parse(|i| {
@@ -82,22 +81,29 @@ impl TimingFunction {
             })
             .unwrap_or(StepPosition::End);
 
+        // TODO(Bug 2037743) - Enable calc()-expressions that can only be resolved at
+        // computed value time (due to relative lengths, sibling-index(), etc.).
+        let num_steps = match steps.resolve() {
+            Some(v) => v,
+            None => return Err(ParseError::custom(StyleParseErrorKind::UnspecifiedError)),
+        };
+
         // jump-none accepts a positive integer greater than 1.
         // FIXME(emilio): The spec asks us to avoid rejecting it at parse
         // time except until computed value time.
         //
         // It's not totally clear it's worth it though, and no other browser
         // does this.
-        if position == StepPosition::JumpNone && steps.value() <= 1 {
-            return Err(input.new_custom_error(StyleParseErrorKind::UnspecifiedError));
+        if position == StepPosition::JumpNone && num_steps <= 1 {
+            return Err(ParseError::custom(StyleParseErrorKind::UnspecifiedError));
         }
         Ok(GenericTimingFunction::Steps(steps, position))
     }
 
-    fn parse_linear_function<'i, 't>(
+    fn parse_linear_function(
         context: &ParserContext,
-        input: &mut Parser<'i, 't>,
-    ) -> Result<Self, ParseError<'i>> {
+        input: &mut Parser,
+    ) -> Result<Self, ParseError> {
         let mut builder = PiecewiseLinearFunctionBuilder::default();
         let mut num_specified_stops = 0;
         // Closely follows `parse_comma_separated`, but can generate multiple entries for one comma-separated entry.
@@ -113,14 +119,26 @@ impl TimingFunction {
                     input_start = i.try_parse(|i| Percentage::parse(context, i)).ok();
                     input_end = i.try_parse(|i| Percentage::parse(context, i)).ok();
                 }
-                builder.push(output.into(), input_start.map(|v| v.get()).into());
+
+                // TODO(Bug 2037743) - Enable calc()-expressions that can only be resolved at
+                // computed value time (due to relative lengths, sibling-index(), etc.).
+                let output = match output.resolve() {
+                    Some(v) => v,
+                    None => return Err(ParseError::custom(StyleParseErrorKind::UnspecifiedError)),
+                };
+                if matches!(input_start.as_ref().or(input_end.as_ref()), Some(p) if p.resolve().is_none()) {
+                    return Err(ParseError::custom(StyleParseErrorKind::UnspecifiedError));
+                }
+
+                let has_input_start = input_start.is_some();
+                builder.push(
+                    output,
+                    input_start.map(|v| v.to_percentage().unwrap()),
+                );
                 num_specified_stops += 1;
                 if input_end.is_some() {
-                    debug_assert!(
-                        input_start.is_some(),
-                        "Input end valid but not input start?"
-                    );
-                    builder.push(output.into(), input_end.map(|v| v.get()).into());
+                    debug_assert!(has_input_start, "Input end valid but not input start?");
+                    builder.push(output, input_end.map(|v| v.to_percentage().unwrap()));
                 }
 
                 Ok(())
@@ -135,7 +153,7 @@ impl TimingFunction {
         // By spec, specifying only a single stop makes the function invalid, even if that single entry may generate
         // two entries.
         if num_specified_stops < 2 {
-            return Err(input.new_custom_error(StyleParseErrorKind::UnspecifiedError));
+            return Err(ParseError::custom(StyleParseErrorKind::UnspecifiedError));
         }
 
         Ok(GenericTimingFunction::LinearFunction(builder.build()))
@@ -162,18 +180,21 @@ impl TimingFunction {
     pub fn to_computed_value_without_context(&self) -> ComputedTimingFunction {
         match &self {
             GenericTimingFunction::Steps(steps, pos) => {
-                GenericTimingFunction::Steps(steps.value(), *pos)
+                // Resolvable value was enforced at parse time
+                GenericTimingFunction::Steps(steps.resolve().unwrap(), *pos)
             },
             GenericTimingFunction::CubicBezier { x1, y1, x2, y2 } => {
+                // Resolvable value was enforced at parse time
                 GenericTimingFunction::CubicBezier {
-                    x1: x1.get(),
-                    y1: y1.get(),
-                    x2: x2.get(),
-                    y2: y2.get(),
+                    x1: x1.resolve().unwrap(),
+                    y1: y1.resolve().unwrap(),
+                    x2: x2.resolve().unwrap(),
+                    y2: y2.resolve().unwrap(),
                 }
             },
             GenericTimingFunction::Keyword(keyword) => GenericTimingFunction::Keyword(*keyword),
             GenericTimingFunction::LinearFunction(function) => {
+                // Resolvable value was enforced at parse time
                 GenericTimingFunction::LinearFunction(function.clone())
             },
         }

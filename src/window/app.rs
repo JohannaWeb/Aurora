@@ -261,7 +261,7 @@ impl AuroraApp {
         device_handle
             .queue
             .submit(std::iter::once(encoder.finish()));
-        surface_texture.present();
+        device_handle.queue.present(surface_texture);
     }
 
     /// Chrome props for the live window: every tab's label plus the active

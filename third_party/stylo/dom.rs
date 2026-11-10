@@ -8,9 +8,9 @@
 #![deny(missing_docs)]
 
 use crate::applicable_declarations::ApplicableDeclarationBlock;
-use crate::context::SharedStyleContext;
 #[cfg(feature = "gecko")]
 use crate::context::UpdateAnimationsTasks;
+use crate::context::{SharedStyleContext, TreeCountingCaches};
 use crate::data::{ElementData, ElementDataMut, ElementDataRef};
 use crate::device::Device;
 use crate::properties::{AnimationDeclarations, ComputedValues, PropertyDeclarationBlock};
@@ -19,7 +19,7 @@ use crate::selector_parser::{AttrValue, Lang, PseudoElement, RestyleDamage, Sele
 use crate::shared_lock::{Locked, SharedRwLock};
 use crate::stylesheets::scope_rule::ImplicitScopeRoot;
 use crate::stylist::CascadeData;
-use crate::values::computed::Display;
+use crate::values::computed::{Display, TreeCountingResult};
 use crate::values::AtomIdent;
 use crate::{LocalName, Namespace, WeakAtom};
 use dom::ElementState;
@@ -352,7 +352,7 @@ where
     stringify(f, n)?;
     if let Some(e) = n.as_element() {
         for kid in e.traversal_children() {
-            writeln!(f, "")?;
+            writeln!(f)?;
             fmt_subtree(f, stringify, kid, indent + 1)?;
         }
     }
@@ -415,7 +415,7 @@ pub trait TElement:
     + Copy
     + Clone
     + SelectorsElement<Impl = SelectorImpl>
-    + AttributeProvider
+    + ElementContext
 {
     /// The concrete node type.
     type ConcreteNode: TNode<ConcreteElement = Self>;
@@ -486,6 +486,11 @@ pub trait TElement:
         false
     }
 
+    /// Return whether this element is an HTML <video> or <audio> element.
+    fn is_html_media_element(&self) -> bool {
+        false
+    }
+
     /// Returns the bloom filter for this element's subtree, used for fast
     /// querySelector optimization by allowing subtrees to be skipped.
     /// Each element's filter includes hashes for all of it's class names and
@@ -505,7 +510,7 @@ pub trait TElement:
     }
 
     /// Convert a 32-bit atom hash to a bloom filter value using k=2 hash functions.
-    /// This must match the C++ implementation of HashForBloomFilter in Element.cpp
+    /// This must match the C++ implementation of AttrArray::HashForBloomFilter.
     fn hash_for_bloom_filter(hash: u32) -> u64 {
         // On 32-bit platforms, we have 31 bits available + 1 tag bit.
         // On 64-bit platforms, we have 63 bits available + 1 tag bit.
@@ -528,10 +533,6 @@ pub trait TElement:
 
     /// Get this element's style attribute.
     fn style_attribute(&self) -> Option<ArcBorrow<'_, Locked<PropertyDeclarationBlock>>>;
-
-    /// Unset the style attribute's dirty bit.
-    /// Servo doesn't need to manage ditry bit for style attribute.
-    fn unset_dirty_style_attribute(&self) {}
 
     /// Get this element's SMIL override declarations.
     fn smil_override(&self) -> Option<ArcBorrow<'_, Locked<PropertyDeclarationBlock>>> {
@@ -701,7 +702,9 @@ pub trait TElement:
     /// animation-only dirty descendants bit, and the lazy frame construction
     /// descendants bit.
     unsafe fn clear_descendant_bits(&self) {
-        self.unset_dirty_descendants();
+        unsafe {
+            self.unset_dirty_descendants();
+        }
     }
 
     /// Returns true if this element is a visited link.
@@ -798,7 +801,7 @@ pub trait TElement:
             Some(d) => d,
             None => return false,
         };
-        return data.hint.has_animation_hint();
+        data.hint.has_animation_hint()
     }
 
     /// Called when a highlight pseudo-element (::selection, ::highlight,
@@ -812,13 +815,11 @@ pub trait TElement:
     /// The shadow root which roots the subtree this element is contained in.
     fn containing_shadow(&self) -> Option<<Self::ConcreteNode as TNode>::ConcreteShadowRoot>;
 
-    /// Return the element which we can use to look up rules in the selector
-    /// maps.
-    ///
-    /// This is always the element itself, except in the case where we are an
-    /// element-backed pseudo-element, in which case we return the originating
-    /// element.
-    fn rule_hash_target(&self) -> Self {
+    /// If this element is not a pseudo-element, return self. Otherwise,
+    /// return the ultimate originating element [1]. This is the element
+    /// used to look up rules in the selector maps.
+    /// [1]: https://drafts.csswg.org/selectors-4/#ultimate-originating-element
+    fn ultimate_originating_element(&self) -> Self {
         let mut cur = *self;
         while cur.is_pseudo_element() {
             cur = cur
@@ -845,7 +846,7 @@ pub trait TElement:
     {
         use crate::rule_collector::containing_shadow_ignoring_svg_use;
 
-        let target = self.rule_hash_target();
+        let target = self.ultimate_originating_element();
         let matches_user_and_content_rules = target.matches_user_and_content_rules();
         let mut doc_rules_apply = matches_user_and_content_rules;
 
@@ -985,38 +986,96 @@ pub trait TElement:
     fn compute_layout_damage(_old: &ComputedValues, _new: &ComputedValues) -> RestyleDamage {
         Default::default()
     }
+
+    /// Return the value of the given custom attribute if it exists.
+    fn get_attr(&self, attr: &LocalName, namespace: &Namespace) -> Option<String>;
+
+    /// Traverse the siblings of the element, returning the element's sibling-index()
+    /// and sibling-count(). Also populates `caches` with the sibling-index() and
+    /// sibling-count() values for all siblings of this element.
+    fn get_tree_counting_result(&self, caches: &mut TreeCountingCaches) -> TreeCountingResult {
+        let Some(parent) = self.as_node().parent_node() else {
+            return TreeCountingResult::default();
+        };
+
+        let mut curr = parent.first_child();
+        let mut index = 0u32;
+        let mut count = 0u32;
+        while let Some(node) = curr {
+            if let Some(element) = node.as_element() {
+                count += 1;
+                if *self == element {
+                    index = count;
+                }
+                caches.sibling_index.insert(element.opaque(), count);
+            }
+            curr = node.next_sibling();
+        }
+        caches.sibling_count.insert(parent.opaque(), count);
+
+        TreeCountingResult::new(index, count)
+    }
 }
 
-/// The attribute provider trait
-pub trait AttributeProvider {
-    /// Return the value of the given custom attibute if it exists.
+/// Provides element-level context needed during style computation.
+pub trait ElementContext {
+    /// Opaque handle to the element.
+    fn opaque_element(&self) -> Option<OpaqueElement>;
+
+    /// Opaque handle to the element's parent node.
+    fn opaque_parent(&self) -> Option<OpaqueNode>;
+
+    /// Return the value of the given custom attribute if it exists.
     fn get_attr(&self, attr: &LocalName, namespace: &Namespace) -> Option<String>;
+
+    /// Traverse the siblings of the element, returning the element's sibling-index()
+    /// and sibling-count(). Also populates `caches` with the sibling-index() and
+    /// sibling-count() values for all siblings of this element.
+    fn get_tree_counting_result(&self, caches: &mut TreeCountingCaches) -> TreeCountingResult;
+}
+
+impl<T: TElement> ElementContext for T {
+    fn opaque_element(&self) -> Option<OpaqueElement> {
+        Some(self.opaque())
+    }
+
+    fn opaque_parent(&self) -> Option<OpaqueNode> {
+        self.as_node().parent_node().map(|n| n.opaque())
+    }
+
+    fn get_attr(&self, attr: &LocalName, namespace: &Namespace) -> Option<String> {
+        TElement::get_attr(self, attr, namespace)
+    }
+
+    fn get_tree_counting_result(&self, caches: &mut TreeCountingCaches) -> TreeCountingResult {
+        TElement::get_tree_counting_result(self, caches)
+    }
 }
 
 /// A set of the attributes used to compute a style that uses `attr()`
 pub type AttributeReferences = Option<Box<PrecomputedHashMap<LocalName, SmallVec<[Namespace; 1]>>>>;
 
-/// A data structure to keep track of the names queried from a provider.
+/// A data structure to keep track of the names queried from an element.
 pub struct AttributeTracker<'a> {
     /// The element that queries for attributes.
-    pub provider: &'a dyn AttributeProvider,
+    pub context: &'a dyn ElementContext,
     /// The set of attributes we have queried.
     pub references: AttributeReferences,
 }
 
 impl<'a> AttributeTracker<'a> {
     /// Construct a new attribute tracker trivially.
-    pub fn new(provider: &'a dyn AttributeProvider) -> Self {
+    pub fn new(context: &'a dyn ElementContext) -> Self {
         Self {
-            provider,
+            context,
             references: None,
         }
     }
 
-    /// Consstruct a new dummy attribute tracker
+    /// Construct a new dummy attribute tracker
     pub fn new_dummy() -> Self {
         Self {
-            provider: &DummyAttributeProvider {},
+            context: &DummyElementContext {},
             references: None,
         }
     }
@@ -1038,17 +1097,29 @@ impl<'a> AttributeTracker<'a> {
             .entry(name.clone())
             .or_default()
             .push(namespace.clone());
-        self.provider.get_attr(name, namespace)
+        self.context.get_attr(name, namespace)
     }
 }
 
-/// A dummy AttributeProvider that returns none to any attribute query.
+/// A dummy ElementContext that returns default values to any query.
 #[derive(Clone, Debug, PartialEq)]
-struct DummyAttributeProvider;
+pub struct DummyElementContext;
 
-impl AttributeProvider for DummyAttributeProvider {
+impl ElementContext for DummyElementContext {
     fn get_attr(&self, _attr: &LocalName, _namespace: &Namespace) -> Option<String> {
         None
+    }
+
+    fn opaque_element(&self) -> Option<OpaqueElement> {
+        None
+    }
+
+    fn opaque_parent(&self) -> Option<OpaqueNode> {
+        None
+    }
+
+    fn get_tree_counting_result(&self, _: &mut TreeCountingCaches) -> TreeCountingResult {
+        TreeCountingResult::default()
     }
 }
 

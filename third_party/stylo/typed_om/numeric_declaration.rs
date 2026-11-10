@@ -6,10 +6,11 @@
 
 use crate::derives::*;
 use crate::parser::{Parse, ParserContext};
-use crate::typed_om::numeric_values::NoCalcNumeric;
-use crate::values::generics::calc::CalcUnits;
-use crate::values::specified::calc::{AllowParse, CalcNode};
-use crate::values::specified::NoCalcLength;
+use crate::typed_om::numeric::NoCalcNumeric;
+use crate::values::specified::calc::{CalcNode, CalcParseFlags, PercentageContext};
+use crate::values::specified::{
+    NoCalcAngle, NoCalcLength, NoCalcNumber, NoCalcPercentage, NoCalcTime,
+};
 use cssparser::{Parser, Token};
 use style_traits::values::specified::AllowedNumericType;
 use style_traits::{ParseError, StyleParseErrorKind};
@@ -28,26 +29,37 @@ pub enum NumericDeclaration {
 
 impl Parse for NumericDeclaration {
     /// <https://drafts.css-houdini.org/css-typed-om-1/#dom-cssnumericvalue-parse>
-    fn parse<'i, 't>(
-        context: &ParserContext,
-        input: &mut Parser<'i, 't>,
-    ) -> Result<Self, ParseError<'i>> {
-        let location = input.current_source_location();
-
+    fn parse(context: &ParserContext, input: &mut Parser) -> Result<Self, ParseError> {
         // Step 1.
         let token = input.next()?;
 
         // Step 2.
         match *token {
+            Token::Number { value, .. } => Ok(Self::NoCalc(NoCalcNumeric::Number(
+                NoCalcNumber::new(value),
+            ))),
+
+            Token::Percentage { unit_value, .. } => Ok(Self::NoCalc(NoCalcNumeric::Percentage(
+                NoCalcPercentage::new(unit_value),
+            ))),
+
             Token::Dimension {
                 value, ref unit, ..
             } => {
-                NoCalcLength::parse_dimension_with_context(context, value, unit)
-                    .map(NoCalcNumeric::Length)
-                    .map(Self::NoCalc)
-                    .map_err(|()| location.new_unexpected_token_error(token.clone()))
+                if let Ok(length) = NoCalcLength::parse_dimension_with_context(context, value, unit)
+                {
+                    return Ok(Self::NoCalc(NoCalcNumeric::Length(length)));
+                }
 
-                // TODO: Add support for other values.
+                if let Ok(angle) = NoCalcAngle::parse_dimension(value, unit) {
+                    return Ok(Self::NoCalc(NoCalcNumeric::Angle(angle)));
+                }
+
+                if let Ok(time) = NoCalcTime::parse_dimension(value, unit) {
+                    return Ok(Self::NoCalc(NoCalcNumeric::Time(time)));
+                }
+
+                Err(ParseError::unexpected_token())
 
                 // Step 3.
 
@@ -56,24 +68,26 @@ impl Parse for NumericDeclaration {
             },
 
             Token::Function(ref name) => {
-                let function = CalcNode::math_function(context, name, location)?;
-                let allow_all_units = AllowParse::new(CalcUnits::ALL);
-                let node = CalcNode::parse(context, input, function, allow_all_units)?;
+                let function = CalcNode::math_function(context, name)?;
+                let node = CalcNode::parse(
+                    context,
+                    input,
+                    function,
+                    CalcParseFlags::new(PercentageContext::allowed()),
+                )?;
 
                 let allow_all_types = AllowedNumericType::All;
                 let _ = node
                     .clone()
                     .into_length_or_percentage(allow_all_types)
-                    .map_err(|()| {
-                        location.new_custom_error(StyleParseErrorKind::UnspecifiedError)
-                    })?;
+                    .map_err(|()| ParseError::custom(StyleParseErrorKind::UnspecifiedError))?;
 
                 // TODO: Add support for other values represented by a `calc()` expression.
 
                 Ok(Self::Calc(node))
             },
 
-            ref token => return Err(location.new_unexpected_token_error(token.clone())),
+            _ => Err(ParseError::unexpected_token()),
         }
     }
 }

@@ -1,9 +1,7 @@
 //! Resolve style and layout
 
-use std::{
-    cell::RefCell,
-    time::{SystemTime, UNIX_EPOCH},
-};
+use blitz_traits::node_id::NodeId;
+use std::cell::RefCell;
 
 use debug_timer::debug_timer;
 use kurbo::{Affine, Rect};
@@ -20,17 +18,16 @@ thread_local! {
     pub(crate) static LAYOUT_CTX: RefCell<Option<Box<LayoutContext<TextBrush>>>> = const { RefCell::new(None) };
 }
 
-#[cfg(feature = "incremental")]
-use style::selector_parser::RestyleDamage;
 use taffy::AvailableSpace;
 
 use crate::{
-    BaseDocument, NON_INCREMENTAL,
-    events::ScrollAnimationState,
+    BaseDocument,
     layout::{
+        LayoutPassState,
         construct::{
             ConstructionTask, ConstructionTaskData, ConstructionTaskResult,
-            ConstructionTaskResultData, build_inline_layout_into, collect_layout_children,
+            ConstructionTaskResultData, LayoutChildren, build_inline_layout_into,
+            collect_layout_children,
         },
         damage::{ALL_DAMAGE, CONSTRUCT_BOX, CONSTRUCT_DESCENDENT, CONSTRUCT_FC},
     },
@@ -40,7 +37,7 @@ use crate::{
 impl BaseDocument {
     /// Restyle the tree and then relayout it
     pub fn resolve(&mut self, current_time_for_animations: f64) {
-        if TDocument::as_node(&&self.nodes[0])
+        if TDocument::as_node(&self.root_node())
             .first_element_child()
             .is_none()
         {
@@ -52,53 +49,99 @@ impl BaseDocument {
         // Process messages that have been sent to our message channel (e.g. loaded resource)
         self.handle_messages();
 
+        // While render-blocking resources (e.g. stylesheets linked from the `<head>`) are
+        // still loading, don't resolve styles or layout (matching how browsers block
+        // rendering). Resolving styles before the document's stylesheets have loaded would
+        // give elements computed styles based on an incomplete cascade, and a later restyle
+        // (once the stylesheet loads) would treat those as genuine "before-change styles",
+        // spuriously starting CSS transitions from unstyled values. See issue #689.
+        //
+        // `handle_messages` above must still run so that loaded resources are ingested and
+        // this state can clear.
+        if self.has_pending_critical_resources() {
+            return;
+        }
+
         self.resolve_scroll_animation();
 
+        // Drop scrollbar-activity entries whose fade-out has finished (also
+        // sheds entries for removed nodes).
+        {
+            use crate::node::scrollbar::{FADE_DELAY, FADE_DURATION};
+            self.scrollbar_activity
+                .retain(|_, last| last.elapsed() < FADE_DELAY + FADE_DURATION);
+        }
+
         let root_node_id = self.root_element().id;
-        debug_timer!(timer, feature = "log_phase_times");
+        debug_timer!(timer, feature = "log-phase-times");
+
+        // Apply any device changes (viewport resize, zoom, color-scheme, etc)
+        // accumulated since the last resolve as a single device rebuild.
+        self.flush_pending_device_changes();
 
         // we need to resolve stylist first since it will need to drive our layout bits
         self.resolve_stylist(current_time_for_animations);
         timer.record_time("style");
 
+        // Non-incremental mode is "every node is damaged every frame": mark the
+        // whole tree and let the same damage pipeline reconstruct and relayout
+        // everything.
+        if !self.incremental_layout {
+            self.mark_all_damaged();
+            timer.record_time("mark_all");
+        }
+
         // Propagate damage flags (from mutation and restyles) up and down the tree
-        #[cfg(feature = "incremental")]
-        self.propagate_damage_flags(root_node_id, RestyleDamage::empty());
-        #[cfg(feature = "incremental")]
+        self.propagate_damage_flags(root_node_id);
         timer.record_time("damage");
 
         // Fix up tree for layout (insert anonymous blocks as necessary, etc)
         self.resolve_layout_children();
+        #[cfg(debug_assertions)]
+        self.assert_layout_parents_consistent();
         timer.record_time("construct");
 
         self.resolve_deferred_tasks();
+        // Flush background/mask images from style to dedicated storage on the
+        // nodes whose style changed (queued by the style traversal and by
+        // pseudo-element box construction), fetching any not-yet-loaded images.
+        self.flush_pending_style_images();
         timer.record_time("pconstruct");
-
-        // Merge stylo into taffy
-        self.flush_styles_to_layout(root_node_id);
-        timer.record_time("flush");
 
         // Next we resolve layout with the data resolved by stlist
         self.resolve_layout();
         timer.record_time("layout");
+        self.nodes.bump_geometry_generation();
 
+        // Resolve transforms
         self.resolve_transforms(root_node_id);
         timer.record_time("transform");
 
-        // Clear all damage and dirty flags
-        #[cfg(feature = "incremental")]
-        {
-            for (_, node) in self.nodes.iter_mut() {
-                node.clear_damage_mut();
-                node.unset_dirty_descendants();
-            }
-            timer.record_time("c_damage");
-        }
+        // Build paint children / stacking contexts for damaged subtrees. Runs
+        // after layout and transforms so that stacking-context roots created by
+        // this frame's transforms are picked up, and before damage is cleared.
+        self.build_paint_tree(root_node_id);
+        timer.record_time("paint_tree");
+
+        // Clear all damage and dirty flags, walking only subtrees which are
+        // marked as (potentially) containing damage.
+        let doc_node_id = self.root_node().id;
+        self.clear_damage_and_dirty_flags(doc_node_id);
+        timer.record_time("c_damage");
+
+        // Re-resolve the hover node from the pointer position against the fresh
+        // layout. This must run *after* the damage/dirty flags are cleared
+        // above, so that the restyle hint and ancestor `dirty_descendants`
+        // flags set by any resulting hover change survive into the next resolve
+        // pass (the clearing loop would otherwise wipe them). Any resulting
+        // restyle is picked up on the next resolve pass; a redraw is requested
+        // if the hovered node actually changes.
+        self.refresh_hover();
 
         let mut subdoc_is_animating = false;
         for &node_id in &self.sub_document_nodes {
             let node = &mut self.nodes[node_id];
-            let size = node.final_layout.size;
+            let size = node.final_layout().size;
             if let Some(mut sub_doc) = node.subdoc_mut().map(|doc| doc.inner_mut()) {
                 // Set viewport
                 // viewport_mut handles change detection. So we just unconditionally set the values;
@@ -125,49 +168,74 @@ impl BaseDocument {
         timer.print_times(&format!("Resolve({}): ", self.id()));
     }
 
-    fn resolve_transforms(&mut self, node_id: usize) -> Rect {
-        if !self.nodes.contains(node_id) {
+    fn resolve_transforms(&mut self, node_id: NodeId) -> Rect {
+        if !self.nodes.contains_key(node_id) {
             return Rect::ZERO;
         }
+
+        let scale = self.viewport.scale_f64();
 
         if !self.nodes[node_id]
             .damage()
             .map(|d| d.contains(style::selector_parser::RestyleDamage::RECALCULATE_OVERFLOW))
             .unwrap_or(false)
         {
-            return self.nodes[node_id].scrollable_overflow;
-        }
+            let node = &self.nodes[node_id];
+            let location = node.final_layout().location.map(|v| v as f64 * scale);
 
-        let scale = self.viewport.scale_f64();
+            let mut transform = Affine::translate((location.x, location.y));
+            if let Some(t) = node.transform().as_deref() {
+                transform *= *t
+            }
+
+            let overflow = *node.scrollable_overflow();
+            return transform.transform_rect_bbox(overflow);
+        }
 
         let transform = self.nodes[node_id].set_transform(scale as f32);
 
-        let w = self.nodes[node_id].final_layout.size.width as f64 * scale;
-        let h = self.nodes[node_id].final_layout.size.height as f64 * scale;
+        let w = self.nodes[node_id].final_layout().size.width as f64 * scale;
+        let h = self.nodes[node_id].final_layout().size.height as f64 * scale;
         let mut overflow = Rect::new(0.0, 0.0, w, h);
 
         let layout_children = std::mem::take(self.nodes[node_id].layout_children.get_mut());
 
         if let Some(ref children) = layout_children {
             for &child_id in children {
+                // Out-of-flow children are laid out relative to their containing
+                // block, not their DOM parent: they are visited (and their overflow
+                // accounted for) via the containing block's hoisted list below.
+                if self.nodes[child_id].is_out_of_flow() {
+                    continue;
+                }
                 let child_rect_in_self = self.resolve_transforms(child_id);
                 overflow = overflow.union(child_rect_in_self);
             }
         }
-        if let Some(before) = self.nodes[node_id].before {
-            let child_rect_in_self = self.resolve_transforms(before);
+        let hoisted_children =
+            std::mem::take(&mut *self.nodes[node_id].hoisted_children.borrow_mut());
+        for &child_id in &hoisted_children {
+            if !self.nodes.contains_key(child_id) {
+                continue;
+            }
+            let child_rect_in_self = self.resolve_transforms(child_id);
             overflow = overflow.union(child_rect_in_self);
         }
-        if let Some(after) = self.nodes[node_id].after {
-            let child_rect_in_self = self.resolve_transforms(after);
+        *self.nodes[node_id].hoisted_children.borrow_mut() = hoisted_children;
+        for pseudo in [self.nodes[node_id].before(), self.nodes[node_id].after()] {
+            let Some(pseudo) = pseudo else { continue };
+            if self.nodes[pseudo].is_out_of_flow() {
+                continue;
+            }
+            let child_rect_in_self = self.resolve_transforms(pseudo);
             overflow = overflow.union(child_rect_in_self);
         }
 
-        self.nodes[node_id].scrollable_overflow = overflow;
+        *self.nodes[node_id].scrollable_overflow_mut() = overflow;
         *self.nodes[node_id].layout_children.get_mut() = layout_children;
 
-        let scaled_x = self.nodes[node_id].final_layout.location.x as f64 * scale;
-        let scaled_y = self.nodes[node_id].final_layout.location.y as f64 * scale;
+        let scaled_x = self.nodes[node_id].final_layout().location.x as f64 * scale;
+        let scaled_y = self.nodes[node_id].final_layout().location.y as f64 * scale;
 
         let full = if let Some(t) = transform {
             Affine::translate((scaled_x, scaled_y)) * t
@@ -178,43 +246,11 @@ impl BaseDocument {
         full.transform_rect_bbox(overflow)
     }
 
-    pub fn resolve_scroll_animation(&mut self) {
-        match &mut self.scroll_animation {
-            ScrollAnimationState::Fling(fling_state) => {
-                let time_ms = SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .unwrap()
-                    .as_millis() as u64 as f64;
-
-                let time_diff_ms = time_ms - fling_state.last_seen_time;
-
-                // 0.95 @ 60fps normalized to actual frame times
-                let deceleration = 1.0 - ((0.05 / 16.66666) * time_diff_ms);
-
-                fling_state.x_velocity *= deceleration;
-                fling_state.y_velocity *= deceleration;
-                fling_state.last_seen_time = time_ms;
-                let fling_state = fling_state.clone();
-
-                let dx = fling_state.x_velocity * time_diff_ms;
-                let dy = fling_state.y_velocity * time_diff_ms;
-
-                self.scroll_by(Some(fling_state.target), dx, dy, &mut |_| {});
-                if fling_state.x_velocity.abs() < 0.1 && fling_state.y_velocity.abs() < 0.1 {
-                    self.scroll_animation = ScrollAnimationState::None;
-                }
-            }
-            ScrollAnimationState::None => {
-                // Do nothing
-            }
-        }
-    }
-
     /// Ensure that the layout_children field is populated for all nodes
     pub fn resolve_layout_children(&mut self) {
         resolve_layout_children_recursive(self, self.root_node().id);
 
-        fn resolve_layout_children_recursive(doc: &mut BaseDocument, node_id: usize) {
+        fn resolve_layout_children_recursive(doc: &mut BaseDocument, node_id: NodeId) {
             // Anonymous blocks and pseudo-elements can be removed from the slab
             // between render passes. Bail out rather than panicking on a stale key.
             if doc.nodes.get(node_id).is_none() {
@@ -224,17 +260,31 @@ impl BaseDocument {
             let mut damage = doc.nodes[node_id].damage().unwrap_or(ALL_DAMAGE);
             let _flags = doc.nodes[node_id].flags;
 
-            if NON_INCREMENTAL || damage.intersects(CONSTRUCT_FC | CONSTRUCT_BOX) {
+            if damage.intersects(CONSTRUCT_FC | CONSTRUCT_BOX) {
                 //} || flags.contains(NodeFlags::IS_INLINE_ROOT) {
-                let mut layout_children = Vec::new();
-                let mut anonymous_block: Option<usize> = None;
-                collect_layout_children(doc, node_id, &mut layout_children, &mut anonymous_block);
+
+                // Deallocate the anonymous blocks created for this node in the
+                // previous construction round. They live only in the slab, so
+                // reconstructing without freeing them would leak a slab entry per
+                // anonymous block per reconstruction.
+                let old_anonymous_blocks = std::mem::take(&mut doc.nodes[node_id].anonymous_blocks);
+                for anon_id in old_anonymous_blocks {
+                    doc.deallocate_anonymous_block(anon_id);
+                }
+
+                let mut collected = LayoutChildren::default();
+                collect_layout_children(doc, node_id, &mut collected);
+                let layout_children = collected.children;
+                doc.nodes[node_id].anonymous_blocks = collected.anonymous_blocks;
 
                 // Recurse into newly collected layout children
                 for child_id in layout_children.iter().copied() {
                     resolve_layout_children_recursive(doc, child_id);
                     doc.nodes[child_id].layout_parent.set(Some(node_id));
-                    if let Some(mut data) = doc.nodes[child_id].stylo_element_data.get_mut() {
+                    if let Some(mut data) = doc.nodes[child_id]
+                        .try_stylo_element_data_mut()
+                        .and_then(|s| s.get_mut())
+                    {
                         data.damage
                             .remove(CONSTRUCT_DESCENDENT | CONSTRUCT_FC | CONSTRUCT_BOX);
                     }
@@ -252,7 +302,7 @@ impl BaseDocument {
                     for child_id in layout_children.iter().copied() {
                         // Anonymous blocks and pseudo-elements can be removed from the
                         // slab between render passes; skip stale IDs.
-                        if !doc.nodes.contains(child_id) {
+                        if !doc.nodes.contains_key(child_id) {
                             continue;
                         }
                         resolve_layout_children_recursive(doc, child_id);
@@ -267,6 +317,33 @@ impl BaseDocument {
             }
 
             doc.nodes[node_id].set_damage(damage);
+        }
+    }
+
+    /// Every layout child must point back at its container via
+    /// `layout_parent`, which `propagate_damage_flags` relies on to reach
+    /// anonymous boxes.
+    #[cfg(debug_assertions)]
+    fn assert_layout_parents_consistent(&self) {
+        use crate::node::NodeFlags;
+
+        for (parent_id, node) in self.nodes.iter() {
+            if !node.flags.contains(NodeFlags::IS_IN_DOCUMENT) {
+                continue;
+            }
+            let Some(children) = node.layout_children.borrow().clone() else {
+                continue;
+            };
+            for child_id in children {
+                let Some(child) = self.nodes.get(child_id) else {
+                    panic!("layout child {child_id:?} of {parent_id:?} is not in the slab");
+                };
+                debug_assert_eq!(
+                    child.layout_parent.get(),
+                    Some(parent_id),
+                    "layout_parent of {child_id:?} does not point at its layout container {parent_id:?}"
+                );
+            }
         }
     }
 
@@ -337,7 +414,7 @@ impl BaseDocument {
         for result in results {
             match result.data {
                 ConstructionTaskResultData::InlineLayout(layout) => {
-                    self.nodes[result.node_id].cache.clear();
+                    self.nodes[result.node_id].clear_layout_cache();
                     self.nodes[result.node_id]
                         .element_data_mut()
                         .unwrap()
@@ -361,94 +438,27 @@ impl BaseDocument {
             height: AvailableSpace::Definite(size.height.to_f32_px()),
         };
 
-        let root_element_id = taffy::NodeId::from(self.root_element().id);
+        let root_element_id = crate::taffy_node_id(self.root_element().id);
 
         // println!("\n\nRESOLVE LAYOUT\n===========\n");
 
-        taffy::compute_root_layout(self, root_element_id, available_space);
-        taffy::round_layout(self, root_element_id);
-        self.anchor_fixed_position_boxes_to_viewport(
-            size.width.to_f32_px(),
-            size.height.to_f32_px(),
-        );
+        let mut state = LayoutPassState::new(self);
+        #[cfg(feature = "writing-mode")]
+        let available_space = {
+            state.layout_wm = state.layout_wm_of(crate::dom_node_id(root_element_id));
+            if state.layout_wm.is_vertical() {
+                available_space.transpose()
+            } else {
+                available_space
+            }
+        };
+        taffy::compute_root_layout(&mut state, root_element_id, available_space);
+        #[cfg(feature = "writing-mode")]
+        state.physicalise_and_round_layout(root_element_id);
+        #[cfg(not(feature = "writing-mode"))]
+        taffy::round_layout(&mut state, root_element_id);
 
         // println!("\n\n");
         // taffy::print_tree(self, root_node_id)
-    }
-
-    /// Taffy has no notion of the viewport containing block: `stylo_taffy`
-    /// maps `position: fixed` to `Absolute`, so fixed boxes get positioned
-    /// against their layout parent. Re-anchor every fixed box that has an
-    /// explicit inset to the viewport after layout.
-    ///
-    /// Only the *position* is corrected; sizes (e.g. `width: 100%` or
-    /// `left: 0; right: 0`) still resolve against the layout parent.
-    fn anchor_fixed_position_boxes_to_viewport(&mut self, viewport_w: f32, viewport_h: f32) {
-        fn visit(
-            doc: &mut BaseDocument,
-            node_id: usize,
-            parent_abs: (f32, f32),
-            viewport: (f32, f32),
-        ) {
-            let anchored = {
-                let node = &doc.nodes[node_id];
-                node.primary_styles().and_then(|style| {
-                    use style::computed_values::position::T as Position;
-                    use style::values::computed::Length;
-                    use style::values::generics::position::GenericInset;
-                    if style.clone_position() != Position::Fixed {
-                        return None;
-                    }
-                    let pos = style.get_position();
-                    let resolve = |inset: &style::values::computed::position::Inset, basis: f32| {
-                        match inset {
-                            GenericInset::LengthPercentage(lp) => {
-                                Some(lp.resolve(Length::new(basis)).px())
-                            }
-                            _ => None,
-                        }
-                    };
-                    let layout = &node.final_layout;
-                    let x = resolve(&pos.left, viewport.0)
-                        .map(|left| left + layout.margin.left)
-                        .or_else(|| {
-                            resolve(&pos.right, viewport.0).map(|right| {
-                                viewport.0 - right - layout.size.width - layout.margin.right
-                            })
-                        });
-                    let y = resolve(&pos.top, viewport.1)
-                        .map(|top| top + layout.margin.top)
-                        .or_else(|| {
-                            resolve(&pos.bottom, viewport.1).map(|bottom| {
-                                viewport.1 - bottom - layout.size.height - layout.margin.bottom
-                            })
-                        });
-                    Some((x, y))
-                })
-            };
-
-            let node = &mut doc.nodes[node_id];
-            if let Some((x, y)) = anchored {
-                if let Some(x) = x {
-                    let dx = (x - parent_abs.0) - node.final_layout.location.x;
-                    node.final_layout.location.x += dx;
-                    node.unrounded_layout.location.x += dx;
-                }
-                if let Some(y) = y {
-                    let dy = (y - parent_abs.1) - node.final_layout.location.y;
-                    node.final_layout.location.y += dy;
-                    node.unrounded_layout.location.y += dy;
-                }
-            }
-            let loc = node.final_layout.location;
-            let abs = (parent_abs.0 + loc.x, parent_abs.1 + loc.y);
-            let children = node.layout_children.borrow().clone().unwrap_or_default();
-            for child_id in children {
-                visit(doc, child_id, abs, viewport);
-            }
-        }
-
-        let root_id = self.root_element().id;
-        visit(self, root_id, (0.0, 0.0), (viewport_w, viewport_h));
     }
 }
