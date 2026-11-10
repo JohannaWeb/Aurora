@@ -264,7 +264,10 @@ fn identity_initials(name: &str) -> String {
     initials.to_uppercase()
 }
 
-#[allow(non_snake_case)]
+// `rsx!` expands interpolated text and attributes such as "{label}" into
+// `format!` calls, which clippy flags as useless. That is the idiomatic
+// Dioxus spelling, so silence the lint here rather than rewrite the markup.
+#[allow(non_snake_case, clippy::useless_format)]
 fn Chrome(props: ChromeProps) -> Element {
     // Focused/idle address-bar classes share no properties (like the tab
     // strip) so neither render path depends on cascade order.
