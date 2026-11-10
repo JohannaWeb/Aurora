@@ -9,6 +9,7 @@ pub mod convert;
 
 mod color_function;
 pub mod component;
+pub mod gamut;
 pub mod mix;
 pub mod parsing;
 mod to_css;
@@ -26,8 +27,7 @@ pub const PRE_ALLOCATED_COLOR_MIX_ITEMS: usize = 3;
 pub type ColorMixItemList<T> = smallvec::SmallVec<[T; PRE_ALLOCATED_COLOR_MIX_ITEMS]>;
 
 /// The 3 components that make up a color.  (Does not include the alpha component)
-#[derive(Copy, Clone, Debug, MallocSizeOf, PartialEq, ToShmem)]
-#[cfg_attr(feature = "servo", derive(Deserialize, Serialize))]
+#[derive(Copy, Clone, Debug, Deserialize, MallocSizeOf, PartialEq, Serialize, ToShmem)]
 #[repr(C)]
 pub struct ColorComponents(pub f32, pub f32, pub f32);
 
@@ -36,6 +36,28 @@ impl ColorComponents {
     #[must_use]
     pub fn map(self, f: impl Fn(f32) -> f32) -> Self {
         Self(f(self.0), f(self.1), f(self.2))
+    }
+
+    /// Return the components as an array
+    #[inline]
+    pub fn to_array(&self) -> [f32; 3] {
+        [self.0, self.1, self.2]
+    }
+}
+
+impl std::ops::Add for ColorComponents {
+    type Output = Self;
+
+    fn add(self, rhs: Self) -> Self::Output {
+        Self(self.0 + rhs.0, self.1 + rhs.1, self.2 + rhs.2)
+    }
+}
+
+impl std::ops::Sub for ColorComponents {
+    type Output = Self;
+
+    fn sub(self, rhs: Self) -> Self::Output {
+        Self(self.0 - rhs.0, self.1 - rhs.1, self.2 - rhs.2)
     }
 }
 
@@ -62,17 +84,18 @@ impl std::ops::Div for ColorComponents {
     Clone,
     Copy,
     Debug,
+    Deserialize,
     Eq,
     MallocSizeOf,
     Parse,
     PartialEq,
+    Serialize,
     ToAnimatedValue,
     ToComputedValue,
     ToCss,
     ToResolvedValue,
     ToShmem,
 )]
-#[cfg_attr(feature = "servo", derive(Deserialize, Serialize))]
 #[repr(u8)]
 pub enum ColorSpace {
     /// A color specified in the sRGB color space with either the rgb/rgba(..)
@@ -177,6 +200,24 @@ impl ColorSpace {
             },
         }
     }
+
+    /// Returns the corresponding linear version of this color space if
+    /// one exists, else returns `None`.
+    /// Linear color spaces return themselves; this includes XYZ.
+    /// Perceptual/non-RGB color spaces return None.
+    #[inline]
+    pub fn get_linear_color_space(self) -> Option<Self> {
+        match self {
+            Self::Srgb | Self::Hsl | Self::Hwb => Some(Self::SrgbLinear),
+            Self::DisplayP3 => Some(Self::DisplayP3Linear),
+            Self::SrgbLinear | Self::DisplayP3Linear | Self::XyzD50 | Self::XyzD65 => Some(self),
+            // We currently don't have the linear versions of these wide RGB spaces
+            // implemented, so returning `None`` for the time being. Grouping them
+            // separately here as a nod to future work.
+            Self::A98Rgb | Self::ProphotoRgb | Self::Rec2020 => None,
+            Self::Lab | Self::Lch | Self::Oklab | Self::Oklch => None,
+        }
+    }
 }
 
 /// Flags used when serializing colors.
@@ -202,8 +243,7 @@ bitflags! {
 
 /// An absolutely specified color, using either rgb(), rgba(), lab(), lch(),
 /// oklab(), oklch() or color().
-#[derive(Copy, Clone, Debug, MallocSizeOf, ToShmem, ToTyped)]
-#[cfg_attr(feature = "servo", derive(Deserialize, Serialize))]
+#[derive(Copy, Clone, Debug, Deserialize, MallocSizeOf, Serialize, ToShmem, ToTyped)]
 #[repr(C)]
 #[typed(todo_derive_fields)]
 pub struct AbsoluteColor {
@@ -408,6 +448,18 @@ impl AbsoluteColor {
         }
     }
 
+    /// Returns a copy of this color with a modified alpha value.
+    pub fn with_alpha(&self, alpha: impl Into<ComponentDetails>) -> Self {
+        let mut result = *self;
+        let alpha_details = alpha.into();
+        result.alpha = alpha_details.value;
+        result
+            .flags
+            .set(ColorFlags::ALPHA_IS_NONE, alpha_details.is_none);
+        result.flags.remove(ColorFlags::IS_LEGACY_SRGB);
+        result
+    }
+
     /// Convert this color into the sRGB color space and set it to the legacy
     /// syntax.
     #[inline]
@@ -501,7 +553,7 @@ impl AbsoluteColor {
         &self,
         channel_keyword: ChannelKeyword,
     ) -> Result<Option<f32>, ()> {
-        if channel_keyword == ChannelKeyword::Alpha {
+        if channel_keyword == ChannelKeyword::ALPHA {
             return Ok(self.alpha());
         }
 
@@ -572,26 +624,22 @@ impl AbsoluteColor {
         use ColorSpace::*;
 
         if self.color_space == color_space {
-            return self.clone();
+            return *self;
         }
 
-        // Conversion functions doesn't handle NAN component values, so they are
-        // converted to 0.0. They do however need to know if a component is
-        // missing, so we use NAN as the marker for that.
-        macro_rules! missing_to_nan {
+        // Missing components are treated as 0 for the conversion math.
+        // Carry-forward of `none` to analogous channels is handled at call
+        // sites where needed.
+        macro_rules! missing_to_zero {
             ($c:expr) => {{
-                if let Some(v) = $c {
-                    crate::values::normalize(v)
-                } else {
-                    f32::NAN
-                }
+                crate::values::normalize($c.unwrap_or(0.0))
             }};
         }
 
         let components = ColorComponents(
-            missing_to_nan!(self.c0()),
-            missing_to_nan!(self.c1()),
-            missing_to_nan!(self.c2()),
+            missing_to_zero!(self.c0()),
+            missing_to_zero!(self.c1()),
+            missing_to_zero!(self.c2()),
         );
 
         let result = match (self.color_space, color_space) {
@@ -669,17 +717,6 @@ impl AbsoluteColor {
             nan_to_missing!(result.2),
             self.alpha(),
         )
-    }
-
-    /// Convert a color value to `nscolor`.
-    pub fn to_nscolor(&self) -> u32 {
-        let srgb = self.to_color_space(ColorSpace::Srgb);
-        u32::from_le_bytes([
-            (srgb.components.0 * 255.0).round() as u8,
-            (srgb.components.1 * 255.0).round() as u8,
-            (srgb.components.2 * 255.0).round() as u8,
-            (srgb.alpha * 255.0).round() as u8,
-        ])
     }
 
     /// Convert a given `nscolor` to a Servo AbsoluteColor value.

@@ -1,4 +1,5 @@
 [margin]
+flags = "SCROLL_LINKED_EFFECTIVE"
 sub_properties = ["margin-top", "margin-right", "margin-bottom", "margin-left"]
 spec = "https://drafts.csswg.org/css-box/#propdef-margin"
 rule_types_allowed = ["style", "keyframe", "page", "scope", "page", "position-try"]
@@ -202,7 +203,7 @@ spec="https://drafts.csswg.org/css-overflow/#propdef-overflow"
 kind = "two_properties"
 
 [overscroll-behavior]
-engine = "gecko"
+servo_pref = "layout.unimplemented"
 sub_properties = ["overscroll-behavior-x", "overscroll-behavior-y"]
 spec = "https://wicg.github.io/overscroll-behavior/#overscroll-behavior-properties"
 kind = "two_properties"
@@ -241,15 +242,15 @@ spec = "https://drafts.fxtf.org/motion-1/#offset-shorthand"
 
 [-webkit-perspective]
 sub_properties = ["perspective"]
-derive_serialize = true
 flags = "IS_LEGACY_SHORTHAND"
 spec = "https://github.com/whatwg/compat/issues/100"
+derive_serialize = true
 
 [-webkit-transform]
 sub_properties = ["transform"]
-derive_serialize = true
 flags = "IS_LEGACY_SHORTHAND"
 spec = "https://github.com/whatwg/compat/issues/100"
+derive_serialize = true
 
 [background]
 sub_properties = [
@@ -347,7 +348,6 @@ spec = "https://drafts.csswg.org/css-align/#place-items-property"
 engine = "gecko"
 sub_properties = ["position-try-order", "position-try-fallbacks"]
 spec = "https://drafts.csswg.org/css-anchor-position-1/#position-try-prop"
-gecko_pref = "layout.css.anchor-positioning.enabled"
 
 [marker]
 engine = "gecko"
@@ -373,7 +373,7 @@ gecko_pref = "layout.css.scroll-driven-animations.enabled"
 
 [view-timeline]
 engine = "gecko"
-sub_properties = ["view-timeline-name", "view-timeline-axis"]
+sub_properties = ["view-timeline-name", "view-timeline-axis", "view-timeline-inset"]
 spec = "https://drafts.csswg.org/scroll-animations-1/#view-timeline-shorthand"
 gecko_pref = "layout.css.scroll-driven-animations.enabled"
 
@@ -388,6 +388,7 @@ sub_properties = ["list-style-position", "list-style-image", "list-style-type"]
 spec = "https://drafts.csswg.org/css-lists/#propdef-list-style"
 
 [background-position]
+flags = "SCROLL_LINKED_EFFECTIVE"
 sub_properties = ["background-position-x", "background-position-y"]
 spec = "https://drafts.csswg.org/css-backgrounds-4/#the-background-position"
 
@@ -408,6 +409,68 @@ sub_properties = ["border-top-left-radius", "border-top-right-radius", "border-b
 spec = "https://drafts.csswg.org/css-backgrounds/#border-radius"
 extra_prefixes = ["webkit"]
 
+[corner-shape]
+sub_properties = ["corner-top-left-shape", "corner-top-right-shape", "corner-bottom-right-shape", "corner-bottom-left-shape"]
+spec = "https://drafts.csswg.org/css-borders-4/#propdef-corner-shape"
+gecko_pref = "layout.css.corner-shape.enabled"
+servo_pref = "layout.unimplemented"
+
+[corner-top-shape]
+sub_properties = ["corner-top-left-shape", "corner-top-right-shape"]
+spec = "https://drafts.csswg.org/css-borders-4/#propdef-corner-top-shape"
+gecko_pref = "layout.css.corner-shape.enabled"
+servo_pref = "layout.unimplemented"
+kind = "two_properties"
+
+[corner-right-shape]
+sub_properties = ["corner-top-right-shape", "corner-bottom-right-shape"]
+spec = "https://drafts.csswg.org/css-borders-4/#propdef-corner-right-shape"
+gecko_pref = "layout.css.corner-shape.enabled"
+servo_pref = "layout.unimplemented"
+kind = "two_properties"
+
+[corner-bottom-shape]
+sub_properties = ["corner-bottom-left-shape", "corner-bottom-right-shape"]
+spec = "https://drafts.csswg.org/css-borders-4/#propdef-corner-bottom-shape"
+gecko_pref = "layout.css.corner-shape.enabled"
+servo_pref = "layout.unimplemented"
+kind = "two_properties"
+
+[corner-left-shape]
+sub_properties = ["corner-top-left-shape", "corner-bottom-left-shape"]
+spec = "https://drafts.csswg.org/css-borders-4/#propdef-corner-left-shape"
+gecko_pref = "layout.css.corner-shape.enabled"
+servo_pref = "layout.unimplemented"
+kind = "two_properties"
+
+[corner-block-start-shape]
+sub_properties = ["corner-start-start-shape", "corner-start-end-shape"]
+spec = "https://drafts.csswg.org/css-borders-4/#propdef-corner-block-start-shape"
+gecko_pref = "layout.css.corner-shape.enabled"
+servo_pref = "layout.unimplemented"
+kind = "two_properties"
+
+[corner-block-end-shape]
+sub_properties = ["corner-end-start-shape", "corner-end-end-shape"]
+spec = "https://drafts.csswg.org/css-borders-4/#propdef-corner-block-end-shape"
+gecko_pref = "layout.css.corner-shape.enabled"
+servo_pref = "layout.unimplemented"
+kind = "two_properties"
+
+[corner-inline-start-shape]
+sub_properties = ["corner-start-start-shape", "corner-end-start-shape"]
+spec = "https://drafts.csswg.org/css-borders-4/#propdef-corner-inline-start-shape"
+gecko_pref = "layout.css.corner-shape.enabled"
+servo_pref = "layout.unimplemented"
+kind = "two_properties"
+
+[corner-inline-end-shape]
+sub_properties = ["corner-start-end-shape", "corner-end-end-shape"]
+spec = "https://drafts.csswg.org/css-borders-4/#propdef-corner-inline-end-shape"
+gecko_pref = "layout.css.corner-shape.enabled"
+servo_pref = "layout.unimplemented"
+kind = "two_properties"
+
 [outline]
 sub_properties = ["outline-color", "outline-style", "outline-width"]
 spec = "https://drafts.csswg.org/css-ui/#propdef-outline"
@@ -424,20 +487,20 @@ spec = "https://drafts.csswg.org/css-multicol/#propdef-column-rule"
 derive_serialize = true
 
 [text-decoration]
-sub_properties = ["text-decoration-color", "text-decoration-line", "text-decoration-style"]
-extra_gecko_sub_properties = ["text-decoration-thickness"]
+sub_properties = ["text-decoration-color", "text-decoration-line", "text-decoration-style", "text-decoration-thickness"]
 spec = "https://drafts.csswg.org/css-text-decor/#propdef-text-decoration"
 
 [font]
 sub_properties = [
   "font-style",
+  "font-variant-alternates",
   "font-variant-caps",
   "font-variant-east-asian",
   "font-variant-ligatures",
   "font-variant-numeric",
   "font-variant-position",
   "font-weight",
-  "font-stretch",
+  "font-width",
   "font-size",
   "line-height",
   "font-family",
@@ -445,19 +508,25 @@ sub_properties = [
   "font-variation-settings",
   "font-kerning",
   "font-feature-settings",
+  "font-language-override",
 ]
 extra_gecko_sub_properties = [
   "font-size-adjust",
-  "font-variant-alternates",
   "font-variant-emoji",
-  "font-language-override"
 ]
 spec = "https://drafts.csswg.org/css-fonts-3/#propdef-font"
 derive_value_info = false
 
 [font-variant]
-sub_properties = ["font-variant-caps", "font-variant-east-asian", "font-variant-ligatures", "font-variant-numeric", "font-variant-position"]
-extra_gecko_sub_properties = ["font-variant-alternates", "font-variant-emoji"]
+sub_properties = [
+    "font-variant-alternates",
+    "font-variant-caps",
+    "font-variant-east-asian",
+    "font-variant-ligatures",
+    "font-variant-numeric",
+    "font-variant-position"
+]
+extra_gecko_sub_properties = ["font-variant-emoji"]
 spec = "https://drafts.csswg.org/css-fonts-3/#propdef-font-variant"
 
 [font-synthesis]
@@ -492,4 +561,18 @@ derive_value_info = false
 engine = "gecko"
 sub_properties = ["-webkit-text-stroke-width", "-webkit-text-stroke-color"]
 spec = "https://compat.spec.whatwg.org/#the-webkit-text-stroke"
+derive_serialize = true
+
+[-webkit-line-clamp]
+engine = "gecko"
+flags = "IS_LEGACY_SHORTHAND ALLOWS_DISABLED_SUBPROPERTIES"
+sub_properties = ["line-clamp"]
+spec = "https://drafts.csswg.org/css-overflow-4/#webkit-line-clamp"
+
+[-moz-appearance]
+engine = "gecko"
+gecko_pref = "layout.css.moz-appearance.enabled"
+flags = "IS_LEGACY_SHORTHAND"
+sub_properties = ["appearance"]
+spec = "Legacy version of https://drafts.csswg.org/css-ui-4/#propdef-appearance"
 derive_serialize = true

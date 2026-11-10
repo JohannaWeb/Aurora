@@ -5,12 +5,13 @@
 //! Computed values for properties related to animations and transitions
 
 use crate::derives::*;
+use crate::typed_om::{KeywordValue, ToTyped, TypedValue};
 use crate::values::computed::{Context, LengthPercentage, Time, ToComputedValue};
 use crate::values::generics::animation as generics;
 use crate::values::specified::animation as specified;
 use crate::values::CSSFloat;
 use std::fmt::{self, Write};
-use style_traits::{CssString, CssWriter, KeywordValue, ToCss, ToTyped, TypedValue};
+use style_traits::{CssString, CssWriter, ToCss};
 use thin_vec::ThinVec;
 
 pub use crate::values::specified::animation::{
@@ -43,7 +44,7 @@ impl ToComputedValue for specified::AnimationIterationCount {
 
     #[inline]
     fn to_computed_value(&self, context: &Context) -> Self::ComputedValue {
-        AnimationIterationCount(match *self {
+        AnimationIterationCount(match self {
             specified::AnimationIterationCount::Number(n) => n.to_computed_value(context).0,
             specified::AnimationIterationCount::Infinite => f32::INFINITY,
         })

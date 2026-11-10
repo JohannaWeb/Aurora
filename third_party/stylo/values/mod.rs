@@ -10,25 +10,21 @@
 
 use crate::derives::*;
 use crate::parser::{Parse, ParserContext};
+use crate::typed_om::{KeywordValue, NumericType, NumericValue, ToTyped, TypedValue, UnitValue};
 use crate::values::distance::{ComputeSquaredDistance, SquaredDistance};
 use crate::values::generics::position::IsTreeScoped;
 use crate::Atom;
 pub use cssparser::{serialize_identifier, serialize_name, CowRcStr, Parser};
 pub use cssparser::{SourceLocation, Token};
+use num_traits::Zero;
 use precomputed_hash::PrecomputedHash;
 use selectors::parser::SelectorParseErrorKind;
 use std::fmt::{self, Debug, Write};
-use style_traits::{
-    CssString, CssWriter, KeywordValue, MathSum, NumericValue, ParseError, StyleParseErrorKind,
-    ToCss, ToTyped, TypedValue, UnitValue,
-};
+use style_traits::{CssString, CssWriter, ParseError, StyleParseErrorKind, ToCss};
 use thin_vec::ThinVec;
 use to_shmem::impl_trivial_to_shmem;
 
-#[cfg(feature = "gecko")]
-pub use crate::gecko::url::CssUrl;
-#[cfg(feature = "servo")]
-pub use crate::servo::url::CssUrl;
+pub use crate::url::CssUrl;
 
 pub mod animated;
 pub mod computed;
@@ -36,6 +32,7 @@ pub mod distance;
 pub mod generics;
 pub mod resolved;
 pub mod specified;
+pub mod tagged_numeric;
 
 /// A CSS float value.
 pub type CSSFloat = f32;
@@ -48,6 +45,47 @@ pub fn normalize(v: CSSFloat) -> CSSFloat {
         0.0
     } else {
         v
+    }
+}
+
+/// Computes the minimum value of the two floats. The CSS Values and Units definition
+/// for min() considers -0 to be less than +0 (whereas Rust considers them equal).
+/// https://drafts.csswg.org/css-values-4/#css-signed-zero
+#[inline]
+pub fn calc_min(a: CSSFloat, b: CSSFloat) -> CSSFloat {
+    match (a.is_sign_negative(), b.is_sign_negative()) {
+        (true, false) => a,
+        (false, true) => b,
+        _ => a.min(b),
+    }
+}
+
+/// Computes the maximum value of the two floats. The CSS Values and Units definition
+/// for max() considers +0 to be greater than -0 (whereas Rust considers them equal).
+/// https://drafts.csswg.org/css-values-4/#css-signed-zero
+#[inline]
+pub fn calc_max(a: CSSFloat, b: CSSFloat) -> CSSFloat {
+    match (a.is_sign_negative(), b.is_sign_negative()) {
+        (true, false) => b,
+        (false, true) => a,
+        _ => a.max(b),
+    }
+}
+
+/// Computes the sign of the given value. The CSS Values and Units definition for
+/// sign() returns +0 or -0 for an input of +0 or -0, respectively (whereas the
+/// Rust f32::signum() function returns +1 or -1, respectively).
+/// https://drafts.csswg.org/css-values-4/#funcdef-sign
+#[inline]
+pub fn calc_sign(value: CSSFloat) -> CSSFloat {
+    if value.is_nan() {
+        f32::NAN
+    } else if value.is_zero() {
+        value
+    } else if value.is_sign_negative() {
+        -1.0
+    } else {
+        1.0
     }
 }
 
@@ -99,30 +137,11 @@ where
 }
 
 /// Serialize a number with calc, and NaN/infinity handling (if enabled)
-pub fn serialize_number<W>(v: f32, was_calc: bool, dest: &mut CssWriter<W>) -> fmt::Result
+pub fn serialize_number<W>(v: f32, dest: &mut CssWriter<W>) -> fmt::Result
 where
     W: Write,
 {
-    serialize_specified_dimension(v, "", was_calc, dest)
-}
-
-/// Reify a number with calc.
-pub fn reify_number(v: f32, was_calc: bool, dest: &mut ThinVec<TypedValue>) -> Result<(), ()> {
-    let numeric_value = NumericValue::Unit(UnitValue {
-        value: v,
-        unit: CssString::from("number"),
-    });
-
-    // https://drafts.css-houdini.org/css-typed-om-1/#reify-a-math-expression
-    if was_calc {
-        dest.push(TypedValue::Numeric(NumericValue::Sum(MathSum {
-            values: ThinVec::from([numeric_value]),
-        })));
-    } else {
-        dest.push(TypedValue::Numeric(numeric_value));
-    }
-
-    Ok(())
+    serialize_specified_dimension(v, "", /* was_calc = */ false, dest)
 }
 
 /// Serialize a specified dimension with unit, calc, and NaN/infinity handling (if enabled)
@@ -180,6 +199,7 @@ where
     MallocSizeOf,
     PartialEq,
     SpecifiedValueInfo,
+    ToAnimatedValue,
     ToComputedValue,
     ToResolvedValue,
     ToShmem,
@@ -194,7 +214,7 @@ impl AsRef<str> for AtomString {
 }
 
 impl Parse for AtomString {
-    fn parse<'i>(_: &ParserContext, input: &mut Parser<'i, '_>) -> Result<Self, ParseError<'i>> {
+    fn parse(_: &ParserContext, input: &mut Parser) -> Result<Self, ParseError> {
         Ok(Self(Atom::from(input.expect_string()?.as_ref())))
     }
 }
@@ -235,7 +255,7 @@ impl PrecomputedHash for AtomString {
     }
 }
 
-impl<'a> From<&'a str> for AtomString {
+impl From<&str> for AtomString {
     #[inline]
     fn from(string: &str) -> Self {
         Self(Atom::from(string))
@@ -412,7 +432,7 @@ impl PrecomputedHash for AtomIdent {
 }
 
 #[cfg(feature = "gecko")]
-impl<'a> From<&'a str> for AtomIdent {
+impl From<&str> for AtomIdent {
     #[inline]
     fn from(string: &str) -> Self {
         Self(Atom::from(string))
@@ -432,16 +452,18 @@ impl AtomIdent {
     where
         F: FnOnce(&Self) -> R,
     {
-        Atom::with(ptr, |atom: &Atom| {
-            // safety: repr(transparent)
-            let atom = atom as *const Atom as *const AtomIdent;
-            callback(&*atom)
-        })
+        unsafe {
+            Atom::with(ptr, |atom: &Atom| {
+                // safety: repr(transparent)
+                let atom = atom as *const Atom as *const AtomIdent;
+                callback(&*atom)
+            })
+        }
     }
 
     /// Cast an atom ref to an AtomIdent ref.
     #[inline]
-    pub fn cast<'a>(atom: &'a Atom) -> &'a Self {
+    pub fn cast(atom: &Atom) -> &Self {
         let ptr = atom as *const _ as *const Self;
         // safety: repr(transparent)
         unsafe { &*ptr }
@@ -473,36 +495,27 @@ where
     dest.write_char('%')
 }
 
-/// Reify a percentage with calc.
-pub fn reify_percentage(
-    value: CSSFloat,
-    was_calc: bool,
-    dest: &mut ThinVec<TypedValue>,
-) -> Result<(), ()> {
+/// Reify a percentage.
+pub fn reify_percentage(value: CSSFloat, dest: &mut ThinVec<TypedValue>) -> Result<(), ()> {
     let numeric_value = NumericValue::Unit(UnitValue {
+        numeric_type: NumericType::percent(),
         value: value * 100.,
         unit: CssString::from("percent"),
     });
 
-    // https://drafts.css-houdini.org/css-typed-om-1/#reify-a-math-expression
-    if was_calc {
-        dest.push(TypedValue::Numeric(NumericValue::Sum(MathSum {
-            values: ThinVec::from([numeric_value]),
-        })));
-    } else {
-        dest.push(TypedValue::Numeric(numeric_value));
-    }
-
+    dest.push(TypedValue::Numeric(numeric_value));
     Ok(())
 }
 
 /// Convenience void type to disable some properties and values through types.
-#[cfg_attr(feature = "servo", derive(Deserialize, MallocSizeOf, Serialize))]
 #[derive(
     Clone,
     Copy,
     Debug,
+    Deserialize,
+    MallocSizeOf,
     PartialEq,
+    Serialize,
     SpecifiedValueInfo,
     ToAnimatedValue,
     ToComputedValue,
@@ -523,11 +536,8 @@ impl ComputeSquaredDistance for Impossible {
 impl_trivial_to_shmem!(Impossible);
 
 impl Parse for Impossible {
-    fn parse<'i, 't>(
-        _context: &ParserContext,
-        input: &mut Parser<'i, 't>,
-    ) -> Result<Self, ParseError<'i>> {
-        Err(input.new_custom_error(StyleParseErrorKind::UnspecifiedError))
+    fn parse(_context: &ParserContext, _input: &mut Parser) -> Result<Self, ParseError> {
+        Err(ParseError::custom(StyleParseErrorKind::UnspecifiedError))
     }
 }
 
@@ -569,10 +579,12 @@ impl<A: Debug, B: Debug> Debug for Either<A, B> {
     Clone,
     Debug,
     Default,
+    Deserialize,
     Eq,
     Hash,
     MallocSizeOf,
     PartialEq,
+    Serialize,
     SpecifiedValueInfo,
     ToAnimatedValue,
     ToComputedValue,
@@ -587,28 +599,18 @@ impl CustomIdent {
     ///
     /// TODO(zrhoffman, bug 1844501): Use CustomIdent::parse in more places instead of
     /// CustomIdent::from_ident.
-    pub fn parse<'i, 't>(
-        input: &mut Parser<'i, 't>,
-        invalid: &[&str],
-    ) -> Result<Self, ParseError<'i>> {
-        let location = input.current_source_location();
+    pub fn parse(input: &mut Parser, invalid: &[&str]) -> Result<Self, ParseError> {
         let ident = input.expect_ident()?;
-        CustomIdent::from_ident(location, ident, invalid)
+        CustomIdent::from_ident(ident, invalid)
     }
 
     /// Parse an already-tokenizer identifier
-    pub fn from_ident<'i>(
-        location: SourceLocation,
-        ident: &CowRcStr<'i>,
-        excluding: &[&str],
-    ) -> Result<Self, ParseError<'i>> {
+    pub fn from_ident<'i>(ident: &CowRcStr<'i>, excluding: &[&str]) -> Result<Self, ParseError> {
         if !Self::is_valid(ident, excluding) {
-            return Err(
-                location.new_custom_error(SelectorParseErrorKind::UnexpectedIdent(ident.clone()))
-            );
+            return Err(ParseError::custom(SelectorParseErrorKind::UnexpectedIdent));
         }
         if excluding.iter().any(|s| ident.eq_ignore_ascii_case(s)) {
-            Err(location.new_custom_error(StyleParseErrorKind::UnspecifiedError))
+            Err(ParseError::custom(StyleParseErrorKind::UnspecifiedError))
         } else {
             Ok(CustomIdent(Atom::from(ident.as_ref())))
         }
@@ -671,14 +673,9 @@ pub struct DashedIdent(pub Atom);
 
 impl DashedIdent {
     /// Parse an already-tokenizer identifier
-    pub fn from_ident<'i>(
-        location: SourceLocation,
-        ident: &CowRcStr<'i>,
-    ) -> Result<Self, ParseError<'i>> {
+    pub fn from_ident<'i>(ident: &CowRcStr<'i>) -> Result<Self, ParseError> {
         if !ident.starts_with("--") {
-            return Err(
-                location.new_custom_error(SelectorParseErrorKind::UnexpectedIdent(ident.clone()))
-            );
+            return Err(ParseError::custom(SelectorParseErrorKind::UnexpectedIdent));
         }
         Ok(Self(Atom::from(ident.as_ref())))
     }
@@ -715,13 +712,9 @@ impl IsTreeScoped for DashedIdent {
 }
 
 impl Parse for DashedIdent {
-    fn parse<'i, 't>(
-        _: &ParserContext,
-        input: &mut Parser<'i, 't>,
-    ) -> Result<Self, ParseError<'i>> {
-        let location = input.current_source_location();
+    fn parse(_: &ParserContext, input: &mut Parser) -> Result<Self, ParseError> {
         let ident = input.expect_ident()?;
-        Self::from_ident(location, ident)
+        Self::from_ident(ident)
     }
 }
 
@@ -783,16 +776,12 @@ impl KeyframesName {
 }
 
 impl Parse for KeyframesName {
-    fn parse<'i, 't>(
-        _: &ParserContext,
-        input: &mut Parser<'i, 't>,
-    ) -> Result<Self, ParseError<'i>> {
-        let location = input.current_source_location();
+    fn parse(_: &ParserContext, input: &mut Parser) -> Result<Self, ParseError> {
         Ok(match *input.next()? {
-            Token::Ident(ref s) => Self(CustomIdent::from_ident(location, s, &["none"])?.0),
+            Token::Ident(ref s) => Self(CustomIdent::from_ident(s, &["none"])?.0),
             // Note that empty <string> should be rejected.
             Token::QuotedString(ref s) if !s.as_ref().is_empty() => Self(Atom::from(s.as_ref())),
-            ref t => return Err(location.new_unexpected_token_error(t.clone())),
+            _ => return Err(ParseError::unexpected_token()),
         })
     }
 }

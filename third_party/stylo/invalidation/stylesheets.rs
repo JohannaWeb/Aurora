@@ -225,14 +225,14 @@ impl StylesheetInvalidationSet {
         }
 
         if !self.buckets.ids.is_empty() {
-            if let Some(ref id) = element.id() {
+            if let Some(id) = element.id() {
                 kind.add(self.buckets.ids.get(id, quirks_mode));
                 if kind.is_scope() {
                     return kind;
                 }
             }
 
-            if let Some(ref old_id) = snapshot.and_then(|s| s.id_attr()) {
+            if let Some(old_id) = snapshot.and_then(|s| s.id_attr()) {
                 kind.add(self.buckets.ids.get(old_id, quirks_mode));
                 if kind.is_scope() {
                     return kind;
@@ -376,12 +376,12 @@ impl StylesheetInvalidationSet {
                 }
             },
             Component::Class(ref class) => {
-                if invalidation.as_ref().map_or(true, |s| !s.is_id_or_class()) {
+                if invalidation.as_ref().is_none_or(|s| !s.is_id_or_class()) {
                     *invalidation = Some(Invalidation::Class(class.clone()));
                 }
             },
             Component::ID(ref id) => {
-                if invalidation.as_ref().map_or(true, |s| !s.is_id()) {
+                if invalidation.as_ref().is_none_or(|s| !s.is_id()) {
                     *invalidation = Some(Invalidation::ID(id.clone()));
                 }
             },
@@ -639,7 +639,7 @@ impl StylesheetInvalidationSet {
             LayerStatement(..) => {
                 // Layer statement insertions might alter styling order, so we need to always
                 // invalidate fully.
-                return self.invalidate_fully();
+                self.invalidate_fully()
             },
             Document(..) | Import(..) | Media(..) | Supports(..) | Container(..)
             | LayerBlock(..) | StartingStyle(..) | AppearanceBase(..) => {
@@ -718,7 +718,7 @@ where
     let style = data.styles.primary();
     if style.clone_position().is_absolutely_positioned() {
         let fallbacks = style.clone_position_try_fallbacks();
-        let referenced = fallbacks.0.iter().any(|f| match f {
+        let referenced = fallbacks.value.0.iter().any(|f| match f {
             PositionTryFallbacksItem::IdentAndOrTactic(ident_or_tactic) => {
                 changed_names.contains(&ident_or_tactic.ident.0)
             },

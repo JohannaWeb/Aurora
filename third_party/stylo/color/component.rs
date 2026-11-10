@@ -6,21 +6,19 @@
 
 use std::fmt::Write;
 
-use super::{
-    parsing::{rcs_enabled, ChannelKeyword},
-    AbsoluteColor,
-};
+use super::{parsing::ChannelKeyword, AbsoluteColor};
 use crate::derives::*;
+use crate::typed_om::NumericType;
 use crate::{
     parser::ParserContext,
     values::{
         animated::ToAnimatedValue,
-        generics::calc::{CalcUnits, GenericCalcNode},
-        specified::calc::{AllowParse, Leaf},
+        computed,
+        specified::calc::{CalcNode, CalcParseFlags, Leaf, PercentageContext},
     },
 };
 use cssparser::{color::OPAQUE, Parser, Token};
-use style_traits::{ParseError, ToCss};
+use style_traits::{ParseError, StyleParseErrorKind, ToCss};
 
 /// A single color component.
 #[derive(Clone, Debug, MallocSizeOf, PartialEq, ToShmem)]
@@ -33,7 +31,7 @@ pub enum ColorComponent<ValueType> {
     /// A channel keyword, e.g. `r`, `l`, `alpha`, etc.
     ChannelKeyword(ChannelKeyword),
     /// A calc() value.
-    Calc(Box<GenericCalcNode<Leaf>>),
+    Calc(Box<CalcNode>),
     /// Used when alpha components are not specified.
     AlphaOmitted,
 }
@@ -55,8 +53,8 @@ pub trait ColorComponentType: Sized + Clone {
     /// Construct a new component from a single value.
     fn from_value(value: f32) -> Self;
 
-    /// Return the [CalcUnits] flags that the impl can handle.
-    fn units() -> CalcUnits;
+    /// Returns whether the given numeric type is valid for this color component.
+    fn is_valid_type(ty: &NumericType) -> bool;
 
     /// Try to create a new component from the given token.
     fn try_from_token(token: &Token) -> Result<Self, ()>;
@@ -68,88 +66,105 @@ pub trait ColorComponentType: Sized + Clone {
 
 impl<ValueType: ColorComponentType> ColorComponent<ValueType> {
     /// Parse a single [ColorComponent].
-    pub fn parse<'i, 't>(
+    pub fn parse(
         context: &ParserContext,
-        input: &mut Parser<'i, 't>,
+        input: &mut Parser,
         allow_none: bool,
-    ) -> Result<Self, ParseError<'i>> {
-        let location = input.current_source_location();
-
+        allowed_channel_keywords: ChannelKeyword,
+        percentage_context: PercentageContext,
+    ) -> Result<Self, ParseError> {
         match *input.next()? {
             Token::Ident(ref value) if allow_none && value.eq_ignore_ascii_case("none") => {
                 Ok(ColorComponent::None)
             },
-            ref t @ Token::Ident(ref ident) => {
-                let Ok(channel_keyword) = ChannelKeyword::from_ident(ident) else {
-                    return Err(location.new_unexpected_token_error(t.clone()));
-                };
-                Ok(ColorComponent::ChannelKeyword(channel_keyword))
-            },
+            Token::Ident(ref ident) => Ok(match ChannelKeyword::from_ident(ident) {
+                Ok(channel_keyword) if allowed_channel_keywords.contains(channel_keyword) => {
+                    ColorComponent::ChannelKeyword(channel_keyword)
+                },
+                _ => return Err(ParseError::unexpected_token()),
+            }),
             Token::Function(ref name) => {
-                let function = GenericCalcNode::math_function(context, name, location)?;
-                let allow = AllowParse::new(if rcs_enabled() {
-                    ValueType::units() | CalcUnits::COLOR_COMPONENT
-                } else {
-                    ValueType::units()
-                });
-                let mut node = GenericCalcNode::parse(context, input, function, allow)?;
-
-                // TODO(tlouw): We only have to simplify the node when we have to store it, but we
-                //              only know if we have to store it much later when the whole color
-                //              can't be resolved to absolute at which point the calc nodes are
-                //              burried deep in a [ColorFunction] struct.
+                let function = CalcNode::math_function(context, name)?;
+                let mut flags = CalcParseFlags::new(percentage_context);
+                flags.color_components = allowed_channel_keywords;
+                let mut node = CalcNode::parse(context, input, function, flags)?;
                 node.simplify_and_sort();
-
+                if !node
+                    .numeric_type()
+                    .is_ok_and(|ty| ValueType::is_valid_type(&ty))
+                {
+                    return Err(ParseError::custom(StyleParseErrorKind::UnspecifiedError));
+                }
                 Ok(Self::Calc(Box::new(node)))
             },
             ref t => ValueType::try_from_token(t)
                 .map(Self::Value)
-                .map_err(|_| location.new_unexpected_token_error(t.clone())),
+                .map_err(|_| ParseError::unexpected_token()),
         }
     }
 
-    /// Resolve a [ColorComponent] into a float.  None is "none".
-    pub fn resolve(&self, origin_color: Option<&AbsoluteColor>) -> Result<Option<ValueType>, ()> {
-        Ok(match self {
-            ColorComponent::None => None,
-            ColorComponent::Value(value) => Some(value.clone()),
-            ColorComponent::ChannelKeyword(channel_keyword) => match origin_color {
+    /// Compute the component's value against `context`, substituting color
+    /// channel references with the matching channel of `origin_color` when it is
+    /// provided (and already converted into this function's color space).
+    ///
+    /// If no (absolute) origin color is available, channel references are kept
+    /// intact, so the component can still be resolved later at use-value time.
+    pub fn to_computed_value(
+        &self,
+        context: Option<&computed::Context>,
+        origin_color: Option<&AbsoluteColor>,
+    ) -> Self {
+        match self {
+            Self::None => Self::None,
+            Self::Value(v) => Self::Value(v.clone()),
+            Self::ChannelKeyword(channel_keyword) => match origin_color {
                 Some(origin_color) => {
-                    let value = origin_color.get_component_by_channel_keyword(*channel_keyword)?;
-                    Some(ValueType::from_value(value.unwrap_or(0.0)))
+                    match origin_color.get_component_by_channel_keyword(*channel_keyword) {
+                        Ok(value) => Self::Value(ValueType::from_value(value.unwrap_or(0.0))),
+                        Err(()) => Self::ChannelKeyword(*channel_keyword),
+                    }
                 },
-                None => return Err(()),
+                None => Self::ChannelKeyword(*channel_keyword),
             },
-            ColorComponent::Calc(node) => {
-                let Ok(resolved_leaf) = node.resolve_map(|leaf| {
-                    Ok(match leaf {
-                        Leaf::ColorComponent(channel_keyword) => match origin_color {
-                            Some(origin_color) => {
-                                let value = origin_color
-                                    .get_component_by_channel_keyword(*channel_keyword)?;
-                                Leaf::Number(value.unwrap_or(0.0))
-                            },
-                            None => return Err(()),
-                        },
-                        l => l.clone(),
-                    })
-                }) else {
-                    return Err(());
-                };
-
-                Some(ValueType::try_from_leaf(&resolved_leaf)?)
-            },
-            ColorComponent::AlphaOmitted => {
-                if let Some(origin_color) = origin_color {
-                    // <https://drafts.csswg.org/css-color-5/#rcs-intro>
-                    // If the alpha value of the relative color is omitted, it defaults to that of
-                    // the origin color (rather than defaulting to 100%, as it does in the absolute
-                    // syntax).
-                    origin_color.alpha().map(ValueType::from_value)
-                } else {
-                    Some(ValueType::from_value(OPAQUE))
+            Self::Calc(node) => {
+                // Try to compute, substitute channels and fold the calc tree in a
+                // single pass. If it resolves to a concrete value, collapse to a
+                // value; otherwise keep the computed (still symbolic) calc tree.
+                match node
+                    .resolve_map(|leaf| Ok(leaf.to_computed_value(context, origin_color)))
+                    .and_then(|leaf| ValueType::try_from_leaf(&leaf))
+                {
+                    Ok(value) => Self::Value(value),
+                    Err(..) => Self::Calc(Box::new(node.to_computed_value(context, origin_color))),
                 }
             },
+            Self::AlphaOmitted => match origin_color {
+                // <https://drafts.csswg.org/css-color-5/#rcs-intro>
+                // If the alpha value of the relative color is omitted, it
+                // defaults to that of the origin color (rather than defaulting to
+                // 100%, as it does in the absolute syntax).
+                Some(origin_color) => match origin_color.alpha() {
+                    Some(alpha) => Self::Value(ValueType::from_value(alpha)),
+                    None => Self::None,
+                },
+                None => Self::AlphaOmitted,
+            },
+        }
+    }
+
+    /// Resolve an already-computed [ColorComponent] into a float. None is
+    /// "none". This assumes color channel references have already been
+    /// substituted by [`to_computed_value`], and so does not require an origin
+    /// color.
+    pub fn resolve(&self) -> Result<Option<ValueType>, ()> {
+        Ok(match self {
+            Self::None => None,
+            Self::Value(value) => Some(value.clone()),
+            // An unsubstituted channel reference can't be resolved without an
+            // origin color.
+            Self::ChannelKeyword(_) => return Err(()),
+            Self::Calc(node) => Some(ValueType::try_from_leaf(&node.resolve()?)?),
+            Self::AlphaOmitted => Some(ValueType::from_value(OPAQUE)),
         })
     }
 }

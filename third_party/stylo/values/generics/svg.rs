@@ -120,10 +120,7 @@ pub enum GenericSVGPaintKind<C, U> {
 pub use self::GenericSVGPaintKind as SVGPaintKind;
 
 impl<C: Parse, U: Parse> Parse for SVGPaint<C, U> {
-    fn parse<'i, 't>(
-        context: &ParserContext,
-        input: &mut Parser<'i, 't>,
-    ) -> Result<Self, ParseError<'i>> {
+    fn parse(context: &ParserContext, input: &mut Parser) -> Result<Self, ParseError> {
         let kind = SVGPaintKind::parse(context, input)?;
         if matches!(kind, SVGPaintKind::None | SVGPaintKind::Color(..)) {
             return Ok(SVGPaint {
@@ -157,7 +154,6 @@ impl<C: Parse, U: Parse> Parse for SVGPaint<C, U> {
     ToTyped,
 )]
 #[repr(C, u8)]
-#[typed(todo_derive_fields)]
 pub enum GenericSVGLength<L> {
     /// `<length> | <percentage> | <number>`
     LengthPercentage(L),
@@ -184,10 +180,10 @@ pub use self::GenericSVGLength as SVGLength;
     ToTyped,
 )]
 #[repr(C, u8)]
-#[typed(todo_derive_fields)]
 pub enum GenericSVGStrokeDashArray<L> {
     /// `[ <length> | <percentage> | <number> ]#`
     #[css(comma)]
+    #[typed(no_multiple_values)]
     Values(#[css(if_empty = "none", iterable)] crate::OwnedSlice<L>),
     /// `context-value`
     ContextValue,
@@ -216,7 +212,6 @@ pub use self::GenericSVGStrokeDashArray as SVGStrokeDashArray;
     ToTyped,
 )]
 #[repr(C, u8)]
-#[typed(todo_derive_fields)]
 pub enum GenericSVGOpacity<OpacityType> {
     /// `<opacity-value>`
     Opacity(OpacityType),

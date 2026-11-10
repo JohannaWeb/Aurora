@@ -7,8 +7,8 @@
 
 #![deny(missing_docs)]
 
-use crate::dom::{SendElement, TElement};
 use crate::LocalName;
+use crate::dom::{SendElement, TElement};
 use atomic_refcell::{AtomicRefCell, AtomicRefMut};
 use selectors::bloom::BloomFilter;
 use smallvec::SmallVec;
@@ -117,18 +117,18 @@ where
     E: TElement,
     F: FnMut(u32),
 {
-    f(element.local_name().get_hash());
-    f(element.namespace().get_hash());
+    f(element.local_name().get_hash32());
+    f(element.namespace().get_hash32());
 
     if let Some(id) = element.id() {
-        f(id.get_hash());
+        f(id.get_hash32());
     }
 
-    element.each_class(|class| f(class.get_hash()));
+    element.each_class(|class| f(class.get_hash32()));
 
     element.each_attr_name(|name| {
         if !is_attr_name_excluded_from_filter(name) {
-            f(name.get_hash())
+            f(name.get_hash32())
         }
     });
 }
@@ -137,6 +137,12 @@ impl<E: TElement> Drop for StyleBloom<E> {
     fn drop(&mut self) {
         // Leave the reusable bloom filter in a zeroed state.
         self.clear();
+    }
+}
+
+impl<E: TElement> Default for StyleBloom<E> {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -165,16 +171,14 @@ impl<E: TElement> StyleBloom<E> {
 
     /// Return the bloom filter used properly by the `selectors` crate.
     pub fn filter(&self) -> &BloomFilter {
-        &*self.filter
+        &self.filter
     }
 
     /// Push an element to the bloom filter, knowing that it's a child of the
     /// last element parent.
     pub fn push(&mut self, element: E) {
-        if cfg!(debug_assertions) {
-            if self.elements.is_empty() {
-                assert!(element.traversal_parent().is_none());
-            }
+        if cfg!(debug_assertions) && self.elements.is_empty() {
+            assert!(element.traversal_parent().is_none());
         }
         self.push_internal(element);
     }
@@ -276,7 +280,7 @@ impl<E: TElement> StyleBloom<E> {
     /// (if any) and its ancestors.
     #[inline]
     pub fn current_parent(&self) -> Option<E> {
-        self.elements.last().map(|ref el| *el.element)
+        self.elements.last().map(|el| *el.element)
     }
 
     /// Insert the parents of an element in the bloom filter, trying to recover
@@ -395,5 +399,16 @@ impl<E: TElement> StyleBloom<E> {
         debug_assert_eq!(self.elements.len(), element_depth);
 
         // We're done! Easy.
+    }
+}
+
+pub(crate) trait AtomExt {
+    fn get_hash32(&self) -> u32;
+}
+
+impl<Static: string_cache::StaticAtomSet> AtomExt for string_cache::Atom<Static> {
+    fn get_hash32(&self) -> u32 {
+        let hash64 = self.get_hash();
+        (hash64 >> 32) as u32 ^ (hash64 as u32)
     }
 }

@@ -10,6 +10,7 @@ use crate::derives::*;
 use crate::error_reporting::ContextualParseError;
 use crate::parser::{Parse, ParserContext};
 use crate::shared_lock::{SharedRwLockReadGuard, ToCssWithGuard};
+use crate::values::computed::FontWeight;
 use crate::values::generics::font::FontStyle as GenericFontStyle;
 use crate::values::specified::{url::SpecifiedUrl, Angle};
 use cssparser::{Parser, RuleBodyParser, SourceLocation};
@@ -17,11 +18,10 @@ use std::fmt::{self, Write};
 use style_traits::{CssStringWriter, CssWriter, ParseError, StyleParseErrorKind, ToCss};
 
 pub use crate::properties::font_face::{DescriptorId, DescriptorParser, Descriptors};
-pub use crate::values::computed::font::{FamilyName, FontStretch};
+pub use crate::values::computed::font::{FamilyName, FontStyle, FontWidth};
 pub use crate::values::specified::font::{
-    AbsoluteFontWeight, FontFeatureSettings, FontLanguageOverride,
-    FontStretch as SpecifiedFontStretch, FontVariationSettings, MetricsOverride,
-    SpecifiedFontStyle,
+    AbsoluteFontWeight, FontFeatureSettings, FontLanguageOverride, FontVariationSettings,
+    FontWidth as SpecifiedFontWidth, MetricsOverride, SpecifiedFontStyle,
 };
 
 /// A source for a font-face rule.
@@ -44,10 +44,7 @@ pub struct SourceList(#[css(iterable)] pub Vec<Source>);
 // because we want to filter out components that parsed as None, then fail if no
 // valid components remain. So we provide our own implementation here.
 impl Parse for SourceList {
-    fn parse<'i, 't>(
-        context: &ParserContext,
-        input: &mut Parser<'i, 't>,
-    ) -> Result<Self, ParseError<'i>> {
+    fn parse(context: &ParserContext, input: &mut Parser) -> Result<Self, ParseError> {
         // Parse the comma-separated list, then let filter_map discard any None items.
         let list = input
             .parse_comma_separated(|input| {
@@ -56,10 +53,10 @@ impl Parse for SourceList {
                 Ok(s.ok())
             })?
             .into_iter()
-            .filter_map(|s| s)
+            .flatten()
             .collect::<Vec<Source>>();
         if list.is_empty() {
-            Err(input.new_custom_error(StyleParseErrorKind::UnspecifiedError))
+            Err(ParseError::custom(StyleParseErrorKind::UnspecifiedError))
         } else {
             Ok(SourceList(list))
         }
@@ -68,8 +65,9 @@ impl Parse for SourceList {
 
 /// Keywords for the font-face src descriptor's format() function.
 /// ('None' and 'Unknown' are for internal use in gfx, not exposed to CSS.)
-#[derive(Clone, Copy, Debug, Eq, MallocSizeOf, Parse, PartialEq, ToCss, ToShmem)]
-#[cfg_attr(feature = "servo", derive(Deserialize, Serialize))]
+#[derive(
+    Clone, Copy, Debug, Deserialize, Eq, MallocSizeOf, Parse, PartialEq, Serialize, ToCss, ToShmem,
+)]
 #[repr(u8)]
 #[allow(missing_docs)]
 pub enum FontFaceSourceFormatKeyword {
@@ -88,8 +86,7 @@ pub enum FontFaceSourceFormatKeyword {
 
 /// Flags for the @font-face tech() function, indicating font technologies
 /// required by the resource.
-#[derive(Clone, Copy, Debug, Eq, MallocSizeOf, PartialEq, ToShmem)]
-#[cfg_attr(feature = "servo", derive(Deserialize, Serialize))]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, MallocSizeOf, PartialEq, Serialize, ToShmem)]
 #[repr(C)]
 pub struct FontFaceSourceTechFlags(u16);
 bitflags! {
@@ -121,7 +118,7 @@ bitflags! {
 
 impl FontFaceSourceTechFlags {
     /// Parse a single font-technology keyword and return its flag.
-    pub fn parse_one<'i, 't>(input: &mut Parser<'i, 't>) -> Result<Self, ParseError<'i>> {
+    pub fn parse_one(input: &mut Parser) -> Result<Self, ParseError> {
         Ok(try_match_ident_ignore_ascii_case! { input,
             "features-opentype" => Self::FEATURES_OPENTYPE,
             "features-aat" => Self::FEATURES_AAT,
@@ -139,11 +136,7 @@ impl FontFaceSourceTechFlags {
 }
 
 impl Parse for FontFaceSourceTechFlags {
-    fn parse<'i, 't>(
-        _context: &ParserContext,
-        input: &mut Parser<'i, 't>,
-    ) -> Result<Self, ParseError<'i>> {
-        let location = input.current_source_location();
+    fn parse(_context: &ParserContext, input: &mut Parser) -> Result<Self, ParseError> {
         // We don't actually care about the return value of parse_comma_separated,
         // because we insert the flags into result as we go.
         let mut result = Self::empty();
@@ -155,7 +148,7 @@ impl Parse for FontFaceSourceTechFlags {
         if !result.is_empty() {
             Ok(result)
         } else {
-            Err(location.new_custom_error(StyleParseErrorKind::UnspecifiedError))
+            Err(ParseError::custom(StyleParseErrorKind::UnspecifiedError))
         }
     }
 }
@@ -225,7 +218,7 @@ impl FontFaceRule {
 #[repr(u8)]
 #[allow(missing_docs)]
 pub enum FontFaceSourceListComponent {
-    Url(*const crate::gecko::url::CssUrl),
+    Url(*const crate::url::CssUrl),
     Local(*mut crate::gecko_bindings::structs::nsAtom),
     FormatHintKeyword(FontFaceSourceFormatKeyword),
     FormatHintString {
@@ -235,8 +228,7 @@ pub enum FontFaceSourceListComponent {
     TechFlags(FontFaceSourceTechFlags),
 }
 
-#[derive(Clone, Debug, Eq, MallocSizeOf, PartialEq, ToCss, ToShmem)]
-#[cfg_attr(feature = "servo", derive(Deserialize, Serialize))]
+#[derive(Clone, Debug, Deserialize, Eq, MallocSizeOf, PartialEq, Serialize, ToCss, ToShmem)]
 #[repr(u8)]
 #[allow(missing_docs)]
 pub enum FontFaceSourceFormat {
@@ -283,9 +275,19 @@ impl ToCss for UrlSource {
 /// The font-display descriptor determines how a font face is displayed based
 /// on whether and when it is downloaded and ready to use.
 #[allow(missing_docs)]
-#[cfg_attr(feature = "servo", derive(Deserialize, Serialize))]
 #[derive(
-    Clone, Copy, Debug, Eq, MallocSizeOf, Parse, PartialEq, ToComputedValue, ToCss, ToShmem,
+    Clone,
+    Copy,
+    Debug,
+    Deserialize,
+    Eq,
+    MallocSizeOf,
+    Parse,
+    PartialEq,
+    Serialize,
+    ToComputedValue,
+    ToCss,
+    ToShmem,
 )]
 #[repr(u8)]
 pub enum FontDisplay {
@@ -299,10 +301,7 @@ pub enum FontDisplay {
 macro_rules! impl_range {
     ($range:ident, $component:ident) => {
         impl Parse for $range {
-            fn parse<'i, 't>(
-                context: &ParserContext,
-                input: &mut Parser<'i, 't>,
-            ) -> Result<Self, ParseError<'i>> {
+            fn parse(context: &ParserContext, input: &mut Parser) -> Result<Self, ParseError> {
                 let first = $component::parse(context, input)?;
                 let second = input
                     .try_parse(|input| $component::parse(context, input))
@@ -333,13 +332,14 @@ macro_rules! impl_range {
 pub struct FontWeightRange(pub AbsoluteFontWeight, pub AbsoluteFontWeight);
 impl_range!(FontWeightRange, AbsoluteFontWeight);
 
-/// The computed representation of the above so Gecko can read them easily.
+/// The computed representation of the above so Gecko and Servo can read them easily.
 ///
 /// This one is needed because cbindgen doesn't know how to generate
 /// specified::Number.
 #[repr(C)]
 #[allow(missing_docs)]
-pub struct ComputedFontWeightRange(f32, f32);
+#[derive(Clone, Debug, Deserialize, Hash, MallocSizeOf, PartialEq, Serialize)]
+pub struct ComputedFontWeightRange(pub FontWeight, pub FontWeight);
 
 #[inline]
 fn sort_range<T: PartialOrd>(a: T, b: T) -> (T, T) {
@@ -351,39 +351,43 @@ fn sort_range<T: PartialOrd>(a: T, b: T) -> (T, T) {
 }
 
 impl FontWeightRange {
-    /// Returns a computed font-stretch range.
-    pub fn compute(&self) -> ComputedFontWeightRange {
-        let (min, max) = sort_range(self.0.compute().value(), self.1.compute().value());
-        ComputedFontWeightRange(min, max)
+    /// Returns a computed font-weight range, or None if either bound is an unresolvable calc.
+    pub fn compute(&self) -> Option<ComputedFontWeightRange> {
+        let (min, max) = sort_range(self.0.compute()?, self.1.compute()?);
+        Some(ComputedFontWeightRange(min, max))
     }
 }
 
-/// The font-stretch descriptor:
+/// The font-width descriptor:
 ///
-/// https://drafts.csswg.org/css-fonts-4/#descdef-font-face-font-stretch
+/// https://drafts.csswg.org/css-fonts-4/#descdef-font-face-font-width
 #[derive(Clone, Debug, MallocSizeOf, PartialEq, ToShmem)]
-pub struct FontStretchRange(pub SpecifiedFontStretch, pub SpecifiedFontStretch);
-impl_range!(FontStretchRange, SpecifiedFontStretch);
+pub struct FontWidthRange(pub SpecifiedFontWidth, pub SpecifiedFontWidth);
+impl_range!(FontWidthRange, SpecifiedFontWidth);
 
-/// The computed representation of the above, so that Gecko can read them
+/// The computed representation of the above, so that Gecko and Servo can read them
 /// easily.
 #[repr(C)]
 #[allow(missing_docs)]
-pub struct ComputedFontStretchRange(FontStretch, FontStretch);
+#[derive(Clone, Debug, Deserialize, Hash, MallocSizeOf, PartialEq, Serialize)]
+pub struct ComputedFontWidthRange(pub FontWidth, pub FontWidth);
 
-impl FontStretchRange {
-    /// Returns a computed font-stretch range.
-    pub fn compute(&self) -> ComputedFontStretchRange {
-        fn compute_stretch(s: &SpecifiedFontStretch) -> FontStretch {
+impl FontWidthRange {
+    /// Returns a computed font-width range, or None if any value contains a calc
+    /// expression that cannot be resolved at parse time.
+    pub fn compute(&self) -> Option<ComputedFontWidthRange> {
+        fn compute_width(s: &SpecifiedFontWidth) -> Option<FontWidth> {
             match *s {
-                SpecifiedFontStretch::Keyword(ref kw) => kw.compute(),
-                SpecifiedFontStretch::Stretch(ref p) => FontStretch::from_percentage(p.0.get()),
-                SpecifiedFontStretch::System(..) => unreachable!(),
+                SpecifiedFontWidth::Keyword(ref kw) => Some(kw.compute()),
+                SpecifiedFontWidth::Width(ref p) => {
+                    Some(FontWidth::from_percentage(p.compute()?.0))
+                },
+                SpecifiedFontWidth::System(..) => unreachable!(),
             }
         }
 
-        let (min, max) = sort_range(compute_stretch(&self.0), compute_stretch(&self.1));
-        ComputedFontStretchRange(min, max)
+        let (min, max) = sort_range(compute_width(&self.0)?, compute_width(&self.1)?);
+        Some(ComputedFontWidthRange(min, max))
     }
 }
 
@@ -392,56 +396,51 @@ impl FontStretchRange {
 /// https://drafts.csswg.org/css-fonts-4/#descdef-font-face-font-style
 #[derive(Clone, Debug, MallocSizeOf, PartialEq, ToShmem)]
 #[allow(missing_docs)]
-pub enum FontStyle {
+pub enum FontStyleRange {
     Italic,
     Oblique(Angle, Angle),
 }
 
-/// The computed representation of the above, with angles in degrees, so that
-/// Gecko can read them easily.
-#[repr(u8)]
+/// The computed representation of the above, with angles in degrees stored as
+/// signed 8.8 fixed-point values, so that Gecko and Servo can read them easily.
+#[repr(C)]
 #[allow(missing_docs)]
-pub enum ComputedFontStyleDescriptor {
-    Italic,
-    Oblique(f32, f32),
-}
+#[derive(Clone, Debug, Deserialize, Hash, MallocSizeOf, PartialEq, Serialize)]
+pub struct ComputedFontStyleRange(pub FontStyle, pub FontStyle);
 
-impl Parse for FontStyle {
-    fn parse<'i, 't>(
-        context: &ParserContext,
-        input: &mut Parser<'i, 't>,
-    ) -> Result<Self, ParseError<'i>> {
+impl Parse for FontStyleRange {
+    fn parse(context: &ParserContext, input: &mut Parser) -> Result<Self, ParseError> {
         // We parse 'normal' explicitly here to distinguish it from 'oblique 0deg',
         // because we must not accept a following angle.
         if input
             .try_parse(|i| i.expect_ident_matching("normal"))
             .is_ok()
         {
-            return Ok(FontStyle::Oblique(Angle::zero(), Angle::zero()));
+            return Ok(Self::Oblique(Angle::zero(), Angle::zero()));
         }
 
         let style = SpecifiedFontStyle::parse(context, input)?;
         Ok(match style {
-            GenericFontStyle::Italic => FontStyle::Italic,
+            GenericFontStyle::Italic => Self::Italic,
             GenericFontStyle::Oblique(angle) => {
                 let second_angle = input
                     .try_parse(|input| SpecifiedFontStyle::parse_angle(context, input))
                     .unwrap_or_else(|_| angle.clone());
 
-                FontStyle::Oblique(angle, second_angle)
+                Self::Oblique(angle, second_angle)
             },
         })
     }
 }
 
-impl ToCss for FontStyle {
+impl ToCss for FontStyleRange {
     fn to_css<W>(&self, dest: &mut CssWriter<W>) -> fmt::Result
     where
         W: fmt::Write,
     {
         match *self {
-            FontStyle::Italic => dest.write_str("italic"),
-            FontStyle::Oblique(ref first, ref second) => {
+            Self::Italic => dest.write_str("italic"),
+            Self::Oblique(ref first, ref second) => {
                 // Not first.is_zero() because we don't want to serialize
                 // `oblique calc(0deg)` as `normal`.
                 if *first == Angle::zero() && first == second {
@@ -462,19 +461,16 @@ impl ToCss for FontStyle {
     }
 }
 
-impl FontStyle {
+impl FontStyleRange {
     /// Returns a computed font-style descriptor.
-    pub fn compute(&self) -> ComputedFontStyleDescriptor {
-        match *self {
-            FontStyle::Italic => ComputedFontStyleDescriptor::Italic,
-            FontStyle::Oblique(ref first, ref second) => {
-                let (min, max) = sort_range(
-                    SpecifiedFontStyle::compute_angle_degrees(first),
-                    SpecifiedFontStyle::compute_angle_degrees(second),
-                );
-                ComputedFontStyleDescriptor::Oblique(min, max)
+    pub fn compute(&self) -> Option<ComputedFontStyleRange> {
+        Some(match *self {
+            Self::Italic => ComputedFontStyleRange(FontStyle::ITALIC, FontStyle::ITALIC),
+            Self::Oblique(ref first, ref second) => {
+                let (min, max) = sort_range(first.degrees()?, second.degrees()?);
+                ComputedFontStyleRange(FontStyle::oblique(min), FontStyle::oblique(max))
             },
-        }
+        })
     }
 }
 
@@ -492,10 +488,9 @@ pub fn parse_font_face_block(
             context,
             descriptors: &mut rule.descriptors,
         };
-        let mut iter = RuleBodyParser::new(input, &mut parser);
-        while let Some(declaration) = iter.next() {
-            if let Err((error, slice)) = declaration {
-                let location = error.location;
+        let iter = RuleBodyParser::new(input, &mut parser);
+        for declaration in iter {
+            if let Err((error, slice, location)) = declaration {
                 let error = ContextualParseError::UnsupportedFontFaceDescriptor(slice, error);
                 context.log_css_error(location, error)
             }
@@ -504,12 +499,8 @@ pub fn parse_font_face_block(
     rule
 }
 
-
 impl Parse for Source {
-    fn parse<'i, 't>(
-        context: &ParserContext,
-        input: &mut Parser<'i, 't>,
-    ) -> Result<Source, ParseError<'i>> {
+    fn parse(context: &ParserContext, input: &mut Parser) -> Result<Source, ParseError> {
         if input
             .try_parse(|input| input.expect_function_matching("local"))
             .is_ok()
@@ -539,7 +530,7 @@ impl Parse for Source {
         };
 
         // Parse optional tech()
-        let tech_flags = if static_prefs::pref!("layout.css.font-tech.enabled")
+        let tech_flags = if crate::pref!("layout.css.font-tech.enabled", gecko = true)
             && input
                 .try_parse(|input| input.expect_function_matching("tech"))
                 .is_ok()

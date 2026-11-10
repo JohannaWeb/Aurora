@@ -1,99 +1,177 @@
-use std::ops::Range;
+use blitz_traits::node_id::NodeId;
+#[cfg(feature = "svg")]
+use markup5ever::local_name;
 
 use crate::net::ResourceHandler;
-use crate::node::NodeFlags;
+use crate::node::{Node, NodeFlags};
+use crate::tree::NodeTree;
 use crate::{
     BaseDocument, net::ImageHandler, node::ImageResourceData, node::Status, util::ImageLayerKind,
 };
-use crate::{NON_INCREMENTAL, Node};
+use style::matching::StyleChange;
 use style::properties::ComputedValues;
 use style::properties::generated::longhands::position::computed_value::T as Position;
-use style::selector_parser::RestyleDamage;
-use style::servo::url::ComputedUrl;
-use style::values::computed::Float;
+use style::selector_parser::{PseudoElement, RestyleDamage};
+use style::shared_lock::StylesheetGuards;
+use style::url::ComputedUrl;
 use style::values::generics::image::Image as StyloImage;
 use style::values::specified::align::AlignFlags;
 use style::values::specified::box_::DisplayInside;
 use style::values::specified::box_::DisplayOutside;
-use taffy::Rect;
+use thin_vec::ThinVec;
 
-pub(crate) const CONSTRUCT_BOX: RestyleDamage =
-    RestyleDamage::from_bits_retain(0b_0000_0000_0001_0000);
-pub(crate) const CONSTRUCT_FC: RestyleDamage =
-    RestyleDamage::from_bits_retain(0b_0000_0000_0010_0000);
-pub(crate) const CONSTRUCT_DESCENDENT: RestyleDamage =
-    RestyleDamage::from_bits_retain(0b_0000_0000_0100_0000);
+// Blitz-specific damage bits, in increasing order of severity above Servo's
+// `RestyleDamage::RELAYOUT` (0b1111).
 
 pub(crate) const ONLY_RELAYOUT: RestyleDamage =
     RestyleDamage::from_bits_retain(0b_0000_0000_0000_1000);
 
+/// The node's `order` changed: its flex/grid container must re-collect its
+/// `layout_children` (which sorts them). Consumed by the container in
+/// `propagate_damage_flags`, which marks itself `CONSTRUCT_BOX` without
+/// forwarding that further up. Deliberately not part of `ALL_DAMAGE`.
+pub(crate) const REORDER_CHILDREN: RestyleDamage =
+    RestyleDamage::from_bits_retain(0b_0000_0000_0001_0000);
+
+pub(crate) const CONSTRUCT_BOX: RestyleDamage =
+    RestyleDamage::from_bits_retain(0b_0000_0000_0010_0000);
+pub(crate) const CONSTRUCT_FC: RestyleDamage =
+    RestyleDamage::from_bits_retain(0b_0000_0000_0100_0000);
+pub(crate) const CONSTRUCT_DESCENDENT: RestyleDamage =
+    RestyleDamage::from_bits_retain(0b_0000_0000_1000_0000);
+
 pub(crate) const ALL_DAMAGE: RestyleDamage =
-    RestyleDamage::from_bits_retain(0b_0000_0000_0111_1111);
+    RestyleDamage::from_bits_retain(0b_0000_0000_1110_1111);
 
 impl BaseDocument {
-    #[cfg(feature = "incremental")]
-    pub(crate) fn propagate_damage_flags(
-        &mut self,
-        node_id: usize,
-        damage_from_parent: RestyleDamage,
-    ) -> RestyleDamage {
-        let mut damage = if let Some(data) = self.nodes[node_id].stylo_element_data.get_mut() {
+    /// Union `RestyleDamage` up the tree and clear the layout caches of every
+    /// node whose subtree needs relayout.
+    ///
+    /// Damage is stored on (styled) DOM nodes, so this pass walks the DOM tree
+    /// (`children` + `::before`/`::after`): `display:contents` nodes and the
+    /// inline descendants of inline roots carry damage but are not layout
+    /// children. Owned anonymous boxes are refreshed through `anonymous_blocks`,
+    /// without revisiting their DOM children. Damage inside an anonymous box
+    /// also invalidates its cache by walking `layout_parent` upward.
+    pub(crate) fn propagate_damage_flags(&mut self, node_id: NodeId) -> RestyleDamage {
+        let own_damage = if let Some(data) = self.nodes[node_id]
+            .try_stylo_element_data_mut()
+            .and_then(|s| s.get_mut())
+        {
             data.damage
         } else {
             return RestyleDamage::empty();
         };
-        damage |= damage_from_parent;
+        let mut damage = own_damage;
 
-        let damage_for_children = RestyleDamage::empty();
-        let children = std::mem::take(&mut self.nodes[node_id].children);
-        let layout_children = std::mem::take(self.nodes[node_id].layout_children.get_mut());
-        let use_layout_children = self.nodes[node_id].should_traverse_layout_children();
-        if use_layout_children {
-            let layout_children = layout_children.as_ref().unwrap();
-            for child in layout_children.iter() {
-                damage |= self.propagate_damage_flags(*child, damage_for_children);
-            }
-        } else {
-            for child in children.iter() {
-                damage |= self.propagate_damage_flags(*child, damage_for_children);
-            }
-            if let Some(before_id) = self.nodes[node_id].before {
-                damage |= self.propagate_damage_flags(before_id, damage_for_children);
-            }
-            if let Some(after_id) = self.nodes[node_id].after {
-                damage |= self.propagate_damage_flags(after_id, damage_for_children);
+        // Skip subtrees which contain no damage. Anonymous nodes are never
+        // skipped themselves because damage marking walks the DOM parent
+        // chain, which bypasses anonymous boxes: a damaged node's flagged
+        // ancestors may reach it only through an unflagged anonymous wrapper.
+        {
+            let node = &self.nodes[node_id];
+            if damage.is_empty() && !node.has_damaged_descendants() && !node.is_anonymous() {
+                return RestyleDamage::empty();
             }
         }
 
-        let node = &mut self.nodes[node_id];
+        let mut damage_from_children = RestyleDamage::empty();
+        let children = std::mem::take(&mut self.nodes[node_id].children);
+        for child in children.iter() {
+            damage_from_children |= self.propagate_damage_flags(*child);
+        }
+        if let Some(before_id) = self.nodes[node_id].before() {
+            damage_from_children |= self.propagate_damage_flags(before_id);
+        }
+        if let Some(after_id) = self.nodes[node_id].after() {
+            damage_from_children |= self.propagate_damage_flags(after_id);
+        }
+
+        // A child's `order` changed: this container re-collects (and so re-sorts)
+        // its layout children. Only the direct parent consumes the flag, and the
+        // resulting `CONSTRUCT_BOX` is not forwarded further up: the container's
+        // own box is unchanged, so ancestors need only `RELAYOUT` (always set
+        // alongside `REORDER_CHILDREN`) plus `CONSTRUCT_DESCENDENT` so that a
+        // traversal gated on it still reaches this container.
+        let reorder = damage_from_children.contains(REORDER_CHILDREN)
+            && matches!(
+                self.nodes[node_id].display_constructed_as().inside(),
+                DisplayInside::Flex | DisplayInside::Grid
+            );
+        damage_from_children.remove(REORDER_CHILDREN);
+        damage |= damage_from_children;
 
         // Put children back
-        node.children = children;
-        *node.layout_children.get_mut() = layout_children;
+        self.nodes[node_id].children = children;
 
         if damage.contains(CONSTRUCT_BOX) {
             damage.insert(RestyleDamage::RELAYOUT);
         }
 
         // Compute damage to propagate to parent
-        let damage_for_parent = damage; // & RestyleDamage::RELAYOUT;
+        let mut damage_for_parent = damage; // & RestyleDamage::RELAYOUT;
+
+        if reorder {
+            damage.insert(CONSTRUCT_BOX);
+            damage_for_parent.insert(CONSTRUCT_DESCENDENT);
+        }
+
+        // An inline `<svg>` is rendered from a snapshot of its subtree (with
+        // `currentColor` resolved) taken during box construction, so it must be
+        // rebuilt whenever the style of the `<svg>` or any descendant changes.
+        #[cfg(feature = "svg")]
+        if !damage.is_empty()
+            && self.nodes[node_id]
+                .data
+                .is_element_with_tag_name(&local_name!("svg"))
+        {
+            damage.insert(CONSTRUCT_BOX);
+        }
+
+        // Reconstruction replaces the anonymous boxes with freshly styled ones.
+        if !own_damage.is_empty() && !damage.intersects(CONSTRUCT_BOX | CONSTRUCT_FC) {
+            let anonymous_damage = self.refresh_anonymous_block_styles(node_id);
+            damage |= anonymous_damage;
+            damage_for_parent |= anonymous_damage;
+        }
+
+        let node = &mut self.nodes[node_id];
 
         // If the node or any of it's children have been mutated or their layout styles
         // have changed, then we should clear it's layout cache.
+        let mut invalidate_anonymous_ancestors = false;
         if damage.intersects(ONLY_RELAYOUT | CONSTRUCT_BOX) {
-            node.cache.clear();
-            if let Some(inline_layout) = node
-                .data
-                .downcast_element_mut()
-                .and_then(|el| el.inline_layout_data.as_mut())
-            {
-                inline_layout.content_widths = None;
-            }
+            node.invalidate_layout_cache();
+            invalidate_anonymous_ancestors = true;
             damage.remove(ONLY_RELAYOUT);
         }
 
         // Store damage for current node
         node.set_damage(damage);
+
+        // Anonymous boxes between this node and its nearest element ancestor
+        // are not visited by the DOM walk, so invalidate them here by walking
+        // `layout_parent`. Stop at the first non-anonymous node: elements are
+        // DOM ancestors and clear themselves when RELAYOUT reaches them.
+        //
+        // The chain is always usable: anonymous blocks are only freed by the
+        // reconstruct branch of `resolve_layout_children` (which immediately
+        // re-collects and resets `layout_parent` for every child it visits,
+        // recursing through the fresh anonymous blocks which are born with
+        // `ALL_DAMAGE`) and by node removal (the subtree leaves the document).
+        // So when this pass runs, a node's `layout_parent` chain is either
+        // current or owned by a container which reconstructs this frame. A
+        // stale key for a freed block yields `None` (slab keys are versioned).
+        if invalidate_anonymous_ancestors {
+            let mut current = self.nodes[node_id].layout_parent.get();
+            while let Some(ancestor) = current.and_then(|id| self.nodes.get_mut(id)) {
+                if !ancestor.is_anonymous() {
+                    break;
+                }
+                ancestor.invalidate_layout_cache();
+                current = ancestor.layout_parent.get();
+            }
+        }
 
         // let _is_fc_root = node
         //     .primary_styles()
@@ -115,9 +193,144 @@ impl BaseDocument {
         // Propagate damage to parent
         damage_for_parent
     }
+
+    /// Refresh owned anonymous boxes without revisiting their DOM children.
+    fn refresh_anonymous_block_styles(&mut self, node_id: NodeId) -> RestyleDamage {
+        // Skip owners with no anonymous boxes to refresh.
+        if self.nodes[node_id].anonymous_blocks.is_empty() {
+            return RestyleDamage::empty();
+        }
+
+        // Cascade once from the owner, sharing the result across its anonymous boxes.
+        let style = {
+            let Some(parent_style) = self.nodes[node_id].primary_styles() else {
+                return RestyleDamage::empty();
+            };
+            let read_guard = self.guard.read();
+            let guards = StylesheetGuards::same(&read_guard);
+            self.stylist.style_for_anonymous::<&Node>(
+                &guards,
+                &PseudoElement::ServoAnonymousBox,
+                &parent_style,
+            )
+        };
+
+        // Take the ownership list so we can mutate nodes without copying it.
+        let anonymous_blocks = std::mem::take(&mut self.nodes[node_id].anonymous_blocks);
+        let mut damage_for_parent = RestyleDamage::empty();
+        for &anonymous_id in &anonymous_blocks {
+            let (mut damage, changed) = {
+                // Skip boxes whose node, style data, or previous style is unavailable.
+                let Some(node) = self.nodes.get_mut(anonymous_id) else {
+                    continue;
+                };
+                let Some(mut data) = node.try_stylo_element_data_mut().and_then(|s| s.get_mut())
+                else {
+                    continue;
+                };
+                let Some(old_style) = data.styles.primary.as_ref() else {
+                    continue;
+                };
+
+                // Compute precise damage, retaining the old style allocation if unchanged.
+                let diff = RestyleDamage::compute_style_difference::<&Node>(old_style, &style);
+                let changed = matches!(diff.change, StyleChange::Changed { .. });
+                if changed {
+                    data.styles.primary = Some(style.clone());
+                    data.set_restyled();
+                }
+                (data.damage | diff.damage, changed)
+            };
+
+            // Refresh nested owned boxes unless reconstruction will replace them.
+            if changed && !damage.intersects(CONSTRUCT_BOX | CONSTRUCT_FC) {
+                damage |= self.refresh_anonymous_block_styles(anonymous_id);
+            }
+
+            // Reconstruction also requires relayout; propagate all damage to the owner.
+            if damage.contains(CONSTRUCT_BOX) {
+                damage.insert(RestyleDamage::RELAYOUT);
+            }
+            damage_for_parent |= damage;
+
+            // Invalidate cached layout and consume only the relayout bit.
+            let node = &mut self.nodes[anonymous_id];
+            if damage.intersects(ONLY_RELAYOUT | CONSTRUCT_BOX) {
+                node.invalidate_layout_cache();
+                damage.remove(ONLY_RELAYOUT);
+            }
+
+            // Store remaining damage and mark the ancestor path when needed.
+            node.set_damage(damage);
+            if !damage.is_empty() {
+                node.mark_damaged();
+            }
+        }
+
+        // Restore the ownership list and return the combined damage.
+        self.nodes[node_id].anonymous_blocks = anonymous_blocks;
+        damage_for_parent
+    }
+
+    /// Mark every node in the document with `ALL_DAMAGE` (non-incremental
+    /// mode). Iterates the node slotmap directly rather than walking the tree,
+    /// which is cheaper and also reaches pseudo-elements and anonymous boxes
+    /// without special-casing them. Detached nodes get marked too, which is
+    /// harmless: they are reconstructed on re-attachment anyway.
+    pub(crate) fn mark_all_damaged(&mut self) {
+        for (_, node) in self.nodes.iter_mut() {
+            node.insert_damage(ALL_DAMAGE);
+        }
+    }
+
+    /// Clear damage and the `damaged_descendants`/`dirty_descendants` flags
+    /// on all nodes which may carry them, using the `damaged_descendants`
+    /// flags to skip clean subtrees (mirroring `propagate_damage_flags`).
+    ///
+    /// Every node is visited exactly once: DOM nodes through their parent's
+    /// `children`, pseudo-elements through their owner's `before`/`after`,
+    /// anonymous boxes through their owner's `anonymous_blocks`. An anonymous
+    /// box's `children` are DOM nodes already reached through its owner, so
+    /// they are not recursed into.
+    pub(crate) fn clear_damage_and_dirty_flags(&mut self, node_id: NodeId) {
+        // Anonymous boxes can be freed during construction while still
+        // listed in their owner's `anonymous_blocks`.
+        let Some(node) = self.nodes.get_mut(node_id) else {
+            return;
+        };
+        let is_anonymous = node.is_anonymous();
+        let has_damage = node.damage().is_some_and(|d| !d.is_empty());
+        if !has_damage && !node.has_damaged_descendants() && !is_anonymous {
+            return;
+        }
+        let anonymous_blocks = std::mem::take(&mut node.anonymous_blocks);
+        let children = std::mem::take(&mut node.children);
+        let (before, after) = (node.before(), node.after());
+
+        for anon_id in anonymous_blocks.iter() {
+            self.clear_damage_and_dirty_flags(*anon_id);
+        }
+        if !is_anonymous {
+            for child in children.iter() {
+                self.clear_damage_and_dirty_flags(*child);
+            }
+        }
+        if let Some(before_id) = before {
+            self.clear_damage_and_dirty_flags(before_id);
+        }
+        if let Some(after_id) = after {
+            self.clear_damage_and_dirty_flags(after_id);
+        }
+
+        let node = &mut self.nodes[node_id];
+        node.anonymous_blocks = anonymous_blocks;
+        node.children = children;
+        node.clear_damage_mut();
+        node.unset_damaged_descendants();
+        node.unset_dirty_descendants();
+    }
 }
 
-// #[cfg(feature = "incremental")]
 // fn is_fc_root(style: &ComputedValues) -> bool {
 //     let display = style.clone_display();
 //     let display_inside = display.inside();
@@ -153,6 +366,7 @@ pub(crate) fn compute_layout_damage(old: &ComputedValues, new: &ComputedValues) 
         if old_box.display != new_box.display
             || old_box.float != new_box.float
             || old_box.position != new_box.position
+            || old_box.contain != new_box.contain
             || old.clone_visibility() != new.clone_visibility()
         {
             return true;
@@ -213,6 +427,7 @@ pub(crate) fn compute_layout_damage(old: &ComputedValues, new: &ComputedValues) 
             && (old_text.white_space_collapse != new_text.white_space_collapse
                 || old_text.text_transform != new_text.text_transform
                 || old_text.word_break != new_text.word_break
+                || old_text.line_break != new_text.line_break
                 || old_text.overflow_wrap != new_text.overflow_wrap
                 || old_text.letter_spacing != new_text.letter_spacing
                 || old_text.word_spacing != new_text.word_spacing
@@ -232,6 +447,16 @@ pub(crate) fn compute_layout_damage(old: &ComputedValues, new: &ComputedValues) 
         ALL_DAMAGE
     } else if text_shaping_needs_recollect() {
         ALL_DAMAGE
+    } else if old.get_position().order != new.get_position().order
+        // `position` is unchanged here (else the box tree would be rebuilt), so
+        // checking the new style suffices. Out-of-flow children are not flex/grid
+        // items: `Node::order()` keys them as 0 regardless of `order`.
+        && !matches!(
+            new.get_box().position,
+            Position::Absolute | Position::Fixed
+        )
+    {
+        RestyleDamage::RELAYOUT | REORDER_CHILDREN
     } else {
         // This element needs to be laid out again, but does not have any damage to
         // its box. In the future, we will distinguish between types of damage to the
@@ -240,91 +465,17 @@ pub(crate) fn compute_layout_damage(old: &ComputedValues, new: &ComputedValues) 
     }
 }
 
-/// A child with a z_index that is hoisted up to it's containing Stacking Context for paint purposes
-#[derive(Debug, Clone)]
-pub struct HoistedPaintChild {
-    pub node_id: usize,
-    pub z_index: i32,
-    pub position: taffy::Point<f32>,
-}
-
-#[derive(Debug)]
-pub struct HoistedPaintChildren {
-    pub children: Vec<HoistedPaintChild>,
-    /// The number of hoisted point children with negative z_index
-    pub negative_z_count: u32,
-
-    pub content_area: taffy::Rect<f32>,
-}
-
-impl HoistedPaintChildren {
-    fn new() -> Self {
-        Self {
-            children: Vec::new(),
-            negative_z_count: 0,
-            content_area: taffy::Rect::ZERO,
-        }
+/// Stable-sort a flex/grid container's freshly constructed `layout_children`
+/// (in document order) by `order`. Skips the sort when every child has the
+/// default `order` (0).
+pub(crate) fn sort_layout_children_by_order(
+    nodes: &NodeTree,
+    layout_children: &mut ThinVec<NodeId>,
+) {
+    if layout_children.iter().all(|id| nodes[*id].order() == 0) {
+        return;
     }
-
-    pub fn reset(&mut self) {
-        self.children.clear();
-        self.negative_z_count = 0;
-    }
-
-    pub fn compute_content_size(&mut self, doc: &BaseDocument) {
-        fn child_pos(child: &HoistedPaintChild, doc: &BaseDocument) -> Rect<f32> {
-            let node = &doc.nodes[child.node_id];
-            let left = child.position.x + node.final_layout.location.x;
-            let top = child.position.y + node.final_layout.location.y;
-            let right = left + node.final_layout.size.width;
-            let bottom = top + node.final_layout.size.height;
-
-            taffy::Rect {
-                top,
-                left,
-                bottom,
-                right,
-            }
-        }
-
-        if self.children.is_empty() {
-            self.content_area = taffy::Rect::ZERO;
-        } else {
-            self.content_area = child_pos(&self.children[0], doc);
-            for child in self.children[1..].iter() {
-                let pos = child_pos(child, doc);
-                self.content_area.left = self.content_area.left.min(pos.left);
-                self.content_area.top = self.content_area.top.min(pos.top);
-                self.content_area.right = self.content_area.right.max(pos.right);
-                self.content_area.bottom = self.content_area.bottom.max(pos.bottom);
-            }
-        }
-    }
-
-    pub fn sort(&mut self) {
-        self.children.sort_by_key(|c| c.z_index);
-        self.negative_z_count = self.children.iter().take_while(|c| c.z_index < 0).count() as u32;
-    }
-
-    pub fn neg_z_range(&self) -> Range<usize> {
-        0..(self.negative_z_count as usize)
-    }
-
-    pub fn pos_z_range(&self) -> Range<usize> {
-        (self.negative_z_count as usize)..self.children.len()
-    }
-
-    pub fn neg_z_hoisted_children(
-        &self,
-    ) -> impl ExactSizeIterator<Item = &HoistedPaintChild> + DoubleEndedIterator {
-        self.children[self.neg_z_range()].iter()
-    }
-
-    pub fn pos_z_hoisted_children(
-        &self,
-    ) -> impl ExactSizeIterator<Item = &HoistedPaintChild> + DoubleEndedIterator {
-        self.children[self.pos_z_range()].iter()
-    }
+    layout_children.sort_by_cached_key(|id| nodes[*id].order());
 }
 
 impl BaseDocument {
@@ -366,21 +517,40 @@ impl BaseDocument {
         }
     }
 
-    pub fn flush_styles_to_layout(&mut self, node_id: usize) {
-        self.flush_styles_to_layout_impl(node_id, None);
+    /// Flush the image layers of nodes whose style changed during the last
+    /// style traversal (or whose pseudo-element boxes were (re)constructed).
+    pub(crate) fn flush_pending_style_images(&mut self) {
+        let mut pending = std::mem::take(&mut self.pending_style_image_nodes);
+        pending.sort_unstable();
+        pending.dedup();
+        for node_id in pending {
+            // Anonymous boxes (including pseudo-elements) can be removed from
+            // the slab between queueing and flushing; skip stale IDs.
+            if !self.nodes.contains_key(node_id) {
+                continue;
+            }
+            self.flush_image_layers_from_style(node_id, ImageLayerKind::Background);
+            self.flush_image_layers_from_style(node_id, ImageLayerKind::Mask);
+        }
     }
 
     /// Flush a CSS image layer list (`background-image` or `mask-image`) from style
     /// to dedicated storage on the node, fetching any images which are not yet loaded.
-    fn flush_image_layers_from_style(&mut self, node_id: usize, kind: ImageLayerKind) {
+    fn flush_image_layers_from_style(&mut self, node_id: NodeId, kind: ImageLayerKind) {
         let doc_id = self.id();
         let node = self.nodes.get_mut(node_id).unwrap();
-        let stylo_element_data = node.stylo_element_data.get();
-        let primary_styles = stylo_element_data
-            .as_ref()
-            .and_then(|data| data.styles.get_primary());
-        let Some(style) = primary_styles else {
-            return;
+        // Clone the primary style `Arc` into an owned value so the immutable
+        // borrow of `node` (held by the stylo element data guard) is released
+        // before we take a mutable borrow of `node.data` below.
+        let style = {
+            let stylo_element_data = node.try_stylo_element_data().and_then(|s| s.get());
+            let primary_styles = stylo_element_data
+                .as_ref()
+                .and_then(|data| data.styles.get_primary());
+            let Some(style) = primary_styles else {
+                return;
+            };
+            style.clone()
         };
         let Some(elem) = node.data.downcast_element_mut() else {
             return;
@@ -395,7 +565,7 @@ impl BaseDocument {
         };
 
         let len = style_images.len();
-        elem_images.resize_with(len, || None);
+        elem_images.resize(len, None);
 
         for idx in 0..len {
             let style_image = &style_images[idx];
@@ -404,7 +574,7 @@ impl BaseDocument {
                     let old_image = elem_images[idx].as_ref();
                     let old_image_url = old_image.map(|data| &data.url);
                     if old_image_url.is_some_and(|old_url| **new_url == **old_url) {
-                        break;
+                        continue;
                     }
 
                     // Check cache first
@@ -454,168 +624,5 @@ impl BaseDocument {
             // Element will always exist due to resize_with above
             elem_images[idx] = new_image;
         }
-    }
-
-    /// Walk the whole tree, converting styles to layout
-    fn flush_styles_to_layout_impl(
-        &mut self,
-        node_id: usize,
-        parent_stacking_context: Option<&mut HoistedPaintChildren>,
-    ) {
-        let mut new_stacking_context: HoistedPaintChildren = HoistedPaintChildren::new();
-        let stacking_context = &mut new_stacking_context;
-
-        // Flush background/mask images from style to dedicated storage on the node
-        self.flush_image_layers_from_style(node_id, ImageLayerKind::Background);
-        self.flush_image_layers_from_style(node_id, ImageLayerKind::Mask);
-
-        let display = {
-            let node = self.nodes.get_mut(node_id).unwrap();
-            let _damage = node.damage().unwrap_or(ALL_DAMAGE);
-            let stylo_element_data = node.stylo_element_data.get();
-            let primary_styles = stylo_element_data
-                .as_ref()
-                .and_then(|data| data.styles.get_primary());
-
-            let Some(style) = primary_styles else {
-                return;
-            };
-
-            // if damage.intersects(RestyleDamage::RELAYOUT | CONSTRUCT_BOX) {
-            node.style = stylo_taffy::to_taffy_style(style);
-            node.display_constructed_as = style.clone_display();
-            // }
-
-            // In non-incremental mode we unconditionally clear the Taffy cache.
-            // In incremental mode this is handled as part of damage propagation.
-            if NON_INCREMENTAL {
-                node.cache.clear();
-                if let Some(inline_layout) = node
-                    .data
-                    .downcast_element_mut()
-                    .and_then(|el| el.inline_layout_data.as_mut())
-                {
-                    inline_layout.content_widths = None;
-                }
-            }
-
-            node.style.display
-        };
-
-        // If the node has children, then take those children and...
-        let children = self.nodes[node_id].layout_children.borrow_mut().take();
-        if let Some(mut children) = children {
-            let is_flex_or_grid = matches!(display, taffy::Display::Flex | taffy::Display::Grid);
-
-            // Recursively call flush_styles_to_layout on each child
-            for &child in children.iter() {
-                self.flush_styles_to_layout_impl(
-                    child,
-                    match self.nodes[child].is_stacking_context_root(is_flex_or_grid) {
-                        true => None,
-                        false => Some(stacking_context),
-                    },
-                );
-            }
-
-            // Sort layout_children
-            if is_flex_or_grid {
-                children.sort_by(|left, right| {
-                    let left_node = self.nodes.get(*left).unwrap();
-                    let right_node = self.nodes.get(*right).unwrap();
-                    left_node.order().cmp(&right_node.order())
-                });
-            }
-
-            // Reserve space for paint_children
-            let mut paint_children = self.nodes[node_id].paint_children.borrow_mut();
-            if paint_children.is_none() {
-                *paint_children = Some(Vec::new());
-            }
-            let paint_children = paint_children.as_mut().unwrap();
-            paint_children.clear();
-            paint_children.reserve(children.len());
-
-            // Push children to either paint_children or layout_children depending on
-            for &child_id in children.iter() {
-                let child = &self.nodes[child_id];
-
-                let Some(style) = child.primary_styles() else {
-                    paint_children.push(child_id);
-                    continue;
-                };
-
-                let position = style.clone_position();
-                let z_index = style.clone_z_index().integer_or(0);
-
-                // TODO: more complete hoisting detection
-                if position != Position::Static && z_index != 0 {
-                    stacking_context.children.push(HoistedPaintChild {
-                        node_id: child_id,
-                        z_index,
-                        position: taffy::Point::ZERO,
-                    })
-                } else {
-                    paint_children.push(child_id);
-                }
-            }
-
-            // Sort paint_children
-            paint_children.sort_by(|left, right| {
-                let left_node = self.nodes.get(*left).unwrap();
-                let right_node = self.nodes.get(*right).unwrap();
-                node_to_paint_order(left_node, is_flex_or_grid)
-                    .cmp(&node_to_paint_order(right_node, is_flex_or_grid))
-            });
-
-            // Put children back
-            *self.nodes[node_id].layout_children.borrow_mut() = Some(children);
-        }
-
-        if let Some(parent_stacking_context) = parent_stacking_context {
-            let position = self.nodes[node_id].final_layout.location;
-            let scroll_offset = self.nodes[node_id].scroll_offset;
-            for hoisted in stacking_context.children.iter_mut() {
-                hoisted.position.x += position.x - scroll_offset.x as f32;
-                hoisted.position.y += position.y - scroll_offset.y as f32;
-            }
-            parent_stacking_context
-                .children
-                .extend(stacking_context.children.iter().cloned());
-        } else {
-            stacking_context.sort();
-            stacking_context.compute_content_size(self);
-            self.nodes[node_id].stacking_context = Some(Box::new(new_stacking_context));
-        }
-    }
-}
-
-#[inline(always)]
-fn position_to_order(pos: Position) -> i32 {
-    match pos {
-        Position::Static | Position::Relative | Position::Sticky => 0,
-        Position::Absolute | Position::Fixed => 2,
-    }
-}
-#[inline(always)]
-fn float_to_order(pos: Float) -> i32 {
-    match pos {
-        Float::None => 0,
-        _ => 1,
-    }
-}
-
-#[inline(always)]
-fn node_to_paint_order(node: &Node, is_flex_or_grid: bool) -> i32 {
-    let Some(style) = node.primary_styles() else {
-        return 0;
-    };
-    if is_flex_or_grid {
-        match style.clone_position() {
-            Position::Static | Position::Relative | Position::Sticky => style.clone_order(),
-            Position::Absolute | Position::Fixed => 0,
-        }
-    } else {
-        position_to_order(style.clone_position()) + float_to_order(style.clone_float())
     }
 }

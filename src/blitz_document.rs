@@ -1,6 +1,6 @@
 use anyrender::PaintScene;
 use anyrender_vello::VelloScenePainter;
-use blitz_dom::{Attribute, BaseDocument, DocumentConfig, DocumentMutator};
+use blitz_dom::{Attribute, BaseDocument, DocumentConfig, DocumentMutator, NodeId};
 use blitz_html::HtmlDocument;
 use blitz_traits::net::{Bytes, NetHandler, NetProvider, Request};
 use blitz_traits::shell::{ColorScheme, Viewport};
@@ -74,7 +74,7 @@ const MAX_CONSECUTIVE_PANICS: u32 = 5;
 pub struct MirrorIntegrityError {
     pub operation: &'static str,
     pub legacy_node: Option<usize>,
-    pub blitz_node: Option<usize>,
+    pub blitz_node: Option<NodeId>,
     pub message: String,
 }
 
@@ -83,7 +83,7 @@ impl MirrorIntegrityError {
     fn new(
         operation: &'static str,
         legacy_node: Option<usize>,
-        blitz_node: Option<usize>,
+        blitz_node: Option<NodeId>,
         message: impl Into<String>,
     ) -> Self {
         Self {
@@ -113,7 +113,7 @@ pub struct MirrorMutationTrace {
     pub op_id: u64,
     pub op_name: &'static str,
     pub legacy_node: Option<usize>,
-    pub blitz_node: Option<usize>,
+    pub blitz_node: Option<NodeId>,
     pub parent: Option<usize>,
     pub child: Option<usize>,
     pub shadow_root: bool,
@@ -189,8 +189,8 @@ pub struct BlitzDocument {
     consecutive_panics: u32,
     next_mirror_op_id: u64,
     last_mirror_mutation: Option<MirrorMutationTrace>,
-    legacy_to_blitz: BTreeMap<usize, usize>,
-    blitz_to_legacy: BTreeMap<usize, NodePtr>,
+    legacy_to_blitz: BTreeMap<usize, NodeId>,
+    blitz_to_legacy: BTreeMap<NodeId, NodePtr>,
 }
 
 impl BlitzDocument {
@@ -243,6 +243,7 @@ impl BlitzDocument {
         let config = Self::config(base_url, identity, width, height);
         catch_stylo_panic("constructing Blitz document from DOM", || {
             let mut inner = BaseDocument::new(config);
+            let root_id = inner.root_node().id;
             let mut legacy_to_blitz = BTreeMap::new();
             let mut blitz_to_legacy = BTreeMap::new();
             {
@@ -251,9 +252,9 @@ impl BlitzDocument {
                     legacy_to_blitz: &mut legacy_to_blitz,
                     blitz_to_legacy: &mut blitz_to_legacy,
                 };
-                maps.legacy_to_blitz.insert(legacy_node_key(dom), 0);
-                maps.blitz_to_legacy.insert(0, dom.clone());
-                append_dom_children(&mut mutator, 0, dom, &ns!(html), &mut maps);
+                maps.legacy_to_blitz.insert(legacy_node_key(dom), root_id);
+                maps.blitz_to_legacy.insert(root_id, dom.clone());
+                append_dom_children(&mut mutator, root_id, dom, &ns!(html), &mut maps);
             }
             BlitzDocument {
                 inner,
@@ -306,7 +307,7 @@ impl BlitzDocument {
         updated
     }
 
-    pub fn blitz_node_id_for_dom(&self, node: &NodePtr) -> Option<usize> {
+    pub fn blitz_node_id_for_dom(&self, node: &NodePtr) -> Option<NodeId> {
         self.legacy_to_blitz.get(&legacy_node_key(node)).copied()
     }
 
@@ -406,12 +407,12 @@ impl BlitzDocument {
         operation: &'static str,
         dom_node: &NodePtr,
         legacy_id: usize,
-        blitz_id: usize,
+        blitz_id: NodeId,
         blitz_node: &blitz_dom::Node,
     ) -> Result<(), MirrorIntegrityError> {
         match &*dom_node.borrow() {
             Node::Document { .. } => {
-                if !matches!(blitz_node.data, blitz_dom::NodeData::Document)
+                if !matches!(blitz_node.data, blitz_dom::NodeData::Document(..))
                     && blitz_node.data.downcast_element().is_none()
                 {
                     return Err(MirrorIntegrityError::new(
@@ -445,7 +446,7 @@ impl BlitzDocument {
                 }
             },
             Node::Comment(_) => {
-                if !matches!(blitz_node.data, blitz_dom::NodeData::Comment) {
+                if !matches!(blitz_node.data, blitz_dom::NodeData::Comment { .. }) {
                     return Err(MirrorIntegrityError::new(
                         operation,
                         Some(legacy_id),
@@ -463,7 +464,7 @@ impl BlitzDocument {
                         "shadow root maps to non-element Blitz node",
                     ));
                 };
-                if blitz_el.name.local.as_ref() != "div" {
+                if &*blitz_el.name.local != "div" {
                     return Err(MirrorIntegrityError::new(
                         operation,
                         Some(legacy_id),
@@ -533,7 +534,7 @@ impl BlitzDocument {
                         "legacy element maps to non-element Blitz node",
                     ));
                 };
-                if blitz_el.name.local.as_ref() != el.tag_name.as_str() {
+                if &*blitz_el.name.local != el.tag_name.as_str() {
                     return Err(MirrorIntegrityError::new(
                         operation,
                         Some(legacy_id),
@@ -645,7 +646,7 @@ impl BlitzDocument {
     fn record_mirror_mutation(
         &mut self,
         op: &MirrorOp,
-        blitz_node: Option<usize>,
+        blitz_node: Option<NodeId>,
         result: MirrorMutationResult,
         failure: Option<MirrorMutationFailure>,
     ) {
@@ -674,7 +675,7 @@ impl BlitzDocument {
         self.record_mirror_mutation(op, None, MirrorMutationResult::Failed, Some(failure));
     }
 
-    fn finish_mirror_mutation(&mut self, op: &MirrorOp, blitz_node: Option<usize>, updated: bool) {
+    fn finish_mirror_mutation(&mut self, op: &MirrorOp, blitz_node: Option<NodeId>, updated: bool) {
         if updated {
             self.consecutive_panics = 0;
             let validation_failed = self.debug_validate_mirror_after(op.op_name).is_err();
@@ -698,7 +699,7 @@ impl BlitzDocument {
         }
     }
 
-    pub fn dom_node_for_blitz_id(&self, node_id: usize) -> Option<NodePtr> {
+    pub fn dom_node_for_blitz_id(&self, node_id: NodeId) -> Option<NodePtr> {
         self.blitz_to_legacy.get(&node_id).cloned()
     }
 
@@ -788,7 +789,7 @@ impl BlitzDocument {
 
     pub fn document_height(&self) -> f32 {
         let root = self.inner.root_element();
-        document_bottom(root).max(root.final_layout.size.height)
+        document_bottom(root).max(root.final_layout().size.height)
     }
 
     /// Border-box geometry of `node` from the Blitz/Stylo layout that produced
@@ -798,16 +799,20 @@ impl BlitzDocument {
     /// (`offsetWidth`, `getBoundingClientRect`, …) in normal Blitz mode.
     pub fn dom_node_layout_metrics(&self, node: &NodePtr) -> Option<LayoutMetrics> {
         let node_id = self.blitz_node_id_for_dom(node)?;
-        let size = self.inner.get_node(node_id)?.final_layout.size;
+        let size = self.inner.get_node(node_id)?.final_layout().size;
         let (mut x, mut y) = (0.0_f32, 0.0_f32);
         let mut current = Some(node_id);
         while let Some(id) = current {
             let Some(n) = self.inner.get_node(id) else {
                 break;
             };
-            x += n.final_layout.location.x;
-            y += n.final_layout.location.y;
-            current = n.parent;
+            x += n.final_layout().location.x;
+            y += n.final_layout().location.y;
+            // A box's location is relative to its containing block: the
+            // out-of-flow containing block for boxes Taffy hoists (absolute,
+            // fixed), otherwise its layout parent. The DOM parent is wrong for
+            // both hoisted boxes and children of anonymous blocks.
+            current = n.containing_block();
         }
         Some(LayoutMetrics {
             x,
@@ -818,7 +823,7 @@ impl BlitzDocument {
     }
 
     #[allow(dead_code)]
-    fn blitz_is_descendant_or_self(&self, mut node_id: usize, ancestor_id: usize) -> bool {
+    fn blitz_is_descendant_or_self(&self, mut node_id: NodeId, ancestor_id: NodeId) -> bool {
         loop {
             if node_id == ancestor_id {
                 return true;
@@ -832,7 +837,7 @@ impl BlitzDocument {
 
     fn collect_by_tag_from_blitz(
         &self,
-        node_id: usize,
+        node_id: NodeId,
         tag: &str,
         start: &NodePtr,
         out: &mut Vec<NodePtr>,
@@ -841,7 +846,7 @@ impl BlitzDocument {
             return;
         };
         if let Some(element) = node.data.downcast_element() {
-            if (tag == "*" || element.name.local.as_ref().eq_ignore_ascii_case(tag))
+            if (tag == "*" || (*element.name.local).eq_ignore_ascii_case(tag))
                 && let Some(dom_node) = self.dom_node_for_blitz_id(node_id)
                 && is_element_node(&dom_node)
                 && query_can_see(start, &dom_node)
@@ -1283,7 +1288,7 @@ impl BlitzDocument {
         updated
     }
 
-    fn node_namespace(&self, node_id: usize) -> Option<markup5ever::Namespace> {
+    fn node_namespace(&self, node_id: NodeId) -> Option<markup5ever::Namespace> {
         self.inner
             .get_node(node_id)
             .and_then(|node| node.data.downcast_element())
@@ -1362,7 +1367,7 @@ impl BlitzDocument {
         out
     }
 
-    fn dump_node(&self, node_id: usize, depth: usize, out: &mut String) {
+    fn dump_node(&self, node_id: NodeId, depth: usize, out: &mut String) {
         if depth > 18 {
             return;
         }
@@ -1370,8 +1375,8 @@ impl BlitzDocument {
             return;
         };
         if let Some(el) = node.data.downcast_element() {
-            let s = node.final_layout.size;
-            let loc = node.final_layout.location;
+            let s = node.final_layout().size;
+            let loc = node.final_layout().location;
             let disp = node
                 .primary_styles()
                 .map(|st| format!("{:?}", st.clone_display()))
@@ -1459,7 +1464,7 @@ impl BlitzDocument {
 
 fn append_dom_children(
     mutator: &mut DocumentMutator<'_>,
-    parent_id: usize,
+    parent_id: NodeId,
     node: &NodePtr,
     parent_ns: &markup5ever::Namespace,
     maps: &mut BlitzNodeMaps<'_>,
@@ -1471,8 +1476,8 @@ fn append_dom_children(
 }
 
 struct BlitzNodeMaps<'a> {
-    legacy_to_blitz: &'a mut BTreeMap<usize, usize>,
-    blitz_to_legacy: &'a mut BTreeMap<usize, NodePtr>,
+    legacy_to_blitz: &'a mut BTreeMap<usize, NodeId>,
+    blitz_to_legacy: &'a mut BTreeMap<NodeId, NodePtr>,
 }
 
 fn create_dom_node(
@@ -1480,7 +1485,7 @@ fn create_dom_node(
     node: &NodePtr,
     parent_ns: &markup5ever::Namespace,
     maps: &mut BlitzNodeMaps<'_>,
-) -> usize {
+) -> NodeId {
     if let Some(&existing) = maps.legacy_to_blitz.get(&legacy_node_key(node)) {
         return existing;
     }
@@ -1499,8 +1504,8 @@ fn create_dom_node(
         // Comments mirror 1:1 as Blitz comment nodes (Blitz's layout generates
         // no boxes for them), keeping child indices and insert-before anchors
         // aligned between the legacy DOM and the mirror.
-        Node::Comment(_) => {
-            let id = mutator.create_comment_node();
+        Node::Comment(comment) => {
+            let id = mutator.create_comment_node(&comment.content);
             maps.legacy_to_blitz.insert(legacy_node_key(node), id);
             maps.blitz_to_legacy.insert(id, node.clone());
             id
@@ -1540,7 +1545,7 @@ fn create_shadow_root_node(
     parent_ns: &markup5ever::Namespace,
     mode: &str,
     maps: &mut BlitzNodeMaps<'_>,
-) -> usize {
+) -> NodeId {
     if let Some(&existing) = maps.legacy_to_blitz.get(&legacy_node_key(shadow_root)) {
         return existing;
     }
@@ -1583,7 +1588,7 @@ fn blitz_ids_for_dom_child(
     child: &NodePtr,
     parent_ns: &markup5ever::Namespace,
     maps: &mut BlitzNodeMaps<'_>,
-) -> Vec<usize> {
+) -> Vec<NodeId> {
     if is_document_fragment(child) && !is_shadow_root_node(child) {
         child_nodes_for_blitz(child)
             .into_iter()
@@ -1639,8 +1644,8 @@ fn attr_qual_name_to_string(name: &QualName) -> String {
 
 fn remove_subtree_mapping(
     node: &NodePtr,
-    legacy_to_blitz: &mut BTreeMap<usize, usize>,
-    blitz_to_legacy: &mut BTreeMap<usize, NodePtr>,
+    legacy_to_blitz: &mut BTreeMap<usize, NodeId>,
+    blitz_to_legacy: &mut BTreeMap<NodeId, NodePtr>,
 ) {
     if let Some(blitz_id) = legacy_to_blitz.remove(&legacy_node_key(node)) {
         blitz_to_legacy.remove(&blitz_id);
@@ -1651,9 +1656,9 @@ fn remove_subtree_mapping(
 }
 
 fn remove_blitz_subtree_mapping(
-    node_id: usize,
-    legacy_to_blitz: &mut BTreeMap<usize, usize>,
-    blitz_to_legacy: &mut BTreeMap<usize, NodePtr>,
+    node_id: NodeId,
+    legacy_to_blitz: &mut BTreeMap<usize, NodeId>,
+    blitz_to_legacy: &mut BTreeMap<NodeId, NodePtr>,
 ) {
     let Some(dom_node) = blitz_to_legacy.remove(&node_id) else {
         return;
@@ -1667,7 +1672,7 @@ fn remove_blitz_subtree_mapping(
 }
 
 fn document_bottom(node: &blitz_dom::Node) -> f32 {
-    let own_bottom = node.final_layout.location.y + node.final_layout.size.height;
+    let own_bottom = node.final_layout().location.y + node.final_layout().size.height;
     node.children
         .iter()
         .map(|&child_id| document_bottom(node.with(child_id)))
@@ -1824,7 +1829,7 @@ fn collect_node_counts(node: &blitz_dom::Node, counts: &mut NodeCounts) {
         blitz_dom::NodeData::Text(_) => {
             counts.text += 1;
         }
-        blitz_dom::NodeData::Document | blitz_dom::NodeData::Comment => {
+        blitz_dom::NodeData::Document(..) | blitz_dom::NodeData::Comment { .. } => {
             for &child_id in node.children.iter() {
                 collect_node_counts(node.with(child_id), counts);
             }
@@ -2097,11 +2102,12 @@ mod tests {
             BlitzDocument::try_from_dom(&document, None, &test_identity(), 800, 600)
                 .expect("Blitz document should build");
 
-        blitz_doc.blitz_to_legacy.remove(&0);
+        let root_id = blitz_doc.inner.root_node().id;
+        blitz_doc.blitz_to_legacy.remove(&root_id);
 
         let error = blitz_doc.validate_mirror_integrity().unwrap_err();
         assert_eq!(error.operation, "manual validation");
-        assert_eq!(error.blitz_node, Some(0));
+        assert_eq!(error.blitz_node, Some(root_id));
         assert!(
             error
                 .message
@@ -2281,23 +2287,23 @@ mod tests {
         let retained = Node::element("span", vec![Node::text("new")]);
 
         let mut legacy_to_blitz = BTreeMap::new();
-        legacy_to_blitz.insert(legacy_node_key(&removed), 2);
-        legacy_to_blitz.insert(legacy_node_key(&removed_text), 3);
-        legacy_to_blitz.insert(legacy_node_key(&retained), 4);
+        legacy_to_blitz.insert(legacy_node_key(&removed), NodeId::from_u64(2));
+        legacy_to_blitz.insert(legacy_node_key(&removed_text), NodeId::from_u64(3));
+        legacy_to_blitz.insert(legacy_node_key(&retained), NodeId::from_u64(4));
 
         let mut blitz_to_legacy = BTreeMap::new();
-        blitz_to_legacy.insert(2, removed.clone());
-        blitz_to_legacy.insert(3, removed_text.clone());
-        blitz_to_legacy.insert(4, retained.clone());
+        blitz_to_legacy.insert(NodeId::from_u64(2), removed.clone());
+        blitz_to_legacy.insert(NodeId::from_u64(3), removed_text.clone());
+        blitz_to_legacy.insert(NodeId::from_u64(4), retained.clone());
 
-        remove_blitz_subtree_mapping(2, &mut legacy_to_blitz, &mut blitz_to_legacy);
+        remove_blitz_subtree_mapping(NodeId::from_u64(2), &mut legacy_to_blitz, &mut blitz_to_legacy);
 
         assert!(!legacy_to_blitz.contains_key(&legacy_node_key(&removed)));
         assert!(!legacy_to_blitz.contains_key(&legacy_node_key(&removed_text)));
-        assert!(!blitz_to_legacy.contains_key(&2));
-        assert!(!blitz_to_legacy.contains_key(&3));
-        assert_eq!(legacy_to_blitz.get(&legacy_node_key(&retained)), Some(&4));
-        assert!(blitz_to_legacy.contains_key(&4));
+        assert!(!blitz_to_legacy.contains_key(&NodeId::from_u64(2)));
+        assert!(!blitz_to_legacy.contains_key(&NodeId::from_u64(3)));
+        assert_eq!(legacy_to_blitz.get(&legacy_node_key(&retained)), Some(&NodeId::from_u64(4)));
+        assert!(blitz_to_legacy.contains_key(&NodeId::from_u64(4)));
     }
 
     fn styled_document(css: &str, body_children: Vec<NodePtr>) -> NodePtr {

@@ -1,7 +1,13 @@
 use crate::node::{Node, NodeData};
 use color::{AlphaColor, Srgb};
+use keyboard_types::Modifiers;
 use std::borrow::Cow;
 use style::color::AbsoluteColor;
+
+#[cfg(target_os = "macos")]
+pub(crate) const ACTION_MOD: Modifiers = Modifiers::META;
+#[cfg(not(target_os = "macos"))]
+pub(crate) const ACTION_MOD: Modifiers = Modifiers::CONTROL;
 
 pub type Color = AlphaColor<Srgb>;
 
@@ -93,7 +99,7 @@ pub fn walk_tree(indent: usize, node: &Node) {
     print!("{}", " ".repeat(indent));
     let id = node.id;
     match &node.data {
-        NodeData::Document => println!("#Document {id}"),
+        NodeData::Document(_) => println!("#Document {id}"),
 
         NodeData::Text(data) => {
             if data.content.chars().all(|c| c.is_ascii_whitespace()) {
@@ -114,7 +120,7 @@ pub fn walk_tree(indent: usize, node: &Node) {
             }
         }
 
-        NodeData::Comment => println!("<!-- COMMENT {id} -->"),
+        NodeData::Comment { .. } => println!("<!-- COMMENT {id} -->"),
 
         NodeData::AnonymousBlock(_) => println!("{id} AnonymousBlock"),
 
@@ -147,15 +153,14 @@ pub fn walk_tree(indent: usize, node: &Node) {
     }
 }
 
+/// Parse an SVG image.
 #[cfg(feature = "svg")]
-pub(crate) fn parse_svg(source: &[u8]) -> Result<usvg::Tree, usvg::Error> {
+pub(crate) fn parse_svg_image(source: &[u8]) -> Result<crate::node::SvgImageData, usvg::Error> {
     let options = usvg::Options {
         fontdb: Arc::clone(&*FONT_DB),
         ..Default::default()
     };
-
-    let tree = usvg::Tree::from_data(source, &options)?;
-    Ok(tree)
+    crate::node::SvgImageData::from_data(source, &options)
 }
 
 pub trait ToColorColor {
@@ -169,6 +174,71 @@ impl ToColorColor for AbsoluteColor {
                 .to_color_space(style::color::ColorSpace::Srgb)
                 .raw_components(),
         )
+    }
+}
+
+#[cfg(all(test, feature = "svg"))]
+mod svg_tests {
+    use super::parse_svg_image;
+
+    #[test]
+    fn svg_without_xmlns_parses() {
+        let src = br#"<svg viewBox="0 0 24 24"><path d="M0 0h24v24H0z"/></svg>"#;
+        let svg = parse_svg_image(src).unwrap();
+        assert!(!svg.tree.root().children().is_empty());
+    }
+
+    #[test]
+    fn missing_height_is_computed_from_width_and_viewbox_ratio() {
+        let src = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="200"><rect width="100%" height="100%" fill="green"/></svg>"#;
+        let svg = parse_svg_image(src).unwrap();
+        assert_eq!(svg.intrinsic_width(), Some(200.0));
+        assert_eq!(svg.intrinsic_height(), None);
+        assert_eq!(svg.viewbox_aspect_ratio(), Some(1.0));
+        assert_eq!(svg.tree.size().width(), 200.0);
+        assert_eq!(svg.intrinsic_size(), (200.0, 200.0));
+    }
+
+    #[test]
+    fn viewbox_only_has_no_intrinsic_dimensions() {
+        let src = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 485 58"></svg>"#;
+        let svg = parse_svg_image(src).unwrap();
+        assert_eq!(svg.intrinsic_width(), None);
+        assert_eq!(svg.intrinsic_height(), None);
+        // The aspect ratio is still available from the viewBox.
+        assert!((svg.aspect_ratio() - (485.0 / 58.0)).abs() < 1e-3);
+    }
+
+    #[test]
+    fn absolute_dimensions_are_intrinsic() {
+        let src = br#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="16" viewBox="0 0 48 32"></svg>"#;
+        let svg = parse_svg_image(src).unwrap();
+        assert_eq!(svg.intrinsic_width(), Some(24.0));
+        assert_eq!(svg.intrinsic_height(), Some(16.0));
+    }
+
+    #[test]
+    fn percentage_dimensions_are_not_intrinsic() {
+        let src = br#"<svg xmlns="http://www.w3.org/2000/svg" width="100%" height="50%" viewBox="0 0 200 100"></svg>"#;
+        let svg = parse_svg_image(src).unwrap();
+        assert_eq!(svg.intrinsic_width(), None);
+        assert_eq!(svg.intrinsic_height(), None);
+    }
+
+    #[test]
+    fn unit_lengths_are_intrinsic() {
+        let src = br#"<svg xmlns="http://www.w3.org/2000/svg" width="24px" height="1.5em" viewBox="0 0 48 32"></svg>"#;
+        let svg = parse_svg_image(src).unwrap();
+        assert!(svg.intrinsic_width().is_some());
+        assert!(svg.intrinsic_height().is_some());
+    }
+
+    #[test]
+    fn non_numeric_dimensions_are_not_intrinsic() {
+        let src = br#"<svg xmlns="http://www.w3.org/2000/svg" width="auto" height="foo" viewBox="0 0 200 100"></svg>"#;
+        let svg = parse_svg_image(src).unwrap();
+        assert_eq!(svg.intrinsic_width(), None);
+        assert_eq!(svg.intrinsic_height(), None);
     }
 }
 

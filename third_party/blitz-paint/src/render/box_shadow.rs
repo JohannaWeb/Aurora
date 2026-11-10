@@ -58,20 +58,28 @@ impl ElementCx<'_, '_> {
                             y: shadow.base.vertical.px() as f64 * self.scale,
                         });
 
+                        let spread = shadow.spread.px() as f64 * self.scale;
+                        let blur = shadow.base.blur.px() as f64;
+
+                        // Without blur or spread the shadow is exactly the element's shape,
+                        // so fill the border box path directly (preserving individual radii)
+                        if blur == 0.0 && spread == 0.0 {
+                            scene.fill(
+                                Fill::NonZero,
+                                transform,
+                                shadow_color,
+                                None,
+                                &self.frame.border_box_path(),
+                            );
+                            continue;
+                        }
+
                         // TODO draw shadows with matching individual radii instead of averaging
                         let radius = self.frame.border_radii.average();
-
-                        let spread = shadow.spread.px() as f64 * self.scale;
                         let rect = self.frame.border_box.inflate(spread, spread);
 
                         // Fill the color
-                        scene.draw_box_shadow(
-                            transform,
-                            rect,
-                            shadow_color,
-                            radius,
-                            shadow.base.blur.px() as f64,
-                        );
+                        scene.draw_box_shadow(transform, rect, shadow_color, radius, blur);
                     }
                 }
             },
@@ -105,7 +113,15 @@ impl ElementCx<'_, '_> {
                 y: shadow.base.vertical.px() as f64,
             });
 
-            scene.push_layer(Mix::Normal, 1.0, self.transform, &padding_box, None, None);
+            scene.push_layer(
+                Fill::NonZero,
+                Mix::Normal,
+                1.0,
+                self.transform,
+                &padding_box,
+                None,
+                None,
+            );
             scene.fill(
                 Fill::NonZero,
                 self.transform,
@@ -115,6 +131,7 @@ impl ElementCx<'_, '_> {
             );
 
             scene.push_layer(
+                Fill::NonZero,
                 Compose::DestOut,
                 1.0,
                 self.transform,
@@ -122,9 +139,12 @@ impl ElementCx<'_, '_> {
                 None,
                 None,
             );
+            // The unshadowed area is the padding box shrunk by the spread radius
+            let spread = shadow.spread.px() as f64 * self.scale;
+            let hole = self.frame.padding_box.inflate(-spread, -spread);
             scene.draw_box_shadow(
                 transform,
-                self.frame.border_box,
+                hole,
                 Color::WHITE,
                 radius,
                 shadow.base.blur.px() as f64 * self.scale,

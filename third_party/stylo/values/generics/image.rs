@@ -19,9 +19,8 @@ use style_traits::{CssWriter, ToCss};
 /// An `<image> | none` value.
 ///
 /// https://drafts.csswg.org/css-images/#image-values
-#[derive(Clone, MallocSizeOf, PartialEq, SpecifiedValueInfo, ToResolvedValue, ToShmem, ToTyped)]
+#[derive(Clone, MallocSizeOf, PartialEq, SpecifiedValueInfo, ToResolvedValue, ToShmem)]
 #[repr(C, u8)]
-#[typed(todo_derive_fields)]
 pub enum GenericImage<G, ImageUrl, Color, Percentage, Resolution> {
     /// `none` variant.
     None,
@@ -60,9 +59,11 @@ pub enum GenericImage<G, ImageUrl, Color, Percentage, Resolution> {
     ImageSet(Box<GenericImageSet<Self, Resolution>>),
 
     /// A `light-dark()` function.
-    /// NOTE(emilio): #[css(skip)] only affects SpecifiedValueInfo. Remove or make conditional
-    /// if/when shipping light-dark() for content.
-    LightDark(#[css(skip)] Box<GenericLightDark<Self>>),
+    LightDark(Box<GenericLightDark<Self>>),
+
+    /// An `image(<color>)` function.
+    #[css(function)]
+    Image(#[value_info(skip)] Box<Color>),
 }
 
 pub use self::GenericImage as Image;
@@ -297,15 +298,16 @@ pub use self::GenericEllipse as Ellipse;
 
 /// <https://drafts.csswg.org/css-images/#typedef-extent-keyword>
 #[allow(missing_docs)]
-#[cfg_attr(feature = "servo", derive(Deserialize, Serialize))]
 #[derive(
     Clone,
     Copy,
     Debug,
+    Deserialize,
     Eq,
     MallocSizeOf,
     Parse,
     PartialEq,
+    Serialize,
     ToComputedValue,
     ToCss,
     ToResolvedValue,
@@ -371,14 +373,13 @@ impl<Color, T> ColorStop<Color, T> {
 
 /// Specified values for a paint worklet.
 /// <https://drafts.css-houdini.org/css-paint-api/>
-#[cfg_attr(feature = "servo", derive(MallocSizeOf))]
-#[derive(Clone, Debug, PartialEq, ToComputedValue, ToResolvedValue, ToShmem)]
+#[derive(Clone, Debug, MallocSizeOf, PartialEq, ToComputedValue, ToResolvedValue, ToShmem)]
 pub struct PaintWorklet {
     /// The name the worklet was registered with.
     pub name: Atom,
     /// The arguments for the worklet.
     /// TODO: store a parsed representation of the arguments.
-    #[cfg_attr(feature = "servo", ignore_malloc_size_of = "Arc")]
+    #[ignore_malloc_size_of = "Arc"]
     #[compute(no_field_bound)]
     #[resolve(no_field_bound)]
     pub arguments: Vec<Arc<custom_properties::SpecifiedValue>>,
@@ -438,6 +439,11 @@ where
             Image::MozSymbolicIcon(ref id) => {
                 dest.write_str("-moz-symbolic-icon(")?;
                 serialize_atom_identifier(id, dest)?;
+                dest.write_char(')')
+            },
+            Image::Image(ref color) => {
+                dest.write_str("image(")?;
+                color.to_css(dest)?;
                 dest.write_char(')')
             },
             Image::ImageSet(ref is) => is.to_css(dest),

@@ -10,7 +10,7 @@ use std::rc::Rc;
 pub(super) struct NodeData {
     pub node: NodePtr,
     #[allow(dead_code)]
-    pub blitz_node_id: Option<usize>,
+    pub blitz_node_id: Option<blitz_dom::NodeId>,
     pub registry: Rc<NodeRegistry>,
     pub document: NodePtr,
 }
@@ -41,7 +41,7 @@ pub(super) fn create_js_node<'s>(
     if let Some(blitz_id) = blitz_node_id {
         template.set(
             v8_str(scope, "__aurora_blitz_node_id").into(),
-            v8::Integer::new(scope, blitz_id as i32).into(),
+            v8::BigInt::new_from_u64(scope, blitz_id.as_u64()).into(),
         );
     }
 
@@ -963,11 +963,11 @@ fn node_from_js(
     }
     let blitz_key = v8_str(scope, "__aurora_blitz_node_id");
     let blitz_id_val = obj.get(scope, blitz_key.into())?;
-    if !blitz_id_val.is_int32() {
+    if !blitz_id_val.is_big_int() {
         return None;
     }
-    let blitz_id = blitz_id_val.int32_value(scope)? as usize;
-    registry.dom_node_for_blitz_id(blitz_id)
+    let blitz_id = blitz_id_val.to_big_int(scope)?.u64_value().0;
+    registry.dom_node_for_blitz_id(blitz_dom::NodeId::from_u64(blitz_id))
 }
 
 fn is_document_fragment(node: &NodePtr) -> bool {
