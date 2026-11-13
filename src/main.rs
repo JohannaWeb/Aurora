@@ -2,6 +2,7 @@
 
 mod atlas;
 mod blitz_document;
+mod clock;
 mod css;
 mod dom;
 mod fetch;

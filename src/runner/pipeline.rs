@@ -265,11 +265,11 @@ fn pump_ready_work(runtime: &mut dyn crate::js_engine::JsRuntime) {
             .unwrap_or(500),
     );
 
-    let real_start = Instant::now();
+    let real_start = crate::clock::now();
     let mut next_frame = real_start;
 
     loop {
-        let now = Instant::now();
+        let now = crate::clock::now();
         if now.duration_since(real_start) >= real_budget {
             break;
         }
@@ -295,7 +295,11 @@ fn pump_ready_work(runtime: &mut dyn crate::js_engine::JsRuntime) {
         if raf_due {
             next_frame = now + FRAME;
         }
-        if !fired_phases.is_empty() {
+        // Paint reports work on every turn. On a standing virtual clock a
+        // paint-only turn must count as idle, or time never advances.
+        let idle = fired_phases.is_empty()
+            || (crate::clock::is_standing() && fired_phases == [EventLoopPhase::Paint]);
+        if !idle {
             continue;
         }
 
@@ -318,7 +322,7 @@ fn pump_ready_work(runtime: &mut dyn crate::js_engine::JsRuntime) {
                 if sleep_for.is_zero() {
                     break;
                 }
-                std::thread::sleep(sleep_for);
+                crate::clock::sleep(sleep_for);
             }
             Some(_) => std::thread::yield_now(),
             None => break,

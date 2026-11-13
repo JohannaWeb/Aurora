@@ -152,7 +152,7 @@ impl AuroraApp {
     }
 
     pub(super) fn run_frame_tasks(&mut self) -> bool {
-        let now = Instant::now();
+        let now = crate::clock::now();
         let input = self.input_mut();
         let mut needs_reflow = input.needs_reflow;
         let mut runtime_dirtied_blitz = false;

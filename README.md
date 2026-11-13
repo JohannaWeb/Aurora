@@ -159,7 +159,10 @@ Replay answers every request from the recording, matching on method, URL and
 request body, and never touches the network. A request that is not in the
 recording fails and is printed as a `replay miss`. Under replay, `Math.random` uses a
 fixed seed and `Date` starts at the recording's earliest `Date` response
-header, so two replays of a capture run the same scripts with the same values.
+header. Timers, `requestAnimationFrame` and `Date` run on a virtual clock that
+moves only when the event loop waits, so two headless replays of a capture fire
+the same callbacks in the same order however fast the machine is. In a window
+the clock follows real time from the moment the window opens.
 
 ## Test
 

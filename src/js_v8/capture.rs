@@ -32,7 +32,7 @@ impl WindowCapture {
             animation_frames: Vec::new(),
             next_timer_id: 1,
             next_raf_id: 1,
-            time_origin: Instant::now(),
+            time_origin: crate::clock::now(),
             storage: Rc::new(RefCell::new(BTreeMap::new())),
             session: Rc::new(RefCell::new(BTreeMap::new())),
         }

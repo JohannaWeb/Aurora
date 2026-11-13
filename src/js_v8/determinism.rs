@@ -1,8 +1,8 @@
 //! Make a replayed page load reproducible from the JS side.
 //!
 //! Under `AURORA_REPLAY`, `Math.random` uses a fixed V8 seed and `Date`
-//! starts at the recording's wall-clock time instead of now. Elapsed time
-//! still follows the real clock; a virtual clock is a separate step.
+//! starts at the recording's wall-clock time instead of now, then advances
+//! with the virtual event-loop clock (`crate::clock`).
 
 /// The V8 `--random-seed` used under replay.
 pub(super) const REPLAY_RANDOM_SEED: i32 = 1;
@@ -13,7 +13,19 @@ pub(super) fn v8_flags() -> Option<String> {
         .map(|_| format!("--random-seed={REPLAY_RANDOM_SEED}"))
 }
 
-/// Script that shifts `Date` so the page's clock starts at `start_ms`.
+/// Native `__aurora_clock_ms()`: ms the event-loop clock has run. The pin
+/// script captures it and deletes the global.
+pub(super) fn clock_ms(
+    _scope: &mut v8::PinScope<'_, '_>,
+    _args: v8::FunctionCallbackArguments,
+    mut retval: v8::ReturnValue,
+) {
+    retval.set_double(crate::clock::script_elapsed_ms());
+}
+
+/// Script that makes `Date` read `start_ms` plus the event-loop clock.
+/// Without a `__aurora_clock_ms` global (unit tests), it shifts the native
+/// clock to start at `start_ms` instead.
 ///
 /// `Date.now()`, `new Date()` and `Date()` read the shifted clock; every
 /// other form (`new Date(ms)`, `Date.UTC`, `Date.parse`, the prototype) is
@@ -23,8 +35,12 @@ pub(super) fn pin_date_script(start_ms: f64) -> String {
         r#"(function(start) {{
     var NativeDate = Date;
     var nativeNow = NativeDate.now;
+    var elapsed = globalThis.__aurora_clock_ms;
+    delete globalThis.__aurora_clock_ms;
     var offset = start - nativeNow();
-    function now() {{ return nativeNow() + offset; }}
+    var now = typeof elapsed === 'function'
+        ? function() {{ return Math.floor(start + elapsed()); }}
+        : function() {{ return nativeNow() + offset; }};
     function PinnedDate(a, b, c, d, e, f, g) {{
         if (!new.target) return new NativeDate(now()).toString();
         switch (arguments.length) {{
