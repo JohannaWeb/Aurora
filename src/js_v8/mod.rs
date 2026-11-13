@@ -7,6 +7,7 @@ mod capture;
 #[cfg(test)]
 mod css_tests;
 mod custom_elements;
+mod determinism;
 mod form_associated;
 mod mutation_observer;
 mod node_create;

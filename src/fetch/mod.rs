@@ -8,7 +8,7 @@ mod data_url;
 mod errors;
 pub mod http;
 mod recording;
-mod replay;
+pub mod replay;
 mod resolve;
 mod url;
 

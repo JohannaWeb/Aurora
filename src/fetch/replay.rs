@@ -10,6 +10,9 @@
 //! stderr; replay never falls back to the network. If the recording cannot
 //! be loaded, every request fails the same way. Replayed requests are not
 //! re-recorded when `AURORA_RECORD` is also set.
+//!
+//! [`start_time_ms`] gives the JS runtime a fixed wall-clock start for the
+//! page: the earliest `Date` response header in the recording.
 
 use std::collections::HashMap;
 use std::fs;
@@ -53,6 +56,22 @@ pub(super) fn serve(
     })
 }
 
+/// The wall-clock time, in ms since the Unix epoch, a replayed page starts
+/// at: the earliest `Date` response header in the recording, or a fixed
+/// fallback when it has none. `None` when replay is off.
+pub fn start_time_ms() -> Option<f64> {
+    /// 2026-01-01T00:00:00Z.
+    const FALLBACK_MS: f64 = 1_767_225_600_000.0;
+    let replayer = REPLAYER.as_ref()?;
+    Some(
+        replayer
+            .as_ref()
+            .ok()
+            .and_then(Replayer::earliest_date_ms)
+            .unwrap_or(FALLBACK_MS),
+    )
+}
+
 type Key = (String, String, Option<String>);
 
 pub(super) struct Replayer {
@@ -83,6 +102,18 @@ impl Replayer {
             entries,
             served: Mutex::new(HashMap::new()),
         })
+    }
+
+    fn earliest_date_ms(&self) -> Option<f64> {
+        self.entries
+            .values()
+            .flatten()
+            .filter_map(|entry| entry["headers"].as_array())
+            .flatten()
+            .filter(|pair| pair[0].as_str().is_some_and(|n| n.eq_ignore_ascii_case("date")))
+            .filter_map(|pair| chrono::DateTime::parse_from_rfc2822(pair[1].as_str()?).ok())
+            .map(|date| date.timestamp_millis() as f64)
+            .reduce(f64::min)
     }
 
     fn len(&self) -> usize {
@@ -214,6 +245,25 @@ mod tests {
             .map(|_| replayer.serve("GET", "https://a.test/poll", None).unwrap().body)
             .collect();
         assert_eq!(bodies, [b"first".to_vec(), b"second".to_vec(), b"second".to_vec()]);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn earliest_date_header_is_the_start_time() {
+        let dir = temp_dir("date");
+        let recorder = Recorder::open(&dir).unwrap();
+        for (url, date) in [
+            ("https://a.test/late", "Fri, 13 Nov 2026 18:52:45 GMT"),
+            ("https://a.test/early", "Fri, 13 Nov 2026 18:52:44 GMT"),
+        ] {
+            let mut res = response(200, url);
+            res.headers.push(("Date".to_string(), date.to_string()));
+            recorder.record("GET", url, None, &[], &Ok(res)).unwrap();
+        }
+        recorder.record("GET", "https://a.test/none", None, &[], &Ok(response(200, ""))).unwrap();
+
+        let replayer = Replayer::load(&dir).unwrap();
+        assert_eq!(replayer.earliest_date_ms(), Some(1_794_595_964_000.0));
         let _ = fs::remove_dir_all(&dir);
     }
 }

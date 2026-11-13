@@ -21,6 +21,9 @@ static V8_INIT: Once = Once::new();
 
 fn ensure_platform() {
     V8_INIT.call_once(|| {
+        if let Some(flags) = super::determinism::v8_flags() {
+            v8::V8::set_flags_from_string(&flags);
+        }
         let platform = v8::new_default_platform(0, false).make_shared();
         v8::V8::initialize_platform(platform);
         v8::V8::initialize();
@@ -1056,6 +1059,13 @@ impl V8Runtime {
                     }
                 }
                 registry.ce_registry.set_bootstrap_phase(false);
+
+                if let Some(start_ms) = crate::fetch::replay::start_time_ms()
+                    && let Err(e) =
+                        compile_and_run(scope, &super::determinism::pin_date_script(start_ms))
+                {
+                    log::warn!(target: "aurora::js", "[JS] pinning Date for replay failed: {e}");
+                }
 
                 // Wrappers built during context setup (document, body, head,
                 // documentElement) predate the JS DOM prototype skeletons, so

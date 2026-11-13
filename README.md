@@ -157,7 +157,9 @@ AURORA_REPLAY=/tmp/aurora-capture cargo run --release -- "https://www.youtube.co
 
 Replay answers every request from the recording, matching on method, URL and
 request body, and never touches the network. A request that is not in the
-recording fails and is printed as a `replay miss`.
+recording fails and is printed as a `replay miss`. Under replay, `Math.random` uses a
+fixed seed and `Date` starts at the recording's earliest `Date` response
+header, so two replays of a capture run the same scripts with the same values.
 
 ## Test
 
