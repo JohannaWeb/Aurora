@@ -140,6 +140,18 @@ variables such as `AURORA_VIEWPORT_WIDTH`, `AURORA_VIEWPORT_HEIGHT`,
 
 Generated fixture renders live under `tests/screenshots/`.
 
+## Recording network traffic
+
+```bash
+AURORA_RECORD=/tmp/aurora-capture cargo run --release -- "https://www.youtube.com/"
+```
+
+Every HTTP(S) exchange is written to the directory: `index.jsonl` lists the
+requests in order (method, URL, status, headers, body path), and `bodies/`
+holds each distinct request and response body once. Recordings can contain
+cookies and other server data, so keep them out of the repository. A replay
+mode that serves a recording instead of the network is planned.
+
 ## Test
 
 ```bash

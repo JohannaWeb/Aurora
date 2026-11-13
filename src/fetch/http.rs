@@ -158,6 +158,17 @@ pub fn fetch_response_with_method(
     body: Option<&str>,
     headers: &[(String, String)],
 ) -> Result<HttpResponse, FetchError> {
+    let result = send(url, method, body, headers);
+    super::recording::record(method, url, body, headers, &result);
+    result
+}
+
+fn send(
+    url: &str,
+    method: &str,
+    body: Option<&str>,
+    headers: &[(String, String)],
+) -> Result<HttpResponse, FetchError> {
     pace(url);
     let method = Method::from_bytes(method.as_bytes()).unwrap_or(Method::GET);
     let mut request = client()

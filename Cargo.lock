@@ -293,6 +293,7 @@ dependencies = [
  "rustls",
  "rustybuzz",
  "selectors 0.38.0",
+ "serde_json",
  "stylo",
  "taffy 0.10.1",
  "url",
