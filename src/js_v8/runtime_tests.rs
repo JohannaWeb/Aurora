@@ -3468,3 +3468,30 @@ fn v8_shady_physical_insert_into_adopted_host_lands_in_shadow_root() {
         Ok("true,true,true".to_string())
     );
 }
+
+#[test]
+fn v8_create_html_document_is_detached_from_live_document() {
+    let mut runtime = V8Runtime::new(blank_dom());
+
+    // jQuery's support.createHTMLDocument probe; it must not touch the real body.
+    assert_eq!(
+        runtime.eval_to_string(
+            r#"
+            (() => {
+            document.body.appendChild(document.createElement('main'));
+            const doc = document.implementation.createHTMLDocument('t');
+            doc.body.innerHTML = '<form></form><form id="x"></form>';
+            return [
+                doc !== document,
+                doc.body.childNodes.length,
+                doc.getElementById('x') === doc.body.lastChild,
+                doc.title,
+                document.body.querySelectorAll('main').length,
+                document.body.querySelectorAll('form').length
+            ].join('|');
+            })()
+            "#
+        ),
+        Ok("true|2|true|t|1|0".to_string())
+    );
+}

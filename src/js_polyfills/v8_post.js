@@ -579,7 +579,61 @@
     document.contentType = 'text/html';
     document.implementation = {
         hasFeature: function() { return true; },
-        createHTMLDocument: function() { return document; },
+        // Must NOT return the live document: jQuery's support probe does
+        // `createHTMLDocument("").body.innerHTML = "<form></form><form></form>"`,
+        // which would replace the page's real body. Build an inert document
+        // from detached elements instead (they never enter the render tree).
+        createHTMLDocument: function(title) {
+            var html = document.createElement('html');
+            var head = document.createElement('head');
+            var body = document.createElement('body');
+            html.appendChild(head);
+            html.appendChild(body);
+            if (title !== undefined) {
+                var t = document.createElement('title');
+                t.textContent = String(title);
+                head.appendChild(t);
+            }
+            var doc = Object.create(HTMLDocument.prototype);
+            doc.nodeType = 9;
+            doc.nodeName = '#document';
+            doc.documentElement = html;
+            doc.head = head;
+            doc.body = body;
+            doc.readyState = 'complete';
+            doc.compatMode = 'CSS1Compat';
+            doc.characterSet = 'UTF-8';
+            doc.contentType = 'text/html';
+            doc.defaultView = null;
+            doc.implementation = document.implementation;
+            doc.createElement = function(tag) { return document.createElement(tag); };
+            doc.createElementNS = function(ns, tag) { return document.createElementNS(ns, tag); };
+            doc.createTextNode = function(text) { return document.createTextNode(text); };
+            doc.createComment = function(text) { return document.createComment(text); };
+            doc.createDocumentFragment = function() { return document.createDocumentFragment(); };
+            doc.getElementById = function(id) {
+                var all = html.querySelectorAll('[id]');
+                for (var i = 0; i < all.length; i++) {
+                    if (all[i].getAttribute('id') === String(id)) return all[i];
+                }
+                return null;
+            };
+            doc.getElementsByTagName = function(tag) { return html.getElementsByTagName(tag); };
+            doc.getElementsByClassName = function(c) { return html.getElementsByClassName(c); };
+            doc.querySelector = function(sel) { return html.querySelector(sel); };
+            doc.querySelectorAll = function(sel) { return html.querySelectorAll(sel); };
+            doc.addEventListener = function() {};
+            doc.removeEventListener = function() {};
+            Object.defineProperty(doc, 'title', {
+                get: function() { var el = head.querySelector('title'); return el ? el.textContent : ''; },
+                set: function(v) {
+                    var el = head.querySelector('title');
+                    if (!el) { el = document.createElement('title'); head.appendChild(el); }
+                    el.textContent = String(v);
+                }
+            });
+            return doc;
+        },
         createDocumentType: function() { return null; }
     };
     document.write = function() {};
