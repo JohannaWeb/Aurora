@@ -158,6 +158,9 @@ pub fn fetch_response_with_method(
     body: Option<&str>,
     headers: &[(String, String)],
 ) -> Result<HttpResponse, FetchError> {
+    if let Some(replayed) = super::replay::serve(method, url, body) {
+        return replayed;
+    }
     let result = send(url, method, body, headers);
     super::recording::record(method, url, body, headers, &result);
     result

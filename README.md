@@ -149,8 +149,15 @@ AURORA_RECORD=/tmp/aurora-capture cargo run --release -- "https://www.youtube.co
 Every HTTP(S) exchange is written to the directory: `index.jsonl` lists the
 requests in order (method, URL, status, headers, body path), and `bodies/`
 holds each distinct request and response body once. Recordings can contain
-cookies and other server data, so keep them out of the repository. A replay
-mode that serves a recording instead of the network is planned.
+cookies and other server data, so keep them out of the repository.
+
+```bash
+AURORA_REPLAY=/tmp/aurora-capture cargo run --release -- "https://www.youtube.com/"
+```
+
+Replay answers every request from the recording, matching on method, URL and
+request body, and never touches the network. A request that is not in the
+recording fails and is printed as a `replay miss`.
 
 ## Test
 
