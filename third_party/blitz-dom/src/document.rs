@@ -1214,6 +1214,16 @@ impl BaseDocument {
     }
 
     pub fn add_stylesheet_for_node(&mut self, stylesheet: DocumentStyleSheet, node_id: NodeId) {
+        // A stylesheet load can complete after script removed its <link>/<style>
+        // node; the slot is gone (or reused by a non-element), so drop the sheet.
+        if !self
+            .nodes
+            .get(node_id)
+            .is_some_and(|node| node.element_data().is_some())
+        {
+            return;
+        }
+
         let old = self.nodes_to_stylesheet.insert(node_id, stylesheet.clone());
         self.stylesheet_generation += 1;
 
@@ -1257,16 +1267,12 @@ impl BaseDocument {
     }
 
     pub fn handle_messages(&mut self) {
-        // Remove event Reciever from the Document so that we can process events
-        // without holding a borrow to the Document
-        let rx = self.rx.take().unwrap();
-
-        while let Ok(msg) = rx.try_recv() {
+        // Pull one message at a time rather than taking the receiver out of the
+        // Document: if a handler panics (and the embedder catches it), the
+        // receiver must still be in place for the next frame.
+        while let Some(msg) = self.rx.as_ref().and_then(|rx| rx.try_recv().ok()) {
             self.handle_message(msg);
         }
-
-        // Put Reciever back
-        self.rx = Some(rx);
     }
 
     pub fn handle_message(&mut self, msg: DocumentEvent) {
