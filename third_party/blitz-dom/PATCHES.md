@@ -17,6 +17,15 @@ Regression coverage: `child_combinator_matches_through_synthetic_shadow_containe
 in `src/blitz_document.rs`. Remove when Aurora's shadow trees no longer need the
 synthetic container (roadmap Phase 4).
 
+`src/document.rs` (`add_stylesheet_for_node`, `handle_messages`): a stylesheet
+whose `<link>`/`<style>` node was removed before the load finished is dropped
+instead of panicking on the stale `NodeId`, and `handle_messages` no longer takes
+the receiver out of the document, so a handler panic caught by the embedder
+cannot leave `rx` as `None` and fail every later frame. Upstreamable.
+
+Regression coverage: `stylesheet_load_for_removed_node_is_ignored` in
+`src/blitz_document.rs`.
+
 ## Dropped in the 0.3.0-beta.4 update (fixed upstream)
 
 - `src/layout/construct.rs`, `display: contents` flattening losing flex/grid

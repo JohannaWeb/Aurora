@@ -2428,4 +2428,29 @@ mod tests {
         let bar_metrics = blitz_doc.dom_node_layout_metrics(&bar).unwrap();
         assert_eq!((bar_metrics.x, bar_metrics.y), (700.0, 0.0));
     }
+
+    #[test]
+    fn stylesheet_load_for_removed_node_is_ignored() {
+        // Scripts can remove a <link> before its stylesheet finishes loading;
+        // the late response must not panic and poison later frames.
+        let mut blitz_doc = laid_out(&styled_document("body{margin:0}", Vec::new()));
+        let doc = &mut blitz_doc.inner;
+        let root_id = doc.root_node().id;
+        let link_id = {
+            let mut mutator = doc.mutate();
+            let id = mutator.create_element(element_qual_name_from_str("link", &ns!(html)), Vec::new());
+            mutator.append_children(root_id, &[id]);
+            mutator.remove_and_drop_node(id);
+            id
+        };
+        let sheet = doc.make_stylesheet("div{color:red}", style::stylesheets::Origin::Author);
+        doc.load_resource(blitz_dom::net::ResourceLoadResponse {
+            request_id: 0,
+            node_id: Some(link_id),
+            resolved_url: None,
+            result: Ok(blitz_dom::net::Resource::Css(sheet)),
+        });
+
+        assert!(blitz_doc.perform_layout());
+    }
 }
