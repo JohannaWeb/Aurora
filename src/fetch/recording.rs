@@ -132,7 +132,7 @@ impl Recorder {
     /// Store a body under its content hash; returns its path relative to the
     /// recording directory. Identical bodies are written once.
     fn store_body(&self, body: &[u8]) -> io::Result<String> {
-        let name = format!("bodies/{:016x}", fnv1a_64(body));
+        let name = body_name(body);
         let path = self.dir.join(&name);
         if !path.exists() {
             // Several fetch threads can store the same body at once; write
@@ -146,6 +146,11 @@ impl Recorder {
         }
         Ok(name)
     }
+}
+
+/// The path, relative to a recording directory, a body is stored under.
+pub(super) fn body_name(body: &[u8]) -> String {
+    format!("bodies/{:016x}", fnv1a_64(body))
 }
 
 fn pairs(headers: &[(String, String)]) -> Value {
