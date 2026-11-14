@@ -21,6 +21,9 @@ static V8_INIT: Once = Once::new();
 
 fn ensure_platform() {
     V8_INIT.call_once(|| {
+        if let Some(flags) = super::determinism::v8_flags() {
+            v8::V8::set_flags_from_string(&flags);
+        }
         let platform = v8::new_default_platform(0, false).make_shared();
         v8::V8::initialize_platform(platform);
         v8::V8::initialize();
@@ -97,6 +100,20 @@ impl NetworkTasks {
                 body.as_ref().map_or(0, String::len),
                 headers.len()
             );
+        }
+        // Under replay the answer comes from disk: resolve it now so the
+        // first poll sees it, instead of after a thread-timing-dependent
+        // number of polls.
+        if crate::clock::is_standing() {
+            let result = crate::fetch::http::fetch_response_with_method(
+                &url,
+                &method,
+                body.as_deref(),
+                &headers,
+            )
+            .map_err(|error| error.to_string());
+            self.completed.insert(id, result);
+            return id;
         }
         std::thread::spawn(move || {
             let result = crate::fetch::http::fetch_response_with_method(
@@ -1057,6 +1074,20 @@ impl V8Runtime {
                 }
                 registry.ce_registry.set_bootstrap_phase(false);
 
+                if crate::fetch::replay::start_time_ms().is_some() {
+                    let clock_ms = v8::FunctionTemplate::new(scope, super::determinism::clock_ms)
+                        .get_function(scope)
+                        .expect("function template yields a function outside of a pending exception");
+                    let global = v8::Local::new(scope, &context).global(scope);
+                    global.set(scope, v8_str(scope, "__aurora_clock_ms").into(), clock_ms.into());
+                }
+                if let Some(start_ms) = crate::fetch::replay::start_time_ms()
+                    && let Err(e) =
+                        compile_and_run(scope, &super::determinism::pin_date_script(start_ms))
+                {
+                    log::warn!(target: "aurora::js", "[JS] pinning Date for replay failed: {e}");
+                }
+
                 // Wrappers built during context setup (document, body, head,
                 // documentElement) predate the JS DOM prototype skeletons, so
                 // re-link them to the EventTarget chain now that it exists.
@@ -1292,7 +1323,7 @@ fn add_timer(
     window.timers.push(super::capture::TimerEntry {
         id,
         callback: callback_global,
-        deadline: Instant::now() + duration,
+        deadline: crate::clock::now() + duration,
         interval: if is_interval { Some(duration) } else { None },
     });
 

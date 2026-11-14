@@ -154,7 +154,7 @@ fn flush_ready_frame_tasks(input: &mut WindowInput, width: u32, height: u32) {
             let Some(runtime) = input.runtime.as_mut() else {
                 return;
             };
-            let now = Instant::now();
+            let now = crate::clock::now();
             runtime.tick(now)
                 | runtime.drain_animation_frame_callbacks(now)
                 | runtime.deliver_mutation_records()
@@ -168,7 +168,7 @@ fn flush_ready_frame_tasks(input: &mut WindowInput, width: u32, height: u32) {
             input.reflow(width, height);
         }
         match input.runtime.as_ref() {
-            Some(runtime) if runtime.has_ready_work(Instant::now()) => {}
+            Some(runtime) if runtime.has_ready_work(crate::clock::now()) => {}
             _ => return,
         }
     }

@@ -9,6 +9,8 @@ pub fn open(input: WindowInput) -> Result<(), String> {
         return Ok(());
     }
 
+    // A window is interactive; replayed pages keep running in real time.
+    crate::clock::follow_real_time();
     let event_loop =
         EventLoop::new().map_err(|error| format!("failed to create event loop: {error}"))?;
     let mut app = AuroraApp::new(input);

@@ -3468,3 +3468,37 @@ fn v8_shady_physical_insert_into_adopted_host_lands_in_shadow_root() {
         Ok("true,true,true".to_string())
     );
 }
+
+#[test]
+fn replay_date_pinning_shifts_the_clock_and_keeps_native_dates() {
+    let mut runtime = V8Runtime::new(blank_dom());
+    runtime
+        .eval_to_string(&super::determinism::pin_date_script(1_794_595_964_000.0))
+        .unwrap();
+
+    assert_eq!(
+        runtime.eval_to_string(
+            r#"
+            (() => {
+            const start = 1794595964000;
+            const near = (ms) => ms >= start && ms < start + 60000;
+            const d = new Date();
+            return [
+                near(Date.now()),
+                near(d.getTime()),
+                d instanceof Date,
+                d.constructor === Date,
+                typeof Date(),
+                new Date(0).toISOString(),
+                new Date(2020, 1).getMonth(),
+                new Date(2020, 1).getDate(),
+                Date.UTC(2020, 0, 2),
+                Date.parse('2020-01-02T00:00:00Z')
+            ].join('|');
+            })()
+            "#
+        ),
+        Ok("true|true|true|true|string|1970-01-01T00:00:00.000Z|1|1|1577923200000|1577923200000"
+            .to_string())
+    );
+}

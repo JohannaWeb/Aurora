@@ -10,6 +10,7 @@ pub mod api;
 pub use api::{Browser, BrowserBuilder, Capabilities, Error, Page};
 
 pub(crate) mod blitz_document;
+pub(crate) mod clock;
 pub mod render;
 
 // Re-export modules needed by integration tests and the shared runner pipeline.

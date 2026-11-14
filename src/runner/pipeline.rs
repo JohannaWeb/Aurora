@@ -258,6 +258,7 @@ fn run_env_probe_script(runtime: &mut dyn crate::js_engine::JsRuntime) {
 /// to a browser event loop and avoids simulating an SPA to quiescence in a burst.
 fn pump_ready_work(runtime: &mut dyn crate::js_engine::JsRuntime) {
     const FRAME: Duration = Duration::from_millis(16);
+    const VIRTUAL_TURN_COST: Duration = Duration::from_millis(1);
     let real_budget = Duration::from_millis(
         env::var("AURORA_BOOT_REAL_MS")
             .ok()
@@ -265,11 +266,11 @@ fn pump_ready_work(runtime: &mut dyn crate::js_engine::JsRuntime) {
             .unwrap_or(500),
     );
 
-    let real_start = Instant::now();
+    let real_start = crate::clock::now();
     let mut next_frame = real_start;
 
     loop {
-        let now = Instant::now();
+        let now = crate::clock::now();
         if now.duration_since(real_start) >= real_budget {
             break;
         }
@@ -295,7 +296,17 @@ fn pump_ready_work(runtime: &mut dyn crate::js_engine::JsRuntime) {
         if raf_due {
             next_frame = now + FRAME;
         }
-        if !fired_phases.is_empty() {
+        // On a standing virtual clock running a task takes no time, so a
+        // setTimeout(0) chain would spin forever; charge each turn that ran
+        // one a fixed cost so the budget still runs out.
+        if crate::clock::is_standing() && !fired_phases.is_empty() {
+            crate::clock::sleep(VIRTUAL_TURN_COST);
+        }
+        // Paint reports work on every turn. On a standing virtual clock a
+        // paint-only turn must count as idle, or time never advances.
+        let idle = fired_phases.is_empty()
+            || (crate::clock::is_standing() && fired_phases == [EventLoopPhase::Paint]);
+        if !idle {
             continue;
         }
 
@@ -318,7 +329,7 @@ fn pump_ready_work(runtime: &mut dyn crate::js_engine::JsRuntime) {
                 if sleep_for.is_zero() {
                     break;
                 }
-                std::thread::sleep(sleep_for);
+                crate::clock::sleep(sleep_for);
             }
             Some(_) => std::thread::yield_now(),
             None => break,

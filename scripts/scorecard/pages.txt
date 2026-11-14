@@ -1,0 +1,7 @@
+# name  url
+# Logged-out YouTube pages the scorecard replays. scripts/yt_capture.sh
+# records each into .captures/<name>/.
+yt-home     https://www.youtube.com/
+yt-search   https://www.youtube.com/results?search_query=rust+programming
+yt-watch    https://www.youtube.com/watch?v=jNQXAC9IVRw
+yt-channel  https://www.youtube.com/@YouTube

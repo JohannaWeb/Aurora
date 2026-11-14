@@ -4,3 +4,6 @@ Cargo.lock
 
 # Runtime artifacts
 logs/
+
+# Network recordings (AURORA_RECORD); can contain cookies and visitor IDs
+.captures/

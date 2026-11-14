@@ -346,7 +346,7 @@ impl AuroraApp {
 
     fn timer_is_due(&self) -> bool {
         self.next_runtime_deadline()
-            .map(|deadline| deadline <= Instant::now())
+            .map(|deadline| deadline <= crate::clock::now())
             .unwrap_or(false)
     }
 
@@ -354,7 +354,7 @@ impl AuroraApp {
         if self.has_animation_frame_callbacks() || self.has_active_media() {
             event_loop.set_control_flow(ControlFlow::Poll);
         } else if let Some(deadline) = self.next_runtime_deadline() {
-            event_loop.set_control_flow(ControlFlow::WaitUntil(deadline));
+            event_loop.set_control_flow(ControlFlow::WaitUntil(crate::clock::to_real(deadline)));
         } else {
             event_loop.set_control_flow(ControlFlow::Wait);
         }
