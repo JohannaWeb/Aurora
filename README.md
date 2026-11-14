@@ -164,7 +164,22 @@ moves only when the event loop waits, so two headless replays of a capture fire
 the same callbacks in the same order however fast the machine is. In a window
 the clock follows real time from the moment the window opens.
 
-## Test
+## YouTube scorecard
+
+```bash
+make yt-capture                       # record pages into .captures/ (live network)
+make yt-scorecard JSON=score.json     # replay them offline and print a table
+make yt-scorecard BASELINE=score.json # same, flagging any page that got worse
+```
+
+The pages are listed in `scripts/scorecard/pages.txt`. Each run replays the
+captures with `AURORA_REPLAY`, so results are identical from run to run, and
+`scripts/scorecard/probe.js` measures the composed tree (shadow roots
+included): elements, visible text, result items, distinct and duplicated
+videos, items misplaced directly under a shadow root, and page height. JS
+errors and replay misses come from the log. Captures hold anonymous visitor
+cookies and IP-derived locale, so `.captures/` is ignored by git.
+
 
 ```bash
 cargo test

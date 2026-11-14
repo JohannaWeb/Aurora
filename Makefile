@@ -9,6 +9,7 @@ VIEWPORT_HEIGHT ?= 786
 SCREENSHOT_DIR := $(dir $(abspath $(SCREENSHOT)))
 SCREENSHOT_FILE := $(notdir $(SCREENSHOT))
 
+.PHONY: yt-capture yt-scorecard
 .PHONY: docker-build docker-run docker-fixture docker-x11 docker-screenshot screenshot mockup-screenshot dynamic-screenshot raf-screenshot all-renders check-line-cap
 
 docker-build:
@@ -64,3 +65,14 @@ check-snapshots:
 
 check-line-cap:
 	@find src -name '*.rs' -exec wc -l {} + | awk '$$1 > 200 && $$2 != "total" { print $$1, $$2; bad=1 } END { if (bad) { print "FAIL: files above 200-line cap"; exit 1 } else { print "OK: all src files within 200-line cap" } }'
+
+# Record the scorecard pages from the live site into .captures/ (see
+# scripts/scorecard/pages.txt), then replay them offline. Pass
+# BASELINE=old.json to flag regressions, JSON=new.json to save results.
+yt-capture:
+	cargo build --release
+	scripts/yt_capture.sh
+
+yt-scorecard:
+	cargo build --release
+	scripts/yt_scorecard.py $(if $(JSON),--json $(JSON)) $(if $(BASELINE),--baseline $(BASELINE))
