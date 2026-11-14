@@ -3421,7 +3421,7 @@ fn v8_inserting_an_emptied_composed_fragment_reclaims_its_nodes() {
             root.appendChild(stolen);
             elsewhere.appendChild(stolen); // page moved it after composition
             Object.defineProperty(fragment, '__aurora_composed_nodes__', {
-                value: { nodes: [moved, stolen], target: root },
+                value: { nodes: [moved, stolen], targets: [root, root] },
                 configurable: true, writable: true
             });
             container.appendChild(fragment);
@@ -3431,6 +3431,45 @@ fn v8_inserting_an_emptied_composed_fragment_reclaims_its_nodes() {
             "#
         ),
         Ok("true,true,0".to_string())
+    );
+}
+
+#[test]
+fn v8_reused_composed_fragment_reclaims_every_composed_node() {
+    // YouTube's renderer stamper appends items to one fragment in turn; each
+    // upgrades, finds itself detached and is composed out into the owner's
+    // shadow root. Inserting the fragment must bring back all of them, not
+    // only the last one composed.
+    let mut runtime = V8Runtime::new(blank_dom());
+    assert_eq!(
+        runtime.eval_to_string(
+            r#"
+            (() => {
+            customElements.define('x-reused-item', class extends HTMLElement {
+                connectedCallback() {}
+            });
+            const host = document.createElement('div');
+            document.body.appendChild(host);
+            const root = host.attachShadow({ mode: 'open' });
+            const contents = document.createElement('div');
+            root.appendChild(contents);
+            const fragment = document.createDocumentFragment();
+            const items = [];
+            for (let i = 0; i < 3; i++) {
+                const item = document.createElement('x-reused-item');
+                item.__dataHost = host;
+                fragment.appendChild(item);
+                items.push(item);
+            }
+            const composed = items.filter(item => item.parentNode === root).length;
+            contents.appendChild(fragment);
+            return [composed,
+                    items.filter(item => item.parentNode === contents).length,
+                    fragment.childNodes.length].join(',');
+            })()
+            "#
+        ),
+        Ok("3,3,0".to_string())
     );
 }
 
