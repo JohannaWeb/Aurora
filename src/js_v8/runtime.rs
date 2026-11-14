@@ -1072,6 +1072,14 @@ impl V8Runtime {
                         log::warn!(target: "aurora::js", "[JS] bootstrap {label} failed: {e}");
                     }
                 }
+                if std::env::var_os("AURORA_SPIKE_PROTOS").is_some()
+                    && let Err(e) = compile_and_run(
+                        scope,
+                        include_str!("../js_polyfills/spike_prototypes.js"),
+                    )
+                {
+                    log::warn!(target: "aurora::js", "[JS] spike prototypes failed: {e}");
+                }
                 registry.ce_registry.set_bootstrap_phase(false);
 
                 if crate::fetch::replay::start_time_ms().is_some() {
