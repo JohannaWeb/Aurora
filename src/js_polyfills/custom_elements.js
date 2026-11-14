@@ -596,11 +596,21 @@
                             // insert hands the emptied fragment to
                             // __aurora_reclaim_composed_fragment__ so the
                             // content follows the caller's real insertion.
+                            // The stamper may reuse one fragment for several
+                            // items, each composed out as it upgrades, so add
+                            // to the record instead of replacing it.
                             try {
-                                Object.defineProperty(fragment, '__aurora_composed_nodes__', {
-                                    value: { nodes: composedNodes, target: target },
-                                    configurable: true, writable: true
-                                });
+                                var record = fragment.__aurora_composed_nodes__;
+                                if (!record) {
+                                    record = { nodes: [], targets: [] };
+                                    Object.defineProperty(fragment, '__aurora_composed_nodes__', {
+                                        value: record, configurable: true, writable: true
+                                    });
+                                }
+                                for (var ci = 0; ci < composedNodes.length; ci++) {
+                                    record.nodes.push(composedNodes[ci]);
+                                    record.targets.push(target);
+                                }
                             } catch (e) {}
                             ceLog('detached-stamp-composed', host,
                                 'target=shadow-root el=' + (el.localName || '?') +
@@ -2248,9 +2258,7 @@
             }
 
             function readyUpgraded(el, name) {
-                if (el.__ce_ready__ || typeof el.ready !== 'function') return;
-                el.__ce_ready__ = true;
-                if (shouldTraceName(name)) trace('ready ' + name);
+                if (!el) return;
                 installPolymerIdMapHooks(el);
                 // YouTube registers thin custom-element shells whose ready()
                 // delegates to a separate Polymer controller. The raw controller
@@ -2267,6 +2275,12 @@
                     polymerController !== polymerInstance) {
                     installPolymerIdMapHooks(polymerController);
                 }
+                // Controller-extracted shells often have no host-level ready()
+                // at all. They still need their controller's stamp wrapper before
+                // native or ShadyDOM connection delivers the controller callback.
+                if (el.__ce_ready__ || typeof el.ready !== 'function') return;
+                el.__ce_ready__ = true;
+                if (shouldTraceName(name)) trace('ready ' + name);
                 installInstanceTemplateIdAccessors(el, el.__aurora_ce_ctor__ || el.constructor);
                 rebuildPolymerIdMap(el);
                 var previousHost = activeLifecycleHost;
@@ -2713,7 +2727,7 @@
                     for (var i = 0; i < record.nodes.length; i++) {
                         var node = record.nodes[i];
                         try {
-                            if (node && node.parentNode === record.target) {
+                            if (node && node.parentNode === record.targets[i]) {
                                 fragment.appendChild(node);
                                 reclaimed++;
                             }
@@ -2723,7 +2737,7 @@
                     reclaimingComposedFragment = wasReclaiming;
                 }
                 if (reclaimed) {
-                    ceLog('detached-stamp-reclaimed', record.target.host || null,
+                    ceLog('detached-stamp-reclaimed', record.targets[0].host || null,
                         'nodes=' + reclaimed + '/' + record.nodes.length);
                 }
             };

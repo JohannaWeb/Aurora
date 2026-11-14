@@ -507,6 +507,17 @@ fn drive_content_bearing_initial_navigation(runtime: &mut dyn crate::js_engine::
                         for (var ci = 0; children && ci < children.length; ci++) collect(children[ci]);
                     }
                     collect(pageManager);
+                    var pageController = pageManager.inst || pageManager.polymerController || pageManager;
+                    var currentPage = pageController && pageController.currentPage;
+                    if (currentPage && currentPage.localName === 'ytd-search') {
+                        var searchData = currentPage.data || {};
+                        var hideResults = !!searchData.hideContents;
+                        for (var si = 0; si < all.length; si++) {
+                            if (all[si].localName !== 'ytd-two-column-search-results-renderer') continue;
+                            if (hideResults) all[si].setAttribute('hidden', '');
+                            else all[si].removeAttribute('hidden');
+                        }
+                    }
                     for (var i = 0; i < all.length; i++) {
                         var el = all[i];
                         var elData = el.data || (el.__data && el.__data.data);
@@ -832,6 +843,34 @@ mod tests {
         assert_eq!(
             runtime.eval_to_string("__navigatedData.page + ':' + __navigatedData.contents.sectionListRenderer.contents[0].itemSectionRenderer.contents[0].videoRenderer.videoId"),
             Ok("search:content-id".into())
+        );
+    }
+
+    #[test]
+    fn initial_search_navigation_applies_hide_contents_binding_to_results_renderer() {
+        let dom = Parser::new("<html><body><ytd-page-manager></ytd-page-manager></body></html>")
+            .parse_document();
+        let mut runtime = crate::js_v8::V8Runtime::new(dom);
+        runtime.execute(r#"
+            const manager = document.querySelector('ytd-page-manager');
+            const search = document.createElement('ytd-search');
+            const results = document.createElement('ytd-two-column-search-results-renderer');
+            results.hidden = true;
+            search.data = { hideContents: false, contents: {} };
+            search.appendChild(results);
+            manager.attachShadow({ mode: 'open' }).appendChild(search);
+            manager.currentPage = search;
+            manager.updatePageData = function(data) { search.data = data.response; };
+            window.getInitialData = function() {
+                return { page: 'search', response: { contents: { videoRenderer: { videoId: 'visible' } } } };
+            };
+        "#).unwrap();
+
+        drive_content_bearing_initial_navigation(&mut runtime);
+
+        assert_eq!(
+            runtime.eval_to_string("document.querySelector('ytd-page-manager').shadowRoot.firstChild.firstChild.hidden"),
+            Ok("false".into())
         );
     }
 
