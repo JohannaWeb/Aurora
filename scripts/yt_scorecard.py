@@ -9,7 +9,8 @@ reproducible. scripts/scorecard/probe.js measures the composed tree after
 boot; this script adds replay misses, JS errors and wall time.
 
 With --baseline, each metric is compared with an earlier --json output, and
-the exit status is 1 if any page got worse.
+the exit status is 1 if any page got worse. Failed runs and incomplete probe
+reports always fail, including when no baseline is supplied.
 """
 
 import argparse
@@ -33,6 +34,7 @@ METRICS = {
     "distinct_videos": +1,
     "duplicated_videos": -1,
     "misplaced_items": -1,
+    "zero_size_items": -1,
     "height": +1,
     "js_errors": -1,
     "replay_misses": -1,
@@ -44,6 +46,7 @@ SHORT = {
     "distinct_videos": "videos",
     "duplicated_videos": "dup",
     "misplaced_items": "misplc",
+    "zero_size_items": "zero",
     "height": "height",
     "js_errors": "jserr",
     "replay_misses": "miss",
@@ -87,24 +90,50 @@ def run_capture(binary: Path, capture: Path, timeout: int) -> dict:
                 expired.stderr or b""
             ).decode(errors="replace")
             status = "timeout"
+        except OSError as error:
+            return {"url": url, "status": "launch failed", "error": str(error)}
         seconds = time.monotonic() - started
 
-    result = {"url": url, "status": status, "seconds": round(seconds, 1)}
+    result = {}
     for line in output.splitlines():
         if line.startswith("[scorecard] "):
-            result.update(json.loads(line[len("[scorecard] ") :]))
+            try:
+                probe = json.loads(line[len("[scorecard] ") :])
+                if not isinstance(probe, dict):
+                    raise ValueError("expected an object")
+                result.update(probe)
+            except ValueError as error:
+                result["error"] = f"invalid probe report: {error}"
+    # Execution metadata comes from the runner, never from the page's report.
+    result.update(url=url, status=status, seconds=round(seconds, 1))
     result["js_errors"] = sum(1 for line in output.splitlines() if JS_ERROR.search(line))
     result["replay_misses"] = output.count("replay miss:")
-    if "elements" not in result:
+    if "elements" not in result and "error" not in result:
         result["error"] = "probe did not report"
     return result
 
 
+def failures(results: dict) -> list:
+    found = []
+    for name, result in results.items():
+        if result.get("status") != 0:
+            found.append(f"{name}: replay status {result.get('status', 'missing')}")
+        if "error" in result:
+            found.append(f"{name}: {result['error']}")
+        invalid = [
+            metric for metric in METRICS
+            if type(result.get(metric)) is not int or result[metric] < 0
+        ]
+        if invalid:
+            found.append(f"{name}: missing or invalid metrics: {', '.join(invalid)}")
+    return found
+
+
 def table(results: dict, baseline: dict) -> str:
-    header = ["page"] + [SHORT[m] for m in METRICS] + ["secs"]
+    header = ["page", "status"] + [SHORT[m] for m in METRICS] + ["secs"]
     rows = [header]
     for name, result in results.items():
-        row = [name]
+        row = [name, str(result.get("status", "missing"))]
         for metric in METRICS:
             value = result.get(metric, "-")
             old = baseline.get(name, {}).get(metric)
@@ -121,13 +150,11 @@ def table(results: dict, baseline: dict) -> str:
 
 
 def regressions(results: dict, baseline: dict) -> list:
-    found = []
+    found = [f"{name}: baseline page was not run" for name in baseline if name not in results]
     for name, result in results.items():
         old = baseline.get(name)
         if old is None:
             continue
-        if "error" in result and "error" not in old:
-            found.append(f"{name}: {result['error']}")
         for metric, direction in METRICS.items():
             new_value, old_value = result.get(metric), old.get(metric)
             if isinstance(new_value, int) and isinstance(old_value, int):
@@ -143,6 +170,8 @@ def main() -> int:
     parser.add_argument("--baseline", type=Path, help="compare with an earlier --json file")
     parser.add_argument("--timeout", type=int, default=300, help="seconds per page")
     args = parser.parse_args()
+    if args.timeout <= 0:
+        parser.error("--timeout must be positive")
 
     captures = Path(os.environ.get("AURORA_CAPTURES", ROOT / ".captures"))
     binary = Path(os.environ.get("AURORA_BIN", ROOT / "target" / "release" / "aurora"))
@@ -150,24 +179,33 @@ def main() -> int:
         sys.exit(f"{binary} not found; run cargo build --release")
     pages = sorted(p for p in captures.glob("*") if (p / "index.jsonl").exists())
     if args.names:
+        missing = sorted(set(args.names) - {p.name for p in pages})
+        if missing:
+            parser.error(f"captures not found: {', '.join(missing)}")
         pages = [p for p in pages if p.name in args.names]
     if not pages:
         sys.exit(f"no captures in {captures}; record them with scripts/yt_capture.sh")
+
+    baseline = json.loads(args.baseline.read_text()) if args.baseline else {}
+    if args.names:
+        baseline = {name: result for name, result in baseline.items() if name in args.names}
 
     results = {}
     for page in pages:
         print(f"replaying {page.name}...", file=sys.stderr)
         results[page.name] = run_capture(binary, page, args.timeout)
 
-    baseline = json.loads(args.baseline.read_text()) if args.baseline else {}
     print(table(results, baseline))
     if args.json:
         args.json.write_text(json.dumps(results, indent=2, sort_keys=True) + "\n")
 
+    failed = failures(results)
+    for line in failed:
+        print(f"FAILURE {line}")
     worse = regressions(results, baseline)
     for line in worse:
         print(f"REGRESSION {line}")
-    return 1 if worse else 0
+    return 1 if failed or worse else 0
 
 
 if __name__ == "__main__":
