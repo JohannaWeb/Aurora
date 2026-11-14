@@ -12,6 +12,7 @@
     var renderers = 0;
     var items = 0;
     var misplacedItems = 0;
+    var zeroSizeItems = 0;
     var videoIds = {};
 
     function videoIdOf(node) {
@@ -41,6 +42,10 @@
             if (/-renderer$|-view-model(-v2)?$/.test(tag)) renderers++;
             if (ITEM.test(tag)) {
                 items++;
+                try {
+                    var rect = node.getBoundingClientRect();
+                    if (!rect || rect.width <= 0 || rect.height <= 0) zeroSizeItems++;
+                } catch (e) { zeroSizeItems++; }
                 var parent = node.parentNode;
                 if (parent && parent.nodeType === 11) misplacedItems++;
                 var id = videoIdOf(node);
@@ -78,6 +83,7 @@
         distinct_videos: Object.keys(videoIds).length,
         duplicated_videos: duplicated,
         misplaced_items: misplacedItems,
+        zero_size_items: zeroSizeItems,
         height: Math.max(height(document.documentElement), height(document.body), height(app)),
         title: document.title || ''
     }));

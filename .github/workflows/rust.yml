@@ -21,10 +21,18 @@ jobs:
     # and the installed fonts, which must match the machine the baselines were
     # rendered on (Ubuntu 24.04 / fontconfig 2.15).
     runs-on: ubuntu-24.04
+    env:
+      # Mesa's software OpenGL backend is stable when the visual and library
+      # tests create headless renderers in parallel. The default Vulkan driver
+      # can segfault in constrained runners where no GPU device is exposed.
+      WGPU_BACKEND: gl
 
     steps:
     - name: Checkout Aurora
       uses: actions/checkout@v4
+
+    - name: Test scorecard tooling
+      run: python3 -m unittest discover -s scripts -p 'test_*.py'
 
     - name: Install Linux dependencies and fonts
       # fonts-noto-core provides `sans-serif` (Noto Sans), fonts-liberation the

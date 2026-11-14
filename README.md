@@ -176,9 +176,19 @@ The pages are listed in `scripts/scorecard/pages.txt`. Each run replays the
 captures with `AURORA_REPLAY`, so results are identical from run to run, and
 `scripts/scorecard/probe.js` measures the composed tree (shadow roots
 included): elements, visible text, result items, distinct and duplicated
-videos, items misplaced directly under a shadow root, and page height. JS
-errors and replay misses come from the log. Captures hold anonymous visitor
+videos, items misplaced directly under a shadow root, zero-size items, and page
+height. JS errors and replay misses come from the log. Captures hold anonymous visitor
 cookies and IP-derived locale, so `.captures/` is ignored by git.
+
+The scorecard exits nonzero for crashes, timeouts, launch failures, or missing
+or invalid probe metrics, even without a baseline. The table includes each
+process's exit status, and `--json` preserves results from failed runs. With a
+baseline, missing pages also fail the comparison. To compare only selected
+captures, run `scripts/yt_scorecard.py --baseline score.json yt-search`;
+unknown capture names are rejected before replay starts.
+
+Run the scorecard tooling tests with
+`python3 -B -m unittest discover -s scripts -p 'test_*.py'`.
 
 
 ```bash
