@@ -258,6 +258,7 @@ fn run_env_probe_script(runtime: &mut dyn crate::js_engine::JsRuntime) {
 /// to a browser event loop and avoids simulating an SPA to quiescence in a burst.
 fn pump_ready_work(runtime: &mut dyn crate::js_engine::JsRuntime) {
     const FRAME: Duration = Duration::from_millis(16);
+    const VIRTUAL_TURN_COST: Duration = Duration::from_millis(1);
     let real_budget = Duration::from_millis(
         env::var("AURORA_BOOT_REAL_MS")
             .ok()
@@ -294,6 +295,12 @@ fn pump_ready_work(runtime: &mut dyn crate::js_engine::JsRuntime) {
         });
         if raf_due {
             next_frame = now + FRAME;
+        }
+        // On a standing virtual clock running a task takes no time, so a
+        // setTimeout(0) chain would spin forever; charge each turn that ran
+        // one a fixed cost so the budget still runs out.
+        if crate::clock::is_standing() && !fired_phases.is_empty() {
+            crate::clock::sleep(VIRTUAL_TURN_COST);
         }
         // Paint reports work on every turn. On a standing virtual clock a
         // paint-only turn must count as idle, or time never advances.
