@@ -11,7 +11,11 @@
                 (typeof HTMLImageElement !== 'undefined') ? HTMLImageElement.prototype : Object.prototype
             );
 
-            globalThis.Event = function Event(type, init) {
+            // Subclasses initialize through this captured reference, never
+            // through `globalThis.Event`: ShadyDOM replaces window.Event with a
+            // wrapper that returns a fresh object, so `globalThis.Event.call(this)`
+            // would put type/bubbles on that throwaway object instead of `this`.
+            var BaseEvent = globalThis.Event = function Event(type, init) {
                 init = init || {};
                 // Initialize on `this` whenever it's an object — this covers both
                 // `new Event(...)` and `Event.call(subclassInstance, ...)` (e.g. our
@@ -36,21 +40,21 @@
             };
 
             globalThis.CustomEvent = function CustomEvent(type, init) {
-                globalThis.Event.call(this, type, init);
+                BaseEvent.call(this, type, init);
                 this.detail = (init && init.detail !== undefined) ? init.detail : null;
             };
             globalThis.CustomEvent.prototype = Object.create(globalThis.Event.prototype);
             globalThis.CustomEvent.prototype.constructor = globalThis.CustomEvent;
 
             globalThis.ErrorEvent = function ErrorEvent(type, init) {
-                globalThis.Event.call(this, type, init);
+                BaseEvent.call(this, type, init);
                 init = init || {};
                 this.message = init.message || ''; this.error = init.error || null;
             };
             globalThis.ErrorEvent.prototype = Object.create(globalThis.Event.prototype);
 
             globalThis.MessageEvent = function MessageEvent(type, init) {
-                globalThis.Event.call(this, type, init);
+                BaseEvent.call(this, type, init);
                 init = init || {};
                 this.data = init.data !== undefined ? init.data : null;
                 this.origin = init.origin || ''; this.source = init.source || null;
@@ -111,7 +115,7 @@
             globalThis.MessageChannel.prototype.constructor = globalThis.MessageChannel;
 
             globalThis.PromiseRejectionEvent = function PromiseRejectionEvent(type, init) {
-                globalThis.Event.call(this, type, init);
+                BaseEvent.call(this, type, init);
                 init = init || {};
                 this.promise = init.promise || null; this.reason = init.reason;
             };
