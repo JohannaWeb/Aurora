@@ -5,7 +5,9 @@
     if (globalThis.DOMTokenList && typeof Symbol === 'function' && Symbol.iterator) {
         DOMTokenList.prototype[Symbol.iterator] = Array.prototype[Symbol.iterator];
     }
-    // Event subtypes on top of the shared Event polyfill.
+    // Event subtypes on top of the shared Event polyfill. Captured now, before
+    // page scripts (ShadyDOM) can wrap the global; see event_constructors.js.
+    var BaseEvent = globalThis.Event;
     globalThis.Event.prototype.initEvent = function(type, bubbles, cancelable) {
         this.type = type || '';
         this.bubbles = !!bubbles;
@@ -23,7 +25,7 @@
         'StorageEvent','DragEvent','ClipboardEvent','SubmitEvent'
     ].forEach(function(name) {
         var Ctor = function(type, init) {
-            globalThis.Event.call(this, type, init);
+            BaseEvent.call(this, type, init);
             init = init || {};
             this.detail = init.detail !== undefined ? init.detail : 0;
             this.clientX = init.clientX || 0; this.clientY = init.clientY || 0;

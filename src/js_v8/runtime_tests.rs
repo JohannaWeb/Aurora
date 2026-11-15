@@ -330,6 +330,40 @@ fn v8_dispatch_event_fires_window_and_document_listeners() {
 }
 
 #[test]
+fn v8_event_subclasses_survive_wrapped_global_event() {
+    // Regression: ShadyDOM replaces window.Event/CustomEvent with wrappers that
+    // return `new Original(...)`. CustomEvent used to initialize via
+    // `globalThis.Event.call(this)`, which then hit the wrapper and put
+    // type/bubbles on a discarded object, so no listener ever matched.
+    let mut runtime = V8Runtime::new(blank_dom());
+    assert_eq!(
+        runtime.eval_to_string(
+            r#"(() => {
+                ['Event', 'CustomEvent', 'MouseEvent'].forEach(name => {
+                    const Original = window[name];
+                    const Wrapped = function(type, init) {
+                        const e = new Original(type, init);
+                        e.__composed = !!(init && init.composed);
+                        return e;
+                    };
+                    Wrapped.prototype = Original.prototype;
+                    window[name] = Wrapped;
+                });
+                const custom = new CustomEvent('ping', { bubbles: true, detail: 7 });
+                const mouse = new MouseEvent('click', { bubbles: true });
+                const el = document.createElement('div');
+                document.body.appendChild(el);
+                let hits = 0;
+                document.addEventListener('ping', () => { hits++; });
+                el.dispatchEvent(custom);
+                return [custom.type, custom.bubbles, custom.detail, mouse.type, hits].join('|');
+            })()"#
+        ),
+        Ok("ping|true|7|click|1".to_string())
+    );
+}
+
+#[test]
 fn v8_composed_event_reaches_shadow_host() {
     let mut runtime = V8Runtime::new(blank_dom());
     assert_eq!(
