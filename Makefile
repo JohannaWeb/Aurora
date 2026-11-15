@@ -9,7 +9,7 @@ VIEWPORT_HEIGHT ?= 786
 SCREENSHOT_DIR := $(dir $(abspath $(SCREENSHOT)))
 SCREENSHOT_FILE := $(notdir $(SCREENSHOT))
 
-.PHONY: yt-capture yt-scorecard
+.PHONY: yt-capture yt-scorecard wpt wpt-fetch wpt-update
 .PHONY: docker-build docker-run docker-fixture docker-x11 docker-screenshot screenshot mockup-screenshot dynamic-screenshot raf-screenshot all-renders check-line-cap
 
 docker-build:
@@ -76,3 +76,17 @@ yt-capture:
 yt-scorecard:
 	cargo build --release
 	scripts/yt_scorecard.py $(if $(JSON),--json $(JSON)) $(if $(BASELINE),--baseline $(BASELINE))
+
+# web-platform-tests: fetch the pinned checkout once, then `make wpt` prints
+# pass counts and fails on regressions against tests/wpt/expectations.json.
+# Narrow with WPT_PATHS="dom/nodes shadow-dom"; record gains with wpt-update.
+wpt-fetch:
+	scripts/wpt.py fetch
+
+wpt:
+	cargo build --release
+	scripts/wpt.py run $(WPT_PATHS)
+
+wpt-update:
+	cargo build --release
+	scripts/wpt.py run --update $(WPT_PATHS)

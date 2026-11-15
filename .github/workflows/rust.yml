@@ -116,3 +116,48 @@ jobs:
       # noisy, fix the findings or scope specific lints down via
       # `#![allow(clippy::...)]` rather than dropping the gate.
       run: cargo clippy --locked --lib --bins -- -D warnings
+
+  wpt:
+    runs-on: ubuntu-24.04
+
+    steps:
+    - name: Checkout Aurora
+      uses: actions/checkout@v4
+
+    - name: Install Linux dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y --no-install-recommends \
+          libfontconfig1-dev \
+          libwayland-dev \
+          libx11-dev \
+          libx11-xcb-dev \
+          libxcb1-dev \
+          libxcb-render0-dev \
+          libxcb-shape0-dev \
+          libxcb-xfixes0-dev \
+          libxkbcommon-dev \
+          pkg-config
+
+    - name: Cache cargo build
+      uses: Swatinem/rust-cache@v2
+
+    - name: Fetch web-platform-tests
+      run: scripts/wpt.py fetch
+
+    # Release build, matching how tests/wpt/expectations.json is recorded.
+    - name: Build
+      run: cargo build --locked --release
+
+    # Fails on any subtest that passes in tests/wpt/expectations.json and no
+    # longer does, or on a test whose harness status gets worse.
+    - name: Run web-platform-tests
+      run: scripts/wpt.py run --json wpt-results.json
+
+    - name: Upload results
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: wpt-results
+        path: wpt-results.json
+        if-no-files-found: ignore

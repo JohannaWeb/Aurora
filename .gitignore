@@ -7,3 +7,9 @@ logs/
 
 # Network recordings (AURORA_RECORD); can contain cookies and visitor IDs
 .captures/
+
+# web-platform-tests checkout (scripts/wpt.py fetch)
+.wpt/
+
+# Python bytecode from scripts/
+__pycache__/
