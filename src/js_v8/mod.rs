@@ -9,6 +9,7 @@ mod bindings_tests;
 mod capture;
 #[cfg(test)]
 mod css_tests;
+mod dom_exception;
 mod custom_elements;
 mod determinism;
 mod form_associated;

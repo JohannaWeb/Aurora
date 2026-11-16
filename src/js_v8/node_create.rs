@@ -2937,19 +2937,7 @@ fn get_internals_labels(
     retval.set(v8::Array::new(scope, 0).into());
 }
 
-/// Throw an Error carrying a DOMException `name`.
-fn throw_named_error(scope: &mut v8::PinScope<'_, '_>, name: &str, message: &str) {
-    let Some(message) = v8::String::new(scope, message) else {
-        return;
-    };
-    let error = v8::Exception::error(scope, message);
-    if let Some(obj) = error.to_object(scope) {
-        let key = v8_str(scope, "name");
-        let value = v8_str(scope, name);
-        obj.set(scope, key.into(), value.into());
-    }
-    scope.throw_exception(error);
-}
+use super::dom_exception::throw_dom_exception as throw_named_error;
 
 /// `internals.setFormValue(value)` — record the element's submission value.
 fn internals_set_form_value(
