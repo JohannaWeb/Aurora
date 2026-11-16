@@ -428,13 +428,19 @@ pub(super) fn create_js_node<'s>(
         attach_shadow,
         node_external,
     );
-    install_method(
-        scope,
-        template,
-        "__shady_attachShadow",
-        attach_shadow,
-        node_external,
-    );
+    // P2.0 spike: without this override ShadyDOM keeps its own logical
+    // attachShadow, as in Chrome with ShadyDOM forced.
+    static SPIKE_NO_HEURISTICS: std::sync::LazyLock<bool> =
+        std::sync::LazyLock::new(|| std::env::var_os("AURORA_SPIKE_NO_HEURISTICS").is_some());
+    if !*SPIKE_NO_HEURISTICS {
+        install_method(
+            scope,
+            template,
+            "__shady_attachShadow",
+            attach_shadow,
+            node_external,
+        );
+    }
     install_method(
         scope,
         template,
@@ -532,13 +538,16 @@ pub(super) fn create_js_node<'s>(
             ) {
                 "SVGElement"
             } else {
-                "HTMLElement"
+                super::bindings::html_interface(&el.tag_name)
             }
         }
+        Node::Element(_) if crate::dom::SyntheticShadowTreeBackend.is_shadow_root(&node) => "ShadowRoot",
         Node::Element(_) => "DocumentFragment",
-        _ => "Node",
+        Node::Text(_) => "Text",
+        Node::Comment(_) => "Comment",
+        Node::Document { .. } => "Document",
     };
-    set_dom_prototype(scope, obj, proto_name);
+    super::bindings::set_prototype(scope, registry, obj, proto_name);
 
     let mut is_custom_element = false;
     let mut is_canvas = false;
@@ -838,26 +847,6 @@ pub(super) fn external_data<'a, T>(data: v8::Local<'a, v8::Value>) -> &'a T {
 /// Recover the `&NodeData` a per-node method callback was installed with.
 pub(super) fn node_data_from<'a>(data: v8::Local<'a, v8::Value>) -> &'a NodeData {
     external_data(data)
-}
-
-/// Set `obj`'s `[[Prototype]]` to `globalThis[<ctor>].prototype` if that DOM
-/// constructor exists yet. Early wrappers built during context setup (before the
-/// JS prototype skeletons are defined) simply keep `Object.prototype`; they're
-/// re-resolvable later and the common case (wrappers created during script
-/// execution) gets the chain.
-fn set_dom_prototype(scope: &mut v8::PinScope<'_, '_>, obj: v8::Local<v8::Object>, ctor: &str) {
-    let global = scope.get_current_context().global(scope);
-    let Some(ctor_val) = global.get(scope, v8_str(scope, ctor).into()) else {
-        return;
-    };
-    let Some(ctor_obj) = ctor_val.to_object(scope) else {
-        return;
-    };
-    if let Some(proto) = ctor_obj.get(scope, v8_str(scope, "prototype").into()) {
-        if proto.is_object() {
-            let _ = obj.set_prototype(scope, proto);
-        }
-    }
 }
 
 fn data_attr_to_dataset_key(name: &str) -> Option<String> {
@@ -1276,24 +1265,10 @@ fn find_parent_for(node_data: &NodeData, node: &NodePtr) -> Option<NodePtr> {
     if crate::dom::SyntheticShadowTreeBackend.is_shadow_root(node) {
         return None;
     }
-    if let Some(parent) = crate::dom::parent_ptr(node) {
-        if query::find_parent(&parent, node).is_some() {
-            return Some(parent);
-        }
-    }
-    if let Some(parent) = query::find_parent(&node_data.document, node) {
-        return Some(parent);
-    }
-
-    for root in node_data.registry.registered_nodes() {
-        if Rc::ptr_eq(&root, &node_data.document) || Rc::ptr_eq(&root, node) {
-            continue;
-        }
-        if let Some(parent) = query::find_parent(&root, node) {
-            return Some(parent);
-        }
-    }
-    None
+    // Initial parsing and DOM mutations maintain the parent link. A missing
+    // link means detached; scanning the registry cannot discover a parent and
+    // makes repeated parentNode reads quadratic during bootstrap.
+    query::find_parent(&node_data.document, node)
 }
 
 fn find_parent_for_node(node_data: &NodeData) -> Option<NodePtr> {
@@ -3045,6 +3020,22 @@ fn attach_shadow(
     // Rebind to the callback scope's lifetime so it can seed new templates.
     let external = v8::Local::<v8::External>::new(scope, external);
     let node_data = unsafe { &*(external.value() as *const NodeData) };
+    // SPIKE-TRACE-ATTACH
+    if std::env::var_os("AURORA_SPIKE_TRACE_ATTACH").is_some()
+        && matches!(&*node_data.node.borrow(), Node::Element(el) if el.tag_name.starts_with("ytd-app"))
+    {
+        let mut frames = String::new();
+        if let Some(st) = v8::StackTrace::current_stack_trace(scope, 10) {
+            for i in 0..st.get_frame_count() {
+                if let Some(f) = st.get_frame(scope, i) {
+                    let name = f.get_function_name(scope).map(|n| n.to_rust_string_lossy(scope)).unwrap_or_default();
+                    let script = f.get_script_name(scope).map(|n| n.to_rust_string_lossy(scope)).unwrap_or_default();
+                    frames.push_str(&format!(" | {}@{}:{}", name, script.rsplit('/').next().unwrap_or(""), f.get_line_number()));
+                }
+            }
+        }
+        eprintln!("[spike-attach]{frames}");
+    }
 
     let opts = args
         .get(0)

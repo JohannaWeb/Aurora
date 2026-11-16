@@ -7,16 +7,11 @@
         globalThis.queueMicrotask = function(fn) { Promise.resolve().then(fn); };
     }
 
-    // DOM constructor skeletons. Aurora's V8 node wrappers are plain objects,
-    // so these exist for prototype-chain patching (Polymer's ES5 adapter wraps
-    // HTMLElement; webcomponents probes Element.prototype) rather than as the
-    // wrappers' actual prototypes.
     // Real EventTarget: listeners are stored per-object in `__ael`, and
     // `dispatchEvent` runs capture/target/bubble phases over the live DOM path
     // (walked via `parentNode`, extended to `document` and `window`). This is the
     // event model Polymer/ShadyDOM compose with; the previous stubs meant nothing
     // dispatched on a node ever reached its listeners.
-    globalThis.EventTarget = function EventTarget() {};
     EventTarget.prototype.addEventListener = function(type, listener, options) {
         if (!type || typeof listener !== 'function' && (!listener || typeof listener.handleEvent !== 'function')) return;
         var capture = options === true || (options && options.capture) || false;
@@ -97,17 +92,11 @@
         return !event.defaultPrevented;
     };
 
-    globalThis.Node = function Node() {};
-    Node.prototype = Object.create(EventTarget.prototype);
-    Node.prototype.constructor = Node;
     Node.ELEMENT_NODE = 1; Node.ATTRIBUTE_NODE = 2; Node.TEXT_NODE = 3;
     Node.CDATA_SECTION_NODE = 4; Node.COMMENT_NODE = 8;
     Node.DOCUMENT_NODE = 9; Node.DOCUMENT_TYPE_NODE = 10;
     Node.DOCUMENT_FRAGMENT_NODE = 11;
 
-    globalThis.Element = function Element() {};
-    Element.prototype = Object.create(Node.prototype);
-    Element.prototype.constructor = Element;
     // `style` is a prototype accessor on Element.prototype, matching Blink
     // (spec puts it on HTMLElement/SVGElement; YouTube's wrapped components
     // key their prop accessors off `Object.getOwnPropertyNames(
@@ -133,49 +122,7 @@
         configurable: true
     });
 
-    globalThis.HTMLElement = function HTMLElement() { return undefined; };
-    HTMLElement.prototype = Object.create(Element.prototype);
-    HTMLElement.prototype.constructor = HTMLElement;
-
-    [
-        'HTMLDivElement','HTMLSpanElement','HTMLAnchorElement','HTMLImageElement',
-        'HTMLInputElement','HTMLButtonElement','HTMLTemplateElement','HTMLScriptElement',
-        'HTMLStyleElement','HTMLIFrameElement','HTMLVideoElement','HTMLAudioElement',
-        'HTMLMediaElement','HTMLCanvasElement','HTMLFormElement','HTMLSelectElement',
-        'HTMLTextAreaElement','HTMLLinkElement','HTMLMetaElement','HTMLTitleElement',
-        'HTMLBodyElement','HTMLHtmlElement','HTMLHeadElement','HTMLUnknownElement',
-        'HTMLLabelElement','HTMLUListElement','HTMLLIElement','HTMLParagraphElement'
-    ].forEach(function(name) {
-        var Ctor = function() {};
-        Ctor.prototype = Object.create(HTMLElement.prototype);
-        Ctor.prototype.constructor = Ctor;
-        globalThis[name] = Ctor;
-    });
-
-    globalThis.SVGElement = function SVGElement() {};
-    SVGElement.prototype = Object.create(Element.prototype);
-    globalThis.Document = function Document() {};
-    Document.prototype = Object.create(Node.prototype);
-    globalThis.HTMLDocument = function HTMLDocument() {};
-    HTMLDocument.prototype = Object.create(Document.prototype);
-    globalThis.DocumentFragment = function DocumentFragment() {};
-    DocumentFragment.prototype = Object.create(Node.prototype);
-    globalThis.ShadowRoot = function ShadowRoot() {};
-    ShadowRoot.prototype = Object.create(DocumentFragment.prototype);
-    globalThis.CharacterData = function CharacterData() {};
-    CharacterData.prototype = Object.create(Node.prototype);
-    globalThis.Text = function Text() {};
-    Text.prototype = Object.create(CharacterData.prototype);
-    globalThis.Comment = function Comment() {};
-    Comment.prototype = Object.create(CharacterData.prototype);
-    globalThis.CDATASection = function CDATASection() {};
-    CDATASection.prototype = Object.create(CharacterData.prototype);
-    globalThis.ProcessingInstruction = function ProcessingInstruction() {};
-    ProcessingInstruction.prototype = Object.create(CharacterData.prototype);
-    globalThis.DocumentType = function DocumentType() {};
-    DocumentType.prototype = Object.create(Node.prototype);
-    globalThis.Attr = function Attr() {};
-    Attr.prototype = Object.create(Node.prototype);
+    globalThis.HTMLDocument = Document;
     globalThis.Window = function Window() {};
     globalThis.NodeList = function NodeList() {};
     globalThis.HTMLCollection = function HTMLCollection() {};

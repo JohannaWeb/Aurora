@@ -3,6 +3,9 @@
 //! Executes real JavaScript in a V8 isolate behind the `JsRuntime` trait used by
 //! the runner.
 
+mod bindings;
+#[cfg(test)]
+mod bindings_tests;
 mod capture;
 #[cfg(test)]
 mod css_tests;
