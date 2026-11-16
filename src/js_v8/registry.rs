@@ -449,6 +449,10 @@ impl NodeRegistry {
         self.nodes.borrow().get(&id).cloned()
     }
 
+    pub(super) fn registered_nodes(&self) -> Vec<NodePtr> {
+        self.nodes.borrow().values().cloned().collect()
+    }
+
     pub(super) fn lookup_js_wrapper<'s>(
         &self,
         scope: &mut v8::PinScope<'s, '_>,
