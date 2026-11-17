@@ -103,3 +103,27 @@ fn native_html_constructor_preserves_custom_element_construction() {
         Ok("true".into())
     );
 }
+
+#[test]
+fn document_has_a_single_wrapper() {
+    let mut runtime = runtime();
+    assert_eq!(
+        runtime.eval_to_string(
+            r#"(() => {
+        const p = document.createElement('p');
+        document.body.appendChild(p);
+        return [
+            document.documentElement.parentNode === document,
+            document.body.ownerDocument === document,
+            p.ownerDocument === document,
+            document.body.parentNode.parentNode === document,
+            document.nodeType, document.nodeName,
+            Object.getPrototypeOf(document) === Document.prototype,
+            typeof document.createElement, typeof document.getElementById,
+            typeof document.elementFromPoint,
+        ].join('|');
+    })()"#
+        ),
+        Ok("true|true|true|true|9|#document|true|function|function|function".into())
+    );
+}
