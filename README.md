@@ -1,4 +1,7 @@
 # Aurora
+Visual parity with chrome in some pages:
+<img width="3072" height="740" alt="image" src="https://github.com/user-attachments/assets/6e4096c5-0499-4613-8009-b222cebc37cf" />
+Youtube consent:
 <img width="1431" height="1056" alt="image" src="https://github.com/user-attachments/assets/6077ef4f-95b6-44c4-b8ff-e537d2915fc1" />
 <img width="1080" height="794" alt="image" src="https://github.com/user-attachments/assets/6cc98bcf-0cea-42de-8d1c-707923a3ef52" />
 
