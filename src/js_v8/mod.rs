@@ -10,6 +10,7 @@ mod capture;
 #[cfg(test)]
 mod css_tests;
 mod dom_exception;
+mod dom_impl;
 mod custom_elements;
 mod determinism;
 mod form_associated;

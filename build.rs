@@ -1,9 +1,11 @@
 #[path = "codegen/webidl.rs"]
 mod webidl;
+#[path = "codegen/generate.rs"]
+mod generate;
 
 fn main() {
     println!("cargo:rerun-if-changed=idl");
-    println!("cargo:rerun-if-changed=codegen/webidl.rs");
+    println!("cargo:rerun-if-changed=codegen");
     let mut paths = std::fs::read_dir("idl")
         .unwrap()
         .map(|e| e.unwrap().path())
@@ -20,20 +22,32 @@ fn main() {
     let interfaces = webidl::inheritance_order(interfaces).expect("invalid interface inheritance");
     let mut output = String::from(
         "// Generated from idl/*.idl; do not edit.\n\
-        pub(super) fn install(scope: &mut v8::PinScope<'_, '_>, registry: &NodeRegistry) {\n",
+        fn install_interfaces(scope: &mut v8::PinScope<'_, '_>, registry: &NodeRegistry) {\n",
     );
+    let mut members = String::new();
     for (index, interface) in interfaces.iter().enumerate() {
         let parent = interface.parent.as_ref().map_or("None".into(), |parent| {
             let index = interfaces.iter().position(|i| &i.name == parent).unwrap();
             format!("Some(interface_{index})")
         });
         output.push_str(&format!(
-            "let interface_{index} = define_interface(scope, registry, {:?}, {parent});\n",
-            interface.name
+            "let interface_{index} = define_interface(scope, registry, {name:?}, {parent}, \
+             install_members_{name});\n",
+            name = interface.name
         ));
+        members.push_str(&generate::members(interface));
         output.push_str(&format!("let _ = interface_{index};\n"));
     }
-    output.push_str("}\npub(super) fn html_interface(tag: &str) -> &'static str { match tag {\n");
+    output.push_str("}\n");
+    output.push_str(&members);
+    output.push_str("pub(super) fn parent_interface(name: &str) -> Option<&'static str> { match name {\n");
+    for interface in &interfaces {
+        if let Some(parent) = &interface.parent {
+            output.push_str(&format!("{:?} => Some({parent:?}),\n", interface.name));
+        }
+    }
+    output.push_str("_ => None, } }\n");
+    output.push_str("pub(super) fn html_interface(tag: &str) -> &'static str { match tag {\n");
     let mut tags = std::collections::BTreeSet::new();
     for line in std::fs::read_to_string("idl/html-tags.txt")
         .unwrap()

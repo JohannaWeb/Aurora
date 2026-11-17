@@ -92,10 +92,6 @@
         return !event.defaultPrevented;
     };
 
-    Node.ELEMENT_NODE = 1; Node.ATTRIBUTE_NODE = 2; Node.TEXT_NODE = 3;
-    Node.CDATA_SECTION_NODE = 4; Node.COMMENT_NODE = 8;
-    Node.DOCUMENT_NODE = 9; Node.DOCUMENT_TYPE_NODE = 10;
-    Node.DOCUMENT_FRAGMENT_NODE = 11;
 
     // `style` is a prototype accessor on Element.prototype, matching Blink
     // (spec puts it on HTMLElement/SVGElement; YouTube's wrapped components

@@ -1,7 +1,8 @@
-# Interface skeletons (P2.1)
+# WebIDL interfaces
 
 These checked-in WebIDL files describe Aurora's initial interface inheritance
-graph. They are curated, member-free declarations based on the
+graph and the members that have moved onto generated bindings. They are
+curated declarations based on the
 [DOM](https://dom.spec.whatwg.org/),
 [HTML](https://html.spec.whatwg.org/multipage/indices.html#element-interfaces)
 and [SVG](https://svgwg.org/svg2-draft/types.html#InterfaceSVGElement) standards,
@@ -15,17 +16,39 @@ registry retains intrinsic prototypes, so replacing a global constructor cannot
 change the class of newly created DOM wrappers. `HTMLDocument` is the legacy
 alias of `Document`.
 
-The parser deliberately accepts only empty `interface Name [: Parent] {};`
-declarations and comments. Members, extended attributes, partials and mixins
-are rejected until their semantics are implemented. Missing parents, duplicate
-names and inheritance cycles fail the build. Source order need not match
-inheritance order.
+## Supported IDL (P2.2)
 
-Existing Rust wrapper members and JS behavior remain until P2.2–P2.5 migrate
-them. Constructors other than `HTMLElement` retain their previous placeholder
-behavior; the native `HTMLElement` entry point delegates to the existing custom
-element construction hook. Namespace storage and SVG subclass selection are
-also deferred; this step preserves the existing SVG classification.
+The parser accepts a deliberate subset and rejects everything else, so
+unsupported IDL fails the build instead of producing wrong bindings:
+
+- `interface Name [: Parent] { ... };`, no partials, mixins or namespaces.
+- `const` integer or boolean members, installed on the interface object and
+  its prototype (read-only, enumerable, non-configurable).
+- `[readonly] attribute T name;` as accessor properties on the prototype.
+- `T name(args);` regular operations. Overloads, variadics and `any` are
+  rejected; `optional` arguments may have literal defaults.
+- Types: `DOMString`/`USVString`, `boolean`, all integer types, `float`,
+  `double` and their `unrestricted` forms, interface types, `undefined` as
+  a return type, and `T?`.
+- Extended attributes: `[CEReactions]` only.
+
+For each interface with members, `codegen/generate.rs` emits a
+`<Interface>Members` trait that `Dom` in `src/js_v8/dom_impl.rs` implements,
+so a declared but unimplemented member is a compile error. Generated
+callbacks brand-check `this` against the generated inheritance chain, check
+arity, convert arguments per WebIDL (ConvertToInt wrapping, non-finite
+rejection for restricted floats, interface brand checks), wrap
+`[CEReactions]` members in a reactions scope, and map errors to `TypeError`
+or a native `DOMException`.
+
+Members currently on generated bindings: `Node`'s constants and
+`Node.contains()`. Everything else is still on the hand-written wrapper
+templates in `node_create.rs` and migrates in P2.3–P2.5. Missing parents,
+duplicate names, unknown types and inheritance cycles fail the build.
+
+Constructors other than `HTMLElement` retain their placeholder behavior; the
+native `HTMLElement` entry point delegates to the existing custom element
+construction hook. Namespace storage and SVG subclass selection are deferred.
 
 ## Validation, 2026-11-16
 

@@ -127,3 +127,55 @@ fn document_has_a_single_wrapper() {
         Ok("true|true|true|true|9|#document|true|function|function|function".into())
     );
 }
+
+#[test]
+fn generated_operation_brand_checks_and_converts_arguments() {
+    let mut runtime = runtime();
+    assert_eq!(
+        runtime.eval_to_string(
+            r#"(() => {
+        const body = document.body, div = document.getElementById('parsed');
+        const detached = document.createElement('p');
+        const contains = Node.prototype.contains;
+        const thrown = f => { try { f(); return 'none'; } catch (e) { return e.constructor.name; } };
+        return [
+            document.contains(div), body.contains(body), div.contains(body),
+            body.contains(detached), body.contains(null), body.contains(undefined),
+            thrown(() => body.contains()), thrown(() => body.contains({})),
+            thrown(() => contains.call({}, body)), thrown(() => new contains(body)),
+            contains.name, contains.length, Object.hasOwn(div, 'contains'),
+        ].join('|');
+    })()"#
+        ),
+        Ok("true|true|false|false|false|false|TypeError|TypeError|TypeError|TypeError|contains|1|false".into())
+    );
+}
+
+#[test]
+fn generated_constants_are_on_interface_and_prototype() {
+    let mut runtime = runtime();
+    assert_eq!(
+        runtime.eval_to_string(
+            r#"(() => {
+        const d = Object.getOwnPropertyDescriptor(Node, 'DOCUMENT_POSITION_CONTAINED_BY');
+        return [Node.ELEMENT_NODE, document.body.TEXT_NODE, Node.prototype.NOTATION_NODE,
+            d.value, d.writable, d.enumerable, d.configurable].join('|');
+    })()"#
+        ),
+        Ok("1|3|12|16|false|true|false".into())
+    );
+}
+
+#[test]
+fn snake_case_member_names() {
+    #[path = "../../codegen/generate.rs"]
+    #[allow(dead_code)]
+    mod generate;
+    use generate::snake_case;
+    assert_eq!(snake_case("compareDocumentPosition"), "compare_document_position");
+    assert_eq!(snake_case("innerHTML"), "inner_html");
+    assert_eq!(snake_case("getElementsByTagNameNS"), "get_elements_by_tag_name_ns");
+    assert_eq!(snake_case("HTMLElement"), "html_element");
+    assert_eq!(snake_case("type"), "r#type");
+}
+

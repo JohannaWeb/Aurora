@@ -99,7 +99,6 @@ pub(super) fn create_js_node<'s>(
     );
     install_method(scope, template, "remove", remove_node, node_external);
     install_method(scope, template, "cloneNode", clone_node, node_external);
-    install_method(scope, template, "contains", contains, node_external);
     install_method(
         scope,
         template,
@@ -501,46 +500,7 @@ pub(super) fn create_js_node<'s>(
     // methods (Node/Element/HTMLElement → EventTarget). Custom-element upgrade may
     // later swap this for the element's class prototype, which itself chains back
     // to HTMLElement.prototype, so EventTarget stays reachable either way.
-    let proto_name = match &*node.borrow() {
-        Node::Element(el) if el.tag_name != "#document-fragment" => {
-            if matches!(
-                el.tag_name.as_str(),
-                "svg"
-                    | "path"
-                    | "g"
-                    | "circle"
-                    | "rect"
-                    | "line"
-                    | "polyline"
-                    | "polygon"
-                    | "ellipse"
-                    | "text"
-                    | "use"
-                    | "defs"
-                    | "symbol"
-                    | "clipPath"
-                    | "linearGradient"
-                    | "radialGradient"
-                    | "stop"
-                    | "mask"
-                    | "pattern"
-                    | "marker"
-                    | "foreignObject"
-                    | "feGaussianBlur"
-                    | "feOffset"
-                    | "feColorMatrix"
-            ) {
-                "SVGElement"
-            } else {
-                super::bindings::html_interface(&el.tag_name)
-            }
-        }
-        Node::Element(_) if crate::dom::SyntheticShadowTreeBackend.is_shadow_root(&node) => "ShadowRoot",
-        Node::Element(_) => "DocumentFragment",
-        Node::Text(_) => "Text",
-        Node::Comment(_) => "Comment",
-        Node::Document { .. } => "Document",
-    };
+    let proto_name = interface_for(&node);
     super::bindings::set_prototype(scope, registry, obj, proto_name);
 
     let mut is_custom_element = false;
@@ -905,6 +865,50 @@ fn install_readonly_accessor<'s>(
     );
 }
 
+/// The generated interface a wrapper for `node` is an instance of.
+pub(super) fn interface_for(node: &NodePtr) -> &'static str {
+    match &*node.borrow() {
+        Node::Element(el) if el.tag_name != "#document-fragment" => {
+            if matches!(
+                el.tag_name.as_str(),
+                "svg"
+                    | "path"
+                    | "g"
+                    | "circle"
+                    | "rect"
+                    | "line"
+                    | "polyline"
+                    | "polygon"
+                    | "ellipse"
+                    | "text"
+                    | "use"
+                    | "defs"
+                    | "symbol"
+                    | "clipPath"
+                    | "linearGradient"
+                    | "radialGradient"
+                    | "stop"
+                    | "mask"
+                    | "pattern"
+                    | "marker"
+                    | "foreignObject"
+                    | "feGaussianBlur"
+                    | "feOffset"
+                    | "feColorMatrix"
+            ) {
+                "SVGElement"
+            } else {
+                super::bindings::html_interface(&el.tag_name)
+            }
+        }
+        Node::Element(_) if crate::dom::SyntheticShadowTreeBackend.is_shadow_root(node) => "ShadowRoot",
+        Node::Element(_) => "DocumentFragment",
+        Node::Text(_) => "Text",
+        Node::Comment(_) => "Comment",
+        Node::Document { .. } => "Document",
+    }
+}
+
 fn node_type(node: &NodePtr) -> i32 {
     match &*node.borrow() {
         Node::Element(el) if el.tag_name == "#document-fragment" => 11,
@@ -929,7 +933,7 @@ fn node_name(node: &NodePtr) -> String {
 
 // ─── Callbacks ───────────────────────────────────────────────────────────────
 
-fn node_from_js(
+pub(super) fn node_from_js(
     scope: &mut v8::PinScope<'_, '_>,
     val: v8::Local<v8::Value>,
     registry: &NodeRegistry,
@@ -1338,21 +1342,6 @@ fn clone_node(
         call_global_hook(scope, "__aurora_track_fragment__", js_node);
     }
     retval.set(js_node.into());
-}
-
-fn contains(
-    scope: &mut v8::PinScope<'_, '_>,
-    args: v8::FunctionCallbackArguments,
-    mut retval: v8::ReturnValue,
-) {
-    let data = args.data();
-    let node_data = node_data_from(data);
-
-    if let Some(other) = node_from_js(scope, args.get(0), &node_data.registry) {
-        retval.set(v8::Boolean::new(scope, mutation::contains_ptr(&node_data.node, &other)).into());
-    } else {
-        retval.set(v8::Boolean::new(scope, false).into());
-    }
 }
 
 fn has_child_nodes(
