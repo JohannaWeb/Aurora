@@ -74,12 +74,80 @@ pub(crate) enum DomMutation<'a> {
     },
 }
 
+/// The hierarchy steps of DOM "ensure pre-insertion validity" (steps 1, 2
+/// and the Document case of 4): the `HierarchyRequestError` message when
+/// inserting `node` into `parent` is invalid. The child/doctype checks of
+/// steps 3, 5 and 6 are not enforced yet.
+pub(crate) fn hierarchy_error(parent: &NodePtr, node: &NodePtr) -> Option<&'static str> {
+    if matches!(&*parent.borrow(), Node::Text(_) | Node::Comment(_)) {
+        return Some("This node type does not support children.");
+    }
+    if matches!(&*node.borrow(), Node::Document { .. }) {
+        return Some("Nodes of type '#document' may not be inserted inside nodes.");
+    }
+    // Compatibility exemption: Aurora's shadow-root adoption heuristic
+    // (adoptLogicalShadowRoot in custom_elements.js) can make a stamped
+    // template fragment *be* the host's shadow root, so Polymer's
+    // `this.shadowRoot.appendChild(dom)` appends the fragment to itself. That
+    // only re-inserts its own children (no cycle), and hydration currently
+    // relies on the connected reactions it fires. Drop this with the
+    // heuristics (prs.md P2.4); per spec it is a HierarchyRequestError.
+    if Rc::ptr_eq(parent, node)
+        && matches!(&*node.borrow(), Node::Element(el) if el.tag_name == "#document-fragment")
+    {
+        return None;
+    }
+    // Shadow trees hang off their host's children, so this also covers the
+    // spec's host-including ancestors.
+    if contains_ptr(node, parent) {
+        return Some("The new child element contains the parent.");
+    }
+    None
+}
+
+/// Refuse an insertion that would corrupt the tree (a cycle, or a Document
+/// as a child). Bindings throw before reaching here; this guards every other
+/// path, since tree walks recurse without cycle checks.
+fn rejected_insertion(
+    registry: &Rc<NodeRegistry>,
+    mutation: &DomMutation<'_>,
+) -> Option<DomMutationResult> {
+    let (parent, nodes, kind): (&NodePtr, Vec<&NodePtr>, _) = match mutation {
+        DomMutation::AppendChild { parent, child } => (parent, vec![*child], DomMutationKind::AppendChild),
+        DomMutation::PrependChild { parent, child } => {
+            (parent, vec![*child], DomMutationKind::PrependChild)
+        }
+        DomMutation::InsertBefore { parent, new_child, .. } => {
+            (parent, vec![*new_child], DomMutationKind::InsertBefore)
+        }
+        DomMutation::ReplaceChild { parent, new_child, .. } => {
+            (parent, vec![*new_child], DomMutationKind::ReplaceChild)
+        }
+        DomMutation::ReplaceChildren { node, children } => {
+            (node, children.iter().collect(), DomMutationKind::ReplaceChildren)
+        }
+        _ => return None,
+    };
+    let error = nodes.iter().find_map(|node| hierarchy_error(parent, node))?;
+    log::warn!(target: "aurora::dom", "rejected {kind:?}: {error}");
+    Some(DomMutationResult {
+        kind,
+        render_synced: true,
+        target_id: registry.register(parent.clone()),
+        changed: false,
+    })
+}
+
 pub(crate) fn apply_dom_mutation(
     registry: &Rc<NodeRegistry>,
     mutation: DomMutation<'_>,
 ) -> DomMutationResult {
     fn schedule_sync_failure(registry: &Rc<NodeRegistry>) {
         registry.schedule_snapshot_rebuild_reason(SnapshotRebuildReason::SyncOperationFailed);
+    }
+
+    if let Some(rejected) = rejected_insertion(registry, &mutation) {
+        return rejected;
     }
 
     match mutation {

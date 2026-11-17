@@ -1084,6 +1084,9 @@ fn append_child(
     let _reactions = CeReactionsGuard::new(scope, &node_data.registry);
 
     if let Some(child) = node_from_js(scope, args.get(0), &node_data.registry) {
+        if reject_invalid_insertion(scope, &node_data.node, std::slice::from_ref(&child)) {
+            return;
+        }
         reclaim_composed_fragment(scope, args.get(0), &child);
         let fragment_children = if is_document_fragment(&child) {
             child_nodes_of(&child)
@@ -1152,6 +1155,9 @@ fn insert_before(
     let ref_child = node_from_js(scope, args.get(1), &node_data.registry);
 
     if let Some(new_c) = new_child {
+        if reject_invalid_insertion(scope, &node_data.node, std::slice::from_ref(&new_c)) {
+            return;
+        }
         reclaim_composed_fragment(scope, args.get(0), &new_c);
         let fragment_children = if is_document_fragment(&new_c) {
             child_nodes_of(&new_c)
@@ -1198,6 +1204,9 @@ fn replace_child(
     let old_child = node_from_js(scope, args.get(1), &node_data.registry);
 
     if let (Some(new_c), Some(old_c)) = (new_child, old_child) {
+        if reject_invalid_insertion(scope, &node_data.node, std::slice::from_ref(&new_c)) {
+            return;
+        }
         let fragment_children = if is_document_fragment(&new_c) {
             child_nodes_of(&new_c)
         } else {
@@ -2358,6 +2367,21 @@ fn get_root_node(
     retval.set(args.this().into());
 }
 
+/// ParentNode/ChildNode `(Node or DOMString)...` arguments as nodes.
+fn nodes_or_text(
+    scope: &mut v8::PinScope<'_, '_>,
+    args: &v8::FunctionCallbackArguments,
+    node_data: &NodeData,
+) -> Vec<NodePtr> {
+    (0..args.length())
+        .map(|i| {
+            let arg = args.get(i);
+            node_from_js(scope, arg, &node_data.registry)
+                .unwrap_or_else(|| Node::text(arg.to_rust_string_lossy(scope)))
+        })
+        .collect()
+}
+
 fn append_children(
     scope: &mut v8::PinScope<'_, '_>,
     args: v8::FunctionCallbackArguments,
@@ -2365,13 +2389,12 @@ fn append_children(
 ) {
     let node_data = node_data_from(args.data());
     let _reactions = CeReactionsGuard::new(scope, &node_data.registry);
-    for i in 0..args.length() {
-        let arg = args.get(i);
-        let child = if let Some(node) = node_from_js(scope, arg, &node_data.registry) {
-            node
-        } else {
-            Node::text(arg.to_rust_string_lossy(scope))
-        };
+    let children = nodes_or_text(scope, &args, node_data);
+    if reject_invalid_insertion(scope, &node_data.node, &children) {
+        return;
+    }
+    for (i, child) in children.into_iter().enumerate() {
+        let arg = args.get(i as i32);
         let fragment_children = if is_document_fragment(&child) {
             child_nodes_of(&child)
         } else {
@@ -2408,15 +2431,9 @@ fn replace_children(
     let node_data = node_data_from(args.data());
     let _reactions = CeReactionsGuard::new(scope, &node_data.registry);
 
-    let mut children = Vec::new();
-    for i in 0..args.length() {
-        let arg = args.get(i);
-        let child = if let Some(node) = node_from_js(scope, arg, &node_data.registry) {
-            node
-        } else {
-            Node::text(arg.to_rust_string_lossy(scope))
-        };
-        children.push(child);
+    let children = nodes_or_text(scope, &args, node_data);
+    if reject_invalid_insertion(scope, &node_data.node, &children) {
+        return;
     }
     let _mutation_result = mutation::apply_dom_mutation(
         &node_data.registry,
@@ -2435,13 +2452,11 @@ fn prepend_children(
 ) {
     let node_data = node_data_from(args.data());
     let _reactions = CeReactionsGuard::new(scope, &node_data.registry);
-    for i in (0..args.length()).rev() {
-        let arg = args.get(i);
-        let child = if let Some(node) = node_from_js(scope, arg, &node_data.registry) {
-            node
-        } else {
-            Node::text(arg.to_rust_string_lossy(scope))
-        };
+    let children = nodes_or_text(scope, &args, node_data);
+    if reject_invalid_insertion(scope, &node_data.node, &children) {
+        return;
+    }
+    for child in children.into_iter().rev() {
         let _mutation_result = mutation::apply_dom_mutation(
             &node_data.registry,
             mutation::DomMutation::PrependChild {
@@ -2461,7 +2476,9 @@ fn replace_with(
     let node_data = node_data_from(args.data());
     let _reactions = CeReactionsGuard::new(scope, &node_data.registry);
     let parent = find_parent_for_node(node_data);
-    insert_relative_to_self(scope, args, false);
+    if !insert_relative_to_self(scope, args, false) {
+        return;
+    }
     if let Some(parent) = parent {
         let _mutation_result = mutation::apply_dom_mutation(
             &node_data.registry,
@@ -2478,23 +2495,21 @@ fn insert_relative_to_self(
     scope: &mut v8::PinScope<'_, '_>,
     args: v8::FunctionCallbackArguments,
     after: bool,
-) {
+) -> bool {
     let node_data = node_data_from(args.data());
     let Some(parent) = find_parent_for_node(node_data) else {
-        return;
+        return true;
     };
     let reference = if after {
         sibling_for_node(node_data, 1, false)
     } else {
         Some(node_data.node.clone())
     };
-    for i in 0..args.length() {
-        let arg = args.get(i);
-        let child = if let Some(node) = node_from_js(scope, arg, &node_data.registry) {
-            node
-        } else {
-            Node::text(arg.to_rust_string_lossy(scope))
-        };
+    let children = nodes_or_text(scope, &args, node_data);
+    if reject_invalid_insertion(scope, &parent, &children) {
+        return false;
+    }
+    for child in children {
         let _mutation_result = mutation::apply_dom_mutation(
             &node_data.registry,
             mutation::DomMutation::InsertBefore {
@@ -2505,6 +2520,7 @@ fn insert_relative_to_self(
         );
     }
     node_data.registry.mark_layout_dirty(&parent);
+    true
 }
 
 fn insert_before_self(
@@ -2938,6 +2954,22 @@ fn get_internals_labels(
 }
 
 use super::dom_exception::throw_dom_exception as throw_named_error;
+
+/// Throw `HierarchyRequestError` and return true if any of `nodes` cannot be
+/// inserted into `parent` (see `mutation::hierarchy_error`).
+fn reject_invalid_insertion(
+    scope: &mut v8::PinScope<'_, '_>,
+    parent: &NodePtr,
+    nodes: &[NodePtr],
+) -> bool {
+    match nodes.iter().find_map(|node| mutation::hierarchy_error(parent, node)) {
+        Some(message) => {
+            throw_named_error(scope, "HierarchyRequestError", message);
+            true
+        }
+        None => false,
+    }
+}
 
 /// `internals.setFormValue(value)` — record the element's submission value.
 fn internals_set_form_value(
