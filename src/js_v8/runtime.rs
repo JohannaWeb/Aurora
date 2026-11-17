@@ -207,6 +207,7 @@ impl V8Runtime {
             global.set(scope, v8_str(scope, "window").into(), global.into());
             global.set(scope, v8_str(scope, "self").into(), global.into());
             super::bindings::install(scope, &registry);
+            super::dom_exception::install(scope);
 
             // Simple console.log implementation.
             let console_template = v8::ObjectTemplate::new(scope);
@@ -1719,22 +1720,7 @@ fn ce_define_native(
     }
 }
 
-/// Throw a `DOMException`-shaped error. Aurora has no native DOMException
-/// class, so this builds an Error carrying the spec's `name`, which is what
-/// callers test.
-fn throw_dom_exception(scope: &mut v8::PinScope<'_, '_>, name: &str, message: &str) {
-    let Some(message) = v8::String::new(scope, message) else {
-        return;
-    };
-    let error = v8::Exception::error(scope, message);
-    if let Some(obj) = error.to_object(scope)
-        && let Some(name_value) = v8::String::new(scope, name)
-    {
-        let key = v8_str(scope, "name");
-        obj.set(scope, key.into(), name_value.into());
-    }
-    scope.throw_exception(error);
-}
+use super::dom_exception::throw_dom_exception;
 
 /// `__aurora_ce_get_native(name)` — the registered constructor for a name, or
 /// `undefined`. Backs `customElements.get`.
@@ -1775,9 +1761,11 @@ fn ce_when_defined_native<'s>(
     retval.set(promise.into());
 
     if !super::custom_elements::is_valid_custom_element_name(&name) {
-        let message = v8_str(scope, "not a valid custom element name");
-        let error = v8::Exception::error(scope, message);
-        resolver.reject(scope, error);
+        if let Some(error) =
+            super::dom_exception::create(scope, "SyntaxError", "not a valid custom element name")
+        {
+            resolver.reject(scope, error);
+        }
         return;
     }
     match doc_data.registry.ce_registry.lookup(&name) {
