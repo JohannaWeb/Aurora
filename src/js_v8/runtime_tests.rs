@@ -3575,3 +3575,59 @@ fn replay_date_pinning_shifts_the_clock_and_keeps_native_dates() {
             .to_string())
     );
 }
+
+#[test]
+fn v8_insertions_that_would_corrupt_the_tree_throw() {
+    let mut runtime = V8Runtime::new(blank_dom());
+    assert_eq!(
+        runtime.eval_to_string(
+            r#"(() => {
+            const err = f => {
+                try { f(); return 'none'; }
+                catch (e) { return e instanceof DOMException ? e.name : 'other:' + e; }
+            };
+            const outer = document.createElement('div');
+            const inner = outer.appendChild(document.createElement('span'));
+            const leaf = inner.appendChild(document.createElement('b'));
+            const text = document.createTextNode('t');
+            const doc = document.documentElement.parentNode;
+            const extra = document.createElement('i');
+            return [
+                err(() => inner.appendChild(outer)),
+                err(() => leaf.insertBefore(inner, null)),
+                err(() => inner.replaceChild(outer, leaf)),
+                err(() => outer.appendChild(outer)),
+                err(() => text.appendChild(extra)),
+                err(() => outer.appendChild(doc)),
+                err(() => inner.append(extra, outer)),
+                err(() => leaf.replaceWith(outer)),
+                err(() => leaf.before(inner)),
+                // Nothing moved, and nothing was half-inserted.
+                outer.parentNode === null, inner.parentNode === outer, leaf.parentNode === inner,
+                extra.parentNode === null, inner.childNodes.length,
+                // Valid insertions still work.
+                err(() => outer.appendChild(leaf)), leaf.parentNode === outer,
+            ].join('|');
+            })()"#
+        ),
+        Ok(["HierarchyRequestError"; 9].join("|") + "|true|true|true|true|1|none|true")
+    );
+}
+
+/// Compatibility exemption in `mutation::hierarchy_error`: see the comment
+/// there. Remove this test together with the exemption.
+#[test]
+fn v8_fragment_self_append_is_tolerated_for_shadow_adoption() {
+    let mut runtime = V8Runtime::new(blank_dom());
+    assert_eq!(
+        runtime.eval_to_string(
+            r#"(() => {
+            const f = document.createDocumentFragment();
+            const child = f.appendChild(document.createElement('p'));
+            f.appendChild(f);
+            return [f.childNodes.length, child.parentNode === f].join('|');
+            })()"#
+        ),
+        Ok("1|true".into())
+    );
+}
