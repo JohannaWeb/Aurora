@@ -229,77 +229,19 @@ impl V8Runtime {
             })) as *mut _;
             let doc_external = v8::External::new(scope, doc_data);
 
-            let document_template = v8::ObjectTemplate::new(scope);
-
-            let get_element_by_id_fn = v8::FunctionTemplate::builder(get_element_by_id)
-                .data(doc_external.into())
-                .build(scope);
-            document_template.set(
-                v8_str(scope, "getElementById").into(),
-                get_element_by_id_fn.into(),
-            );
-
-            let get_elements_by_tag_name_fn =
-                v8::FunctionTemplate::builder(get_elements_by_tag_name)
-                    .data(doc_external.into())
-                    .build(scope);
-            document_template.set(
-                v8_str(scope, "getElementsByTagName").into(),
-                get_elements_by_tag_name_fn.into(),
-            );
-
-            let query_selector_fn = v8::FunctionTemplate::builder(query_selector)
-                .data(doc_external.into())
-                .build(scope);
-            document_template.set(
-                v8_str(scope, "querySelector").into(),
-                query_selector_fn.into(),
-            );
-
-            let query_selector_all_fn = v8::FunctionTemplate::builder(query_selector_all)
-                .data(doc_external.into())
-                .build(scope);
-            document_template.set(
-                v8_str(scope, "querySelectorAll").into(),
-                query_selector_all_fn.into(),
-            );
-
-            let create_element_fn = v8::FunctionTemplate::builder(create_element)
-                .data(doc_external.into())
-                .build(scope);
-            document_template.set(
-                v8_str(scope, "createElement").into(),
-                create_element_fn.into(),
-            );
-
-            let create_text_node_fn = v8::FunctionTemplate::builder(create_text_node)
-                .data(doc_external.into())
-                .build(scope);
-            document_template.set(
-                v8_str(scope, "createTextNode").into(),
-                create_text_node_fn.into(),
-            );
-
-            let create_comment_fn = v8::FunctionTemplate::builder(create_comment)
-                .data(doc_external.into())
-                .build(scope);
-            document_template.set(
-                v8_str(scope, "createComment").into(),
-                create_comment_fn.into(),
-            );
-
-            let element_from_point_fn = v8::FunctionTemplate::builder(element_from_point)
-                .data(doc_external.into())
-                .build(scope);
-            document_template.set(
-                v8_str(scope, "elementFromPoint").into(),
-                element_from_point_fn.into(),
-            );
-
-            let document_obj = document_template
-                .new_instance(scope)
-                .expect("object template instantiation failed");
-            super::bindings::set_prototype(scope, &registry, document_obj, "Document");
+            // The document node's one wrapper: the same object the registry
+            // hands out for it (e.g. as `documentElement.parentNode`), with
+            // the document-only entry points on top. Document members move to
+            // generated bindings in P2.5.
+            let document_obj = create_js_node(scope, document.clone(), &registry, &document);
+            document_method(scope, document_obj, "getElementById", get_element_by_id, doc_external);
+            document_method(scope, document_obj, "getElementsByTagName", get_elements_by_tag_name, doc_external);
+            document_method(scope, document_obj, "querySelector", query_selector, doc_external);
+            document_method(scope, document_obj, "querySelectorAll", query_selector_all, doc_external);
+            document_method(scope, document_obj, "createElement", create_element, doc_external);
+            document_method(scope, document_obj, "createTextNode", create_text_node, doc_external);
+            document_method(scope, document_obj, "createComment", create_comment, doc_external);
+            document_method(scope, document_obj, "elementFromPoint", element_from_point, doc_external);
             global.set(scope, v8_str(scope, "document").into(), document_obj.into());
 
             // Native custom-element registry bindings (Phase 1 of the native
@@ -383,16 +325,6 @@ impl V8Runtime {
                 scope,
                 v8_str(scope, "__aurora_native_ce_reactions__").into(),
                 v8::Boolean::new(scope, registry.native_ce_reactions.get()).into(),
-            );
-            document_obj.set(
-                scope,
-                v8_str(scope, "nodeType").into(),
-                v8::Integer::new(scope, 9).into(),
-            );
-            document_obj.set(
-                scope,
-                v8_str(scope, "nodeName").into(),
-                v8_str(scope, "#document").into(),
             );
 
             // Set document structure fields
@@ -1721,6 +1653,22 @@ fn ce_define_native(
 }
 
 use super::dom_exception::throw_dom_exception;
+
+/// Install a document-only method as an own property of the document wrapper.
+fn document_method<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    document: v8::Local<'s, v8::Object>,
+    name: &str,
+    callback: impl v8::MapFnTo<v8::FunctionCallback>,
+    data: v8::Local<'s, v8::External>,
+) {
+    let function = v8::FunctionTemplate::builder(callback)
+        .data(data.into())
+        .build(scope)
+        .get_function(scope)
+        .expect("function template yields a function outside of a pending exception");
+    document.set(scope, v8_str(scope, name).into(), function.into());
+}
 
 /// `__aurora_ce_get_native(name)` — the registered constructor for a name, or
 /// `undefined`. Backs `customElements.get`.
