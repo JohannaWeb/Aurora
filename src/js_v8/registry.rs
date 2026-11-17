@@ -12,6 +12,7 @@ pub(super) struct NodeRegistry {
     /// Reverse map: Rc pointer address → node ID.
     reverse_nodes: RefCell<BTreeMap<usize, u32>>,
     wrappers: RefCell<BTreeMap<u32, v8::Global<v8::Object>>>,
+    pub(super) interface_prototypes: RefCell<BTreeMap<&'static str, v8::Global<v8::Object>>>,
     pub(super) next_id: RefCell<u32>,
     dirty: RefCell<DirtyState>,
     // Outer `RefCell` (not `Rc<RefCell>`): the whole registry is already shared
@@ -50,6 +51,7 @@ impl NodeRegistry {
             nodes: RefCell::new(BTreeMap::new()),
             reverse_nodes: RefCell::new(BTreeMap::new()),
             wrappers: RefCell::new(BTreeMap::new()),
+            interface_prototypes: RefCell::new(BTreeMap::new()),
             next_id: RefCell::new(1),
             dirty: RefCell::new(DirtyState::default()),
             layout_tree: RefCell::new(None),

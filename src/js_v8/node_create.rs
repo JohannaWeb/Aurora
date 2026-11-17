@@ -532,13 +532,16 @@ pub(super) fn create_js_node<'s>(
             ) {
                 "SVGElement"
             } else {
-                "HTMLElement"
+                super::bindings::html_interface(&el.tag_name)
             }
         }
+        Node::Element(_) if crate::dom::SyntheticShadowTreeBackend.is_shadow_root(&node) => "ShadowRoot",
         Node::Element(_) => "DocumentFragment",
-        _ => "Node",
+        Node::Text(_) => "Text",
+        Node::Comment(_) => "Comment",
+        Node::Document { .. } => "Document",
     };
-    set_dom_prototype(scope, obj, proto_name);
+    super::bindings::set_prototype(scope, registry, obj, proto_name);
 
     let mut is_custom_element = false;
     let mut is_canvas = false;
@@ -838,26 +841,6 @@ pub(super) fn external_data<'a, T>(data: v8::Local<'a, v8::Value>) -> &'a T {
 /// Recover the `&NodeData` a per-node method callback was installed with.
 pub(super) fn node_data_from<'a>(data: v8::Local<'a, v8::Value>) -> &'a NodeData {
     external_data(data)
-}
-
-/// Set `obj`'s `[[Prototype]]` to `globalThis[<ctor>].prototype` if that DOM
-/// constructor exists yet. Early wrappers built during context setup (before the
-/// JS prototype skeletons are defined) simply keep `Object.prototype`; they're
-/// re-resolvable later and the common case (wrappers created during script
-/// execution) gets the chain.
-fn set_dom_prototype(scope: &mut v8::PinScope<'_, '_>, obj: v8::Local<v8::Object>, ctor: &str) {
-    let global = scope.get_current_context().global(scope);
-    let Some(ctor_val) = global.get(scope, v8_str(scope, ctor).into()) else {
-        return;
-    };
-    let Some(ctor_obj) = ctor_val.to_object(scope) else {
-        return;
-    };
-    if let Some(proto) = ctor_obj.get(scope, v8_str(scope, "prototype").into()) {
-        if proto.is_object() {
-            let _ = obj.set_prototype(scope, proto);
-        }
-    }
 }
 
 fn data_attr_to_dataset_key(name: &str) -> Option<String> {

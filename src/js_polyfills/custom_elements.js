@@ -62,10 +62,8 @@
             // the subclass prototype — not a plain object.
             var upgradeStack = [];
             (function patchHTMLElementForUpgrades() {
-                var Native = globalThis.HTMLElement;
-                if (typeof Native !== 'function') return;
-                function PatchedHTMLElement() {
-                    var ctor = (typeof new.target === 'function' ? new.target : null) ||
+                function constructHTMLElement(ctor, constructCall) {
+                    ctor = (typeof ctor === 'function' ? ctor : null) ||
                         (this && this.constructor);
                     // The element being upgraded comes from the native
                     // construction stack (js_v8/custom_elements.rs), so
@@ -100,26 +98,17 @@
                             return el;
                         }
                     }
-                    if (new.target) {
+                    if (constructCall) {
                         return this && typeof this === 'object'
                             ? this
-                            : Object.create((ctor && ctor.prototype) || PatchedHTMLElement.prototype);
+                            : Object.create((ctor && ctor.prototype) || HTMLElement.prototype);
                     }
                     // Plain `HTMLElement.call(this)` outside an upgrade:
                     // behave like the previous native (return undefined so
                     // `... || this` keeps the caller's element).
                     return undefined;
                 }
-                PatchedHTMLElement.prototype = Native.prototype;
-                try {
-                    Object.defineProperty(PatchedHTMLElement.prototype, 'constructor', {
-                        value: PatchedHTMLElement,
-                        configurable: true,
-                        writable: true
-                    });
-                } catch (e) {}
-                try { Object.setPrototypeOf(PatchedHTMLElement, Native); } catch (e) {}
-                globalThis.HTMLElement = PatchedHTMLElement;
+                globalThis.__aurora_construct_html_element__ = constructHTMLElement;
             })();
             function trace(msg) {
                 console.log('[yt-life] ' + msg);

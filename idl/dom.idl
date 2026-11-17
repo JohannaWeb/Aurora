@@ -1,0 +1,14 @@
+// Member-free DOM interface declarations for the P2.1 generator.
+interface EventTarget {};
+interface Node : EventTarget {};
+interface Document : Node {};
+interface DocumentType : Node {};
+interface DocumentFragment : Node {};
+interface ShadowRoot : DocumentFragment {};
+interface Element : Node {};
+interface Attr : Node {};
+interface CharacterData : Node {};
+interface Text : CharacterData {};
+interface Comment : CharacterData {};
+interface CDATASection : Text {};
+interface ProcessingInstruction : CharacterData {};

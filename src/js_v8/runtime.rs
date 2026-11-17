@@ -206,6 +206,7 @@ impl V8Runtime {
             // window, self, globalThis aliases.
             global.set(scope, v8_str(scope, "window").into(), global.into());
             global.set(scope, v8_str(scope, "self").into(), global.into());
+            super::bindings::install(scope, &registry);
 
             // Simple console.log implementation.
             let console_template = v8::ObjectTemplate::new(scope);
@@ -297,6 +298,7 @@ impl V8Runtime {
             let document_obj = document_template
                 .new_instance(scope)
                 .expect("object template instantiation failed");
+            super::bindings::set_prototype(scope, &registry, document_obj, "Document");
             global.set(scope, v8_str(scope, "document").into(), document_obj.into());
 
             // Native custom-element registry bindings (Phase 1 of the native
@@ -1041,8 +1043,8 @@ impl V8Runtime {
                     log::warn!(target: "aurora::js", "[JS] bootstrap networking failed: {e}");
                 }
 
-                // V8-specific base/post shims plus shared polyfills. Order matters: v8_base defines
-                // HTMLElement/queueMicrotask that event_constructors and
+                // V8-specific base/post shims plus shared polyfills. Order matters: v8_base adds
+                // EventTarget members/queueMicrotask that event_constructors and
                 // custom_elements build on; v8_post wires document-dependent
                 // pieces and primes the custom-element registry.
                 let bootstrap_blocks: [(&str, &str); 7] = [
@@ -1087,22 +1089,6 @@ impl V8Runtime {
                 {
                     log::warn!(target: "aurora::js", "[JS] pinning Date for replay failed: {e}");
                 }
-
-                // Wrappers built during context setup (document, body, head,
-                // documentElement) predate the JS DOM prototype skeletons, so
-                // re-link them to the EventTarget chain now that it exists.
-                let _ = compile_and_run(
-                    scope,
-                    r#"(function(){
-                        var nodes = [document, document.body, document.head, document.documentElement];
-                        for (var i = 0; i < nodes.length; i++) {
-                            var n = nodes[i];
-                            if (n && typeof n.addEventListener !== 'function' && typeof HTMLElement !== 'undefined') {
-                                try { Object.setPrototypeOf(n, HTMLElement.prototype); } catch (e) {}
-                            }
-                        }
-                    })();"#,
-                );
 
                 if matches!(
                     std::env::var("AURORA_DEBUG_YOUTUBE").as_deref(),
