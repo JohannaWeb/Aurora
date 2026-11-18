@@ -41,6 +41,7 @@ fn base_type(kind: &TypeKind) -> String {
         TypeKind::Float { double, .. } => if *double { "f64" } else { "f32" }.into(),
         TypeKind::Undefined => "()".into(),
         TypeKind::Interface(_) => "NodePtr".into(),
+        TypeKind::NodeArray => "Vec<NodePtr>".into(),
     }
 }
 
@@ -75,7 +76,7 @@ fn convert(kind: &TypeKind) -> String {
             format!("conv::float(scope, v, {double}, {unrestricted}).map(|x| x as {})", base_type(kind))
         }
         TypeKind::Interface(name) => format!("conv::interface(scope, registry, v, {name:?})"),
-        TypeKind::Undefined => unreachable!("rejected by the parser"),
+        TypeKind::Undefined | TypeKind::NodeArray => unreachable!("rejected by the parser"),
     }
 }
 
@@ -126,6 +127,7 @@ fn convert_arg(arg: &Argument, name: &str) -> String {
 fn callback(
     out: &mut String,
     interface: &str,
+    trait_name: &str,
     fn_name: &str,
     trait_call: &str,
     args: &[Argument],
@@ -150,7 +152,7 @@ fn callback(
     }
     write!(
         body,
-        "<Dom as {interface}Members>::{trait_call}(scope, registry, &this{})",
+        "<Dom as {trait_name}Members>::{trait_call}(scope, registry, &this{})",
         names.iter().map(|n| format!(", {n}")).collect::<String>()
     )
     .unwrap();
@@ -167,19 +169,48 @@ fn callback(
     .unwrap();
 }
 
-/// Trait, callbacks and the template installer for one interface.
+/// Trait, callbacks and the template installer for one interface. Members
+/// of included mixins get callbacks brand-checked against this interface
+/// that call the mixin's trait, which [`mixin_trait`] emits once.
 pub fn members(interface: &Interface) -> String {
     let name = &interface.name;
-    let prefix = snake_case(name);
     let mut out = String::new();
-    let mut trait_fns = String::new();
     let mut install = format!(
         "#[allow(non_snake_case)]\nfn install_members_{name}(scope: &mut v8::PinScope<'_, '_>, \
          template: v8::Local<v8::FunctionTemplate>) {{\n\
          let proto = template.prototype_template(scope);\n"
     );
+    let trait_fns = emit(&mut out, &mut install, name, name, &interface.members);
+    for mixin in &interface.includes {
+        emit(&mut out, &mut install, name, &mixin.name, &mixin.members);
+    }
+    install.push_str("let _ = (scope, proto);\n}\n");
+    if !trait_fns.is_empty() {
+        writeln!(out, "pub(super) trait {name}Members {{\n{trait_fns}}}").unwrap();
+    }
+    out.push_str(&install);
+    out
+}
+
+/// The `<Mixin>Members` trait that every including interface's callbacks call.
+pub fn mixin_trait(mixin: &Interface) -> String {
+    let trait_fns = emit(&mut String::new(), &mut String::new(), &mixin.name, &mixin.name, &mixin.members);
+    format!("pub(super) trait {}Members {{\n{trait_fns}}}\n", mixin.name)
+}
+
+/// Callbacks and install statements for `members`, declared by `owner` (the
+/// interface itself or a mixin) and installed on `interface`. Returns the
+/// owner's trait items.
+fn emit(out: &mut String, install: &mut String, interface: &str, owner: &str, members: &[Member]) -> String {
+    let name = interface;
+    let prefix = if owner == interface {
+        snake_case(interface)
+    } else {
+        format!("{}_{}", snake_case(interface), snake_case(owner))
+    };
+    let mut trait_fns = String::new();
     let receiver = "scope: &mut v8::PinScope<'_, '_>, registry: &Rc<NodeRegistry>, this: &NodePtr";
-    for member in &interface.members {
+    for member in members {
         match member {
             Member::Const { name: const_name, ty, value } => {
                 let value = match ty.kind {
@@ -205,7 +236,7 @@ pub fn members(interface: &Interface) -> String {
                 writeln!(trait_fns, "fn {rust_name}({receiver}) -> Fallible<{}>;", rust_type(ty))
                     .unwrap();
                 let context = format!("Failed to read the '{attr}' property from '{name}'");
-                callback(&mut out, name, &getter, &rust_name, &[], &rust_type(ty), false, &context);
+                callback(out, name, owner, &getter, &rust_name, &[], &rust_type(ty), false, &context);
                 let setter = if *readonly {
                     "None".to_string()
                 } else {
@@ -215,7 +246,7 @@ pub fn members(interface: &Interface) -> String {
                         .unwrap();
                     let value = Argument { name: "value".into(), ty: ty.clone(), optional: false, default: None };
                     let context = format!("Failed to set the '{attr}' property on '{name}'");
-                    callback(&mut out, name, &setter, &set_name, &[value], "()", *ce_reactions, &context);
+                    callback(out, name, owner, &setter, &set_name, &[value], "()", *ce_reactions, &context);
                     format!("Some(accessor(scope, {setter}, \"set {attr}\", 1))")
                 };
                 writeln!(
@@ -236,7 +267,7 @@ pub fn members(interface: &Interface) -> String {
                 writeln!(trait_fns, "fn {rust_name}({receiver}{params}) -> Fallible<{}>;", rust_type(ret))
                     .unwrap();
                 let context = format!("Failed to execute '{op}' on '{name}'");
-                callback(&mut out, name, &fn_name, &rust_name, args, &rust_type(ret), *ce_reactions, &context);
+                callback(out, name, owner, &fn_name, &rust_name, args, &rust_type(ret), *ce_reactions, &context);
                 let length = args.iter().filter(|a| !a.optional).count();
                 writeln!(
                     install,
@@ -248,10 +279,5 @@ pub fn members(interface: &Interface) -> String {
             }
         }
     }
-    install.push_str("let _ = (scope, proto);\n}\n");
-    if !trait_fns.is_empty() {
-        writeln!(out, "pub(super) trait {name}Members {{\n{trait_fns}}}").unwrap();
-    }
-    out.push_str(&install);
-    out
+    trait_fns
 }

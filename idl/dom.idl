@@ -22,13 +22,28 @@ interface Node : EventTarget {
   const unsigned short DOCUMENT_POSITION_CONTAINED_BY = 0x10;
   const unsigned short DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC = 0x20;
 
+  readonly attribute unsigned short nodeType;
+  readonly attribute DOMString nodeName;
+  readonly attribute boolean isConnected;
+  readonly attribute Document? ownerDocument;
+  readonly attribute Node? parentNode;
+  readonly attribute Element? parentElement;
+  readonly attribute NodeList childNodes;
+  readonly attribute Node? firstChild;
+  readonly attribute Node? lastChild;
+  readonly attribute Node? previousSibling;
+  readonly attribute Node? nextSibling;
+  [CEReactions] attribute DOMString? textContent;
+
   boolean contains(Node? other);
 };
 interface Document : Node {};
 interface DocumentType : Node {};
 interface DocumentFragment : Node {};
 interface ShadowRoot : DocumentFragment {};
-interface Element : Node {};
+interface Element : Node {
+  [CEReactions] attribute DOMString className;
+};
 interface Attr : Node {};
 interface CharacterData : Node {
   attribute [LegacyNullToEmptyString] DOMString data;
@@ -43,3 +58,30 @@ interface Text : CharacterData {};
 interface Comment : CharacterData {};
 interface CDATASection : Text {};
 interface ProcessingInstruction : CharacterData {};
+
+// ShadyDOM copies all of Node's and the mixins' navigation accessors from the
+// prototypes as soon as Node.prototype.firstChild is a getter, so these move
+// together (see idl/README.md).
+interface mixin ParentNode {
+  readonly attribute HTMLCollection children;
+  readonly attribute Element? firstElementChild;
+  readonly attribute Element? lastElementChild;
+  readonly attribute unsigned long childElementCount;
+};
+Document includes ParentNode;
+DocumentFragment includes ParentNode;
+Element includes ParentNode;
+
+interface mixin NonDocumentTypeChildNode {
+  readonly attribute Element? previousElementSibling;
+  readonly attribute Element? nextElementSibling;
+};
+Element includes NonDocumentTypeChildNode;
+CharacterData includes NonDocumentTypeChildNode;
+
+// https://html.spec.whatwg.org/multipage/dynamic-markup-insertion.html#innerhtml
+interface mixin InnerHTML {
+  [CEReactions] attribute [LegacyNullToEmptyString] DOMString innerHTML;
+};
+Element includes InnerHTML;
+ShadowRoot includes InnerHTML;

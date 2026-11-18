@@ -8,6 +8,17 @@ pub struct Interface {
     pub name: String,
     pub parent: Option<String>,
     pub members: Vec<Member>,
+    /// `interface mixin`: never installed itself, only through `includes`.
+    pub mixin: bool,
+    /// Mixins this interface includes, resolved by [`resolve_mixins`].
+    pub includes: Vec<Interface>,
+}
+
+/// `A includes B;`
+#[derive(Clone, Debug, PartialEq)]
+pub struct Includes {
+    pub interface: String,
+    pub mixin: String,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -43,6 +54,9 @@ pub enum TypeKind {
     Float { double: bool, unrestricted: bool },
     Undefined,
     Interface(String),
+    /// `NodeList`/`HTMLCollection`, returned as a JS array until those
+    /// interfaces exist. Only valid as a read-only attribute's type.
+    NodeArray,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -150,14 +164,34 @@ impl<'a> Tokens<'a> {
     }
 }
 
+/// Interfaces and mixins only; `includes` statements are an error here.
+#[allow(dead_code)] // build.rs reads includes through parse_definitions.
 pub fn parse(source: &str) -> Result<Vec<Interface>, String> {
+    let (interfaces, includes) = parse_definitions(source)?;
+    match includes.first() {
+        Some(i) => Err(format!("unexpected includes statement for {}", i.interface)),
+        None => Ok(interfaces),
+    }
+}
+
+pub fn parse_definitions(source: &str) -> Result<(Vec<Interface>, Vec<Includes>), String> {
     let tokens = tokenize(source)?;
     let mut tokens = Tokens { tokens: tokens.iter().peekable() };
     let mut interfaces = Vec::new();
+    let mut includes = Vec::new();
     while tokens.peek().is_some() {
+        if tokens.peek() != Some("interface") {
+            let interface = tokens.identifier()?;
+            tokens.expect("includes")?;
+            let mixin = tokens.identifier()?;
+            tokens.expect(";")?;
+            includes.push(Includes { interface, mixin });
+            continue;
+        }
         tokens.expect("interface")?;
+        let mixin = tokens.eat("mixin");
         let name = tokens.identifier()?;
-        let parent = if tokens.eat(":") { Some(tokens.identifier()?) } else { None };
+        let parent = if !mixin && tokens.eat(":") { Some(tokens.identifier()?) } else { None };
         tokens.expect("{")?;
         let mut members: Vec<Member> = Vec::new();
         while !tokens.eat("}") {
@@ -171,7 +205,37 @@ pub fn parse(source: &str) -> Result<Vec<Interface>, String> {
             members.push(member);
         }
         tokens.expect(";")?;
-        interfaces.push(Interface { name, parent, members });
+        interfaces.push(Interface { name, parent, members, mixin, includes: Vec::new() });
+    }
+    Ok((interfaces, includes))
+}
+
+/// Attaches each included mixin to its interface and drops the mixins from
+/// the list. Unknown names, double inclusion and member clashes are errors.
+pub fn resolve_mixins(
+    definitions: Vec<Interface>,
+    includes: &[Includes],
+) -> Result<Vec<Interface>, String> {
+    let (mixins, mut interfaces): (Vec<_>, Vec<_>) =
+        definitions.into_iter().partition(|i| i.mixin);
+    for include in includes {
+        let mixin = mixins
+            .iter()
+            .find(|m| m.name == include.mixin)
+            .ok_or_else(|| format!("unknown mixin: {}", include.mixin))?;
+        let interface = interfaces
+            .iter_mut()
+            .find(|i| i.name == include.interface)
+            .ok_or_else(|| format!("unknown interface: {}", include.interface))?;
+        if interface.includes.iter().any(|m| m.name == mixin.name) {
+            return Err(format!("{} includes {} twice", interface.name, mixin.name));
+        }
+        let names = interface.members.iter().chain(interface.includes.iter().flat_map(|m| &m.members));
+        let names: Vec<&str> = names.map(Member::name).collect();
+        if let Some(clash) = mixin.members.iter().find(|m| names.contains(&m.name())) {
+            return Err(format!("{}: {} from {} clashes", interface.name, clash.name(), mixin.name));
+        }
+        interface.includes.push(mixin.clone());
     }
     Ok(interfaces)
 }
@@ -211,11 +275,17 @@ fn member(tokens: &mut Tokens) -> Result<Member, String> {
         if ty.kind == TypeKind::Undefined {
             return Err("attribute of type undefined".into());
         }
+        if ty.kind == TypeKind::NodeArray && (!readonly || ty.nullable) {
+            return Err("NodeList/HTMLCollection only as a non-null readonly attribute".into());
+        }
         let name = tokens.identifier()?;
         tokens.expect(";")?;
         return Ok(Member::Attribute { name, ty, readonly, ce_reactions });
     }
     let ret = parse_type(tokens)?;
+    if ret.kind == TypeKind::NodeArray {
+        return Err("NodeList/HTMLCollection only as a non-null readonly attribute".into());
+    }
     let name = tokens.identifier()?;
     tokens.expect("(")?;
     let mut args: Vec<Argument> = Vec::new();
@@ -225,8 +295,8 @@ fn member(tokens: &mut Tokens) -> Result<Member, String> {
         }
         let optional = tokens.eat("optional");
         let ty = parse_type(tokens)?;
-        if ty.kind == TypeKind::Undefined {
-            return Err("argument of type undefined".into());
+        if matches!(ty.kind, TypeKind::Undefined | TypeKind::NodeArray) {
+            return Err(format!("argument of type {:?}", ty.kind));
         }
         let arg_name = tokens.identifier()?;
         let default = if optional && tokens.eat("=") {
@@ -278,6 +348,7 @@ fn parse_type(tokens: &mut Tokens) -> Result<Type, String> {
                 return Err(format!("expected float or double after unrestricted, got {token:?}"));
             }
         },
+        Some("NodeList" | "HTMLCollection") => TypeKind::NodeArray,
         Some(name) if name.starts_with(|c: char| c.is_ascii_uppercase()) => {
             TypeKind::Interface(name.to_string())
         }
@@ -306,7 +377,7 @@ pub fn inheritance_order(mut pending: Vec<Interface>) -> Result<Vec<Interface>, 
         {
             return Err(format!("unknown parent: {parent}"));
         }
-        for member in &interface.members {
+        for member in interface.members.iter().chain(interface.includes.iter().flat_map(|m| &m.members)) {
             let types: Vec<&Type> = match member {
                 Member::Const { .. } => Vec::new(),
                 Member::Attribute { ty, .. } => vec![ty],
@@ -404,6 +475,34 @@ mod tests {
         assert_eq!(args[0].name, "default");
         assert_eq!(args[1].default.as_deref(), Some("1.5"));
         assert!(args[2].optional && args[2].default.is_none());
+    }
+
+    #[test]
+    fn resolves_mixins_into_including_interfaces() {
+        let (definitions, includes) = parse_definitions(
+            "interface mixin M { readonly attribute HTMLCollection children; };
+             interface A { readonly attribute long x; }; A includes M;",
+        )
+        .unwrap();
+        let interfaces = resolve_mixins(definitions, &includes).unwrap();
+        assert_eq!(interfaces.len(), 1);
+        assert_eq!(interfaces[0].includes[0].name, "M");
+        for (source, error) in [
+            ("interface A {}; A includes Missing;", "unknown mixin"),
+            ("interface mixin M {}; B includes M;", "unknown interface"),
+            ("interface mixin M { attribute long x; }; interface A { attribute long x; }; A includes M;", "clashes"),
+        ] {
+            let (definitions, includes) = parse_definitions(source).unwrap();
+            assert!(resolve_mixins(definitions, &includes).unwrap_err().contains(error), "{source}");
+        }
+        for source in [
+            "interface A { attribute NodeList x; };",
+            "interface A { NodeList f(); };",
+            "interface A { undefined f(NodeList x); };",
+            "interface A {}; A includes M;",
+        ] {
+            assert!(parse(source).is_err(), "{source}");
+        }
     }
 
     #[test]

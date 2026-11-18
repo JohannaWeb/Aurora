@@ -184,6 +184,36 @@ fn character_data_members_count_utf16_units_and_render_text() {
 }
 
 #[test]
+fn shadydom_descriptor_accessors_live_on_prototypes() {
+    // ShadyDOM switches to copying these from the prototypes once
+    // Node.prototype.firstChild is a configurable getter; a missing one
+    // leaves its __shady_native_ copy undefined.
+    let mut runtime = runtime();
+    assert_eq!(
+        runtime.eval_to_string(
+            r#"(() => {
+        const node = ['parentNode', 'firstChild', 'lastChild', 'previousSibling', 'nextSibling',
+            'childNodes', 'parentElement', 'textContent'];
+        const element = ['firstElementChild', 'lastElementChild', 'children', 'childElementCount',
+            'previousElementSibling', 'nextElementSibling', 'innerHTML', 'className'];
+        const div = document.getElementById('parsed');
+        const bad = [...node.map(n => [Node.prototype, n]), ...element.map(n => [Element.prototype, n])]
+            .filter(([proto, name]) => {
+                const d = Object.getOwnPropertyDescriptor(proto, name);
+                return !d || !d.configurable || typeof d.get !== 'function' || Object.hasOwn(div, name);
+            }).map(([, name]) => name);
+        div.innerHTML = '<b>x</b>text<i></i>';
+        bad.push(div.childNodes.length, div.children.length, div.firstElementChild.localName,
+            div.firstChild.nextSibling.textContent, div.lastElementChild.previousElementSibling.localName,
+            document.ownerDocument, div.ownerDocument === document, document.body.firstChild.parentNode === document.body);
+        return bad.join();
+    })()"#
+        ),
+        Ok("3,2,b,text,b,,true,true".into())
+    );
+}
+
+#[test]
 fn generated_constants_are_on_interface_and_prototype() {
     let mut runtime = runtime();
     assert_eq!(

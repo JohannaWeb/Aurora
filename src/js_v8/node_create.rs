@@ -3,7 +3,7 @@ use super::form_associated;
 use super::registry::NodeRegistry;
 use super::selectors::query;
 use super::style_class::{classlist, style};
-use super::tree::{mutation, navigation};
+use super::tree::mutation;
 use crate::dom::{Node, NodePtr, ShadowTreeBackend};
 use std::rc::Rc;
 
@@ -28,15 +28,6 @@ pub(super) fn create_js_node<'s>(
 
     let template = v8::ObjectTemplate::new(scope);
 
-    // Node properties
-    template.set(
-        v8_str(scope, "nodeType").into(),
-        v8::Integer::new(scope, node_type(&node)).into(),
-    );
-    template.set(
-        v8_str(scope, "nodeName").into(),
-        v8_str(scope, &node_name(&node)).into(),
-    );
     let blitz_node_id = registry.blitz_node_id(&node);
     if let Some(blitz_id) = blitz_node_id {
         template.set(
@@ -177,20 +168,6 @@ pub(super) fn create_js_node<'s>(
 
     // --- Accessors ---
 
-    install_readonly_accessor(
-        scope,
-        template,
-        "parentNode",
-        get_parent_node,
-        node_external,
-    );
-    install_readonly_accessor(
-        scope,
-        template,
-        "parentElement",
-        get_parent_element,
-        node_external,
-    );
     // Only registered engine shadow roots get the native own `host` accessor.
     // Installing it on every DocumentFragment shadows ShadyDOM's prototype
     // getter/constructor assignment and erases the logical host relationship it
@@ -198,51 +175,7 @@ pub(super) fn create_js_node<'s>(
     if crate::dom::SyntheticShadowTreeBackend.is_shadow_root(&node) {
         install_readonly_accessor(scope, template, "host", get_shadow_host, node_external);
     }
-    install_readonly_accessor(
-        scope,
-        template,
-        "firstChild",
-        get_first_child,
-        node_external,
-    );
-    install_readonly_accessor(scope, template, "lastChild", get_last_child, node_external);
-    install_readonly_accessor(
-        scope,
-        template,
-        "nextSibling",
-        get_next_sibling,
-        node_external,
-    );
-    install_readonly_accessor(
-        scope,
-        template,
-        "nextElementSibling",
-        get_next_element_sibling,
-        node_external,
-    );
-    install_readonly_accessor(
-        scope,
-        template,
-        "previousElementSibling",
-        get_previous_element_sibling,
-        node_external,
-    );
-    install_readonly_accessor(
-        scope,
-        template,
-        "previousSibling",
-        get_previous_sibling,
-        node_external,
-    );
 
-    install_accessor(
-        scope,
-        template,
-        "textContent",
-        get_text_content,
-        set_text_content,
-        node_external,
-    );
     install_accessor(
         scope,
         template,
@@ -264,24 +197,8 @@ pub(super) fn create_js_node<'s>(
             node_external,
         );
     }
-    install_accessor(
-        scope,
-        template,
-        "innerHTML",
-        get_inner_html,
-        set_inner_html,
-        node_external,
-    );
     install_readonly_accessor(scope, template, "outerHTML", get_outer_html, node_external);
     install_accessor(scope, template, "id", get_id, set_id, node_external);
-    install_accessor(
-        scope,
-        template,
-        "className",
-        get_class_name,
-        set_class_name,
-        node_external,
-    );
     install_accessor(
         scope,
         template,
@@ -295,50 +212,6 @@ pub(super) fn create_js_node<'s>(
     install_readonly_accessor(scope, template, "classList", get_classlist, node_external);
     install_readonly_accessor(scope, template, "attributes", get_attributes, node_external);
 
-    // Tree collections
-    install_readonly_accessor(
-        scope,
-        template,
-        "childNodes",
-        get_child_nodes,
-        node_external,
-    );
-    install_readonly_accessor(scope, template, "children", get_children, node_external);
-    install_readonly_accessor(
-        scope,
-        template,
-        "firstElementChild",
-        get_first_element_child,
-        node_external,
-    );
-    install_readonly_accessor(
-        scope,
-        template,
-        "lastElementChild",
-        get_last_element_child,
-        node_external,
-    );
-    install_readonly_accessor(
-        scope,
-        template,
-        "childElementCount",
-        get_child_element_count,
-        node_external,
-    );
-    install_readonly_accessor(
-        scope,
-        template,
-        "isConnected",
-        get_is_connected,
-        node_external,
-    );
-    install_readonly_accessor(
-        scope,
-        template,
-        "ownerDocument",
-        get_owner_document,
-        node_external,
-    );
 
     // Events: addEventListener/removeEventListener/dispatchEvent come from the
     // JS `EventTarget` prototype (installed below via the prototype chain), so
@@ -901,7 +774,7 @@ pub(super) fn interface_for(node: &NodePtr) -> &'static str {
     }
 }
 
-fn node_type(node: &NodePtr) -> i32 {
+pub(super) fn node_type(node: &NodePtr) -> i32 {
     match &*node.borrow() {
         Node::Element(el) if el.tag_name == "#document-fragment" => 11,
         Node::Element(_) => 1,
@@ -911,7 +784,7 @@ fn node_type(node: &NodePtr) -> i32 {
     }
 }
 
-fn node_name(node: &NodePtr) -> String {
+pub(super) fn node_name(node: &NodePtr) -> String {
     match &*node.borrow() {
         Node::Element(el) if el.tag_name == "#document-fragment" => {
             "#document-fragment".to_string()
@@ -1256,6 +1129,11 @@ fn remove_node(
 }
 
 fn find_parent_for(node_data: &NodeData, node: &NodePtr) -> Option<NodePtr> {
+    parent_of(&node_data.registry, &node_data.document, node)
+}
+
+/// The node's parent, or `None` for roots and shadow roots.
+pub(super) fn parent_of(registry: &NodeRegistry, document: &NodePtr, node: &NodePtr) -> Option<NodePtr> {
     // Per DOM semantics ShadowRoot.parentNode is null. More importantly, do not
     // feed the host back-pointer through `query::find_parent`: a shadow root is
     // intentionally absent from the host's light child list, so that helper
@@ -1269,12 +1147,12 @@ fn find_parent_for(node_data: &NodeData, node: &NodePtr) -> Option<NodePtr> {
             return Some(parent);
         }
     }
-    if let Some(parent) = query::find_parent(&node_data.document, node) {
+    if let Some(parent) = query::find_parent(document, node) {
         return Some(parent);
     }
 
-    for root in node_data.registry.registered_nodes() {
-        if Rc::ptr_eq(&root, &node_data.document) || Rc::ptr_eq(&root, node) {
+    for root in registry.registered_nodes() {
+        if Rc::ptr_eq(&root, document) || Rc::ptr_eq(&root, node) {
             continue;
         }
         if let Some(parent) = query::find_parent(&root, node) {
@@ -1289,12 +1167,21 @@ fn find_parent_for_node(node_data: &NodeData) -> Option<NodePtr> {
 }
 
 fn sibling_for_node(node_data: &NodeData, delta: i32, elements_only: bool) -> Option<NodePtr> {
-    let parent =
-        crate::dom::parent_ptr(&node_data.node).or_else(|| find_parent_for_node(node_data))?;
+    sibling_of(&node_data.registry, &node_data.document, &node_data.node, delta, elements_only)
+}
+
+/// The sibling `delta` positions away (negative: before), optionally
+/// counting only elements.
+pub(super) fn sibling_of(
+    registry: &NodeRegistry,
+    document: &NodePtr,
+    node: &NodePtr,
+    delta: i32,
+    elements_only: bool,
+) -> Option<NodePtr> {
+    let parent = crate::dom::parent_ptr(node).or_else(|| parent_of(registry, document, node))?;
     let kids = child_nodes_of(&parent);
-    let pos = kids
-        .iter()
-        .position(|candidate| Rc::ptr_eq(candidate, &node_data.node))?;
+    let pos = kids.iter().position(|candidate| Rc::ptr_eq(candidate, node))?;
     let step = if delta > 0 { 1 } else { -1 };
     let mut remaining = delta.abs();
     let mut current = pos as i32;
@@ -1818,24 +1705,7 @@ fn set_id(
     set_attr_value(scope, value, args, "id");
 }
 
-fn get_class_name(
-    scope: &mut v8::PinScope<'_, '_>,
-    _name: v8::Local<v8::Name>,
-    args: v8::PropertyCallbackArguments,
-    retval: v8::ReturnValue,
-) {
-    get_attr_value(scope, args, "class", retval);
-}
 
-fn set_class_name(
-    scope: &mut v8::PinScope<'_, '_>,
-    _name: v8::Local<v8::Name>,
-    value: v8::Local<v8::Value>,
-    args: v8::PropertyCallbackArguments,
-    _retval: v8::ReturnValue<()>,
-) {
-    set_attr_value(scope, value, args, "class");
-}
 
 fn get_hidden(
     scope: &mut v8::PinScope<'_, '_>,
@@ -1872,21 +1742,6 @@ fn set_hidden(
     let _mutation_result = mutation::apply_dom_mutation(&node_data.registry, mutation);
 }
 
-fn get_parent_node(
-    scope: &mut v8::PinScope<'_, '_>,
-    _name: v8::Local<v8::Name>,
-    args: v8::PropertyCallbackArguments,
-    mut retval: v8::ReturnValue,
-) {
-    let node_data = node_data_from(args.data());
-
-    if let Some(parent) = find_parent_for_node(node_data) {
-        let js_node = create_js_node(scope, parent, &node_data.registry, &node_data.document);
-        retval.set(js_node.into());
-    } else {
-        retval.set(v8::null(scope).into());
-    }
-}
 
 /// `ShadowRoot.host` — for a synthetic shadow-root fragment, the host element it is
 /// attached to. Returns `undefined` for any node that is not a shadow root, so it is a
@@ -1909,119 +1764,12 @@ fn get_shadow_host(
     }
 }
 
-fn get_parent_element(
-    scope: &mut v8::PinScope<'_, '_>,
-    _name: v8::Local<v8::Name>,
-    args: v8::PropertyCallbackArguments,
-    mut retval: v8::ReturnValue,
-) {
-    let node_data = node_data_from(args.data());
 
-    if let Some(parent) = find_parent_for_node(node_data) {
-        if node_type(&parent) == 1 {
-            let js_node = create_js_node(scope, parent, &node_data.registry, &node_data.document);
-            retval.set(js_node.into());
-            return;
-        }
-    }
-    retval.set(v8::null(scope).into());
-}
 
-fn get_first_child(
-    scope: &mut v8::PinScope<'_, '_>,
-    _name: v8::Local<v8::Name>,
-    args: v8::PropertyCallbackArguments,
-    mut retval: v8::ReturnValue,
-) {
-    let node_data = node_data_from(args.data());
 
-    if let Some(child) = navigation::first_child(&node_data.node, false) {
-        let js_node = create_js_node(scope, child, &node_data.registry, &node_data.document);
-        retval.set(js_node.into());
-    } else {
-        retval.set(v8::null(scope).into());
-    }
-}
 
-fn get_last_child(
-    scope: &mut v8::PinScope<'_, '_>,
-    _name: v8::Local<v8::Name>,
-    args: v8::PropertyCallbackArguments,
-    mut retval: v8::ReturnValue,
-) {
-    let node_data = node_data_from(args.data());
 
-    if let Some(child) = navigation::last_child(&node_data.node, false) {
-        let js_node = create_js_node(scope, child, &node_data.registry, &node_data.document);
-        retval.set(js_node.into());
-    } else {
-        retval.set(v8::null(scope).into());
-    }
-}
 
-fn get_next_sibling(
-    scope: &mut v8::PinScope<'_, '_>,
-    _name: v8::Local<v8::Name>,
-    args: v8::PropertyCallbackArguments,
-    mut retval: v8::ReturnValue,
-) {
-    let node_data = node_data_from(args.data());
-
-    if let Some(sibling) = sibling_for_node(node_data, 1, false) {
-        let js_node = create_js_node(scope, sibling, &node_data.registry, &node_data.document);
-        retval.set(js_node.into());
-    } else {
-        retval.set(v8::null(scope).into());
-    }
-}
-
-fn get_next_element_sibling(
-    scope: &mut v8::PinScope<'_, '_>,
-    _name: v8::Local<v8::Name>,
-    args: v8::PropertyCallbackArguments,
-    mut retval: v8::ReturnValue,
-) {
-    let node_data = node_data_from(args.data());
-
-    if let Some(sibling) = sibling_for_node(node_data, 1, true) {
-        let js_node = create_js_node(scope, sibling, &node_data.registry, &node_data.document);
-        retval.set(js_node.into());
-    } else {
-        retval.set(v8::null(scope).into());
-    }
-}
-
-fn get_previous_sibling(
-    scope: &mut v8::PinScope<'_, '_>,
-    _name: v8::Local<v8::Name>,
-    args: v8::PropertyCallbackArguments,
-    mut retval: v8::ReturnValue,
-) {
-    let node_data = node_data_from(args.data());
-
-    if let Some(sibling) = sibling_for_node(node_data, -1, false) {
-        let js_node = create_js_node(scope, sibling, &node_data.registry, &node_data.document);
-        retval.set(js_node.into());
-    } else {
-        retval.set(v8::null(scope).into());
-    }
-}
-
-fn get_previous_element_sibling(
-    scope: &mut v8::PinScope<'_, '_>,
-    _name: v8::Local<v8::Name>,
-    args: v8::PropertyCallbackArguments,
-    mut retval: v8::ReturnValue,
-) {
-    let node_data = node_data_from(args.data());
-
-    if let Some(sibling) = sibling_for_node(node_data, -1, true) {
-        let js_node = create_js_node(scope, sibling, &node_data.registry, &node_data.document);
-        retval.set(js_node.into());
-    } else {
-        retval.set(v8::null(scope).into());
-    }
-}
 
 fn get_text_content(
     scope: &mut v8::PinScope<'_, '_>,
@@ -2058,7 +1806,7 @@ fn set_text_content(
 
 /// Per spec, `template.innerHTML` reads and writes the template's content
 /// fragment, not its light children. Everything else targets the node itself.
-fn inner_html_target(node: &NodePtr) -> NodePtr {
+pub(super) fn inner_html_target(node: &NodePtr) -> NodePtr {
     let template_content = match &mut *node.borrow_mut() {
         Node::Element(el) if el.tag_name.eq_ignore_ascii_case("template") => Some(
             el.template_contents
@@ -2070,44 +1818,7 @@ fn inner_html_target(node: &NodePtr) -> NodePtr {
     template_content.unwrap_or_else(|| node.clone())
 }
 
-fn get_inner_html(
-    scope: &mut v8::PinScope<'_, '_>,
-    _name: v8::Local<v8::Name>,
-    args: v8::PropertyCallbackArguments,
-    mut retval: v8::ReturnValue,
-) {
-    let node_data = node_data_from(args.data());
 
-    let target = inner_html_target(&node_data.node);
-    let html: String = child_nodes_of(&target)
-        .iter()
-        .map(crate::dom::serialize_outer_html)
-        .collect();
-    retval.set(v8_str(scope, &html).into());
-}
-
-fn set_inner_html(
-    scope: &mut v8::PinScope<'_, '_>,
-    _name: v8::Local<v8::Name>,
-    value: v8::Local<v8::Value>,
-    args: v8::PropertyCallbackArguments,
-    _retval: v8::ReturnValue<()>,
-) {
-    let node_data = node_data_from(args.data());
-    let _reactions = CeReactionsGuard::new(scope, &node_data.registry);
-
-    let html = value.to_rust_string_lossy(scope);
-    let new_children = parsed_html_nodes(&html);
-    let target = inner_html_target(&node_data.node);
-    let _mutation_result = mutation::apply_dom_mutation(
-        &node_data.registry,
-        mutation::DomMutation::ReplaceChildren {
-            node: &target,
-            children: new_children,
-        },
-    );
-    node_data.registry.mark_layout_dirty(&node_data.node);
-}
 
 fn get_outer_html(
     scope: &mut v8::PinScope<'_, '_>,
@@ -2137,7 +1848,7 @@ fn get_classlist(
 
 // ─── Tree collections / events / shadow DOM ─────────────────────────────────
 
-fn child_nodes_of(node: &NodePtr) -> Vec<NodePtr> {
+pub(super) fn child_nodes_of(node: &NodePtr) -> Vec<NodePtr> {
     match &*node.borrow() {
         Node::Element(el) => el.children.clone(),
         Node::Document { children, .. } => children.clone(),
@@ -2158,68 +1869,9 @@ fn nodes_to_array<'s>(
     array
 }
 
-fn get_child_nodes(
-    scope: &mut v8::PinScope<'_, '_>,
-    _name: v8::Local<v8::Name>,
-    args: v8::PropertyCallbackArguments,
-    mut retval: v8::ReturnValue,
-) {
-    let node_data = node_data_from(args.data());
-    let nodes = child_nodes_of(&node_data.node);
-    let array = nodes_to_array(scope, nodes, node_data);
-    retval.set(array.into());
-}
 
-fn get_children(
-    scope: &mut v8::PinScope<'_, '_>,
-    _name: v8::Local<v8::Name>,
-    args: v8::PropertyCallbackArguments,
-    mut retval: v8::ReturnValue,
-) {
-    let node_data = node_data_from(args.data());
-    let nodes: Vec<NodePtr> = child_nodes_of(&node_data.node)
-        .into_iter()
-        .filter(|c| node_type(c) == 1)
-        .collect();
-    let array = nodes_to_array(scope, nodes, node_data);
-    retval.set(array.into());
-}
 
-fn get_first_element_child(
-    scope: &mut v8::PinScope<'_, '_>,
-    _name: v8::Local<v8::Name>,
-    args: v8::PropertyCallbackArguments,
-    mut retval: v8::ReturnValue,
-) {
-    let node_data = node_data_from(args.data());
-    let first = child_nodes_of(&node_data.node)
-        .into_iter()
-        .find(|c| node_type(c) == 1);
-    match first {
-        Some(node) => {
-            let js_node = create_js_node(scope, node, &node_data.registry, &node_data.document);
-            retval.set(js_node.into());
-        }
-        None => retval.set(v8::null(scope).into()),
-    }
-}
 
-fn get_owner_document(
-    scope: &mut v8::PinScope<'_, '_>,
-    _name: v8::Local<v8::Name>,
-    _args: v8::PropertyCallbackArguments,
-    mut retval: v8::ReturnValue,
-) {
-    // The document wrapper with factory methods lives on the global; the raw
-    // document NodePtr wrapper wouldn't have createElement and friends.
-    let context = scope.get_current_context();
-    let global = context.global(scope);
-    let key = v8_str(scope, "document");
-    match global.get(scope, key.into()) {
-        Some(doc) => retval.set(doc),
-        None => retval.set(v8::null(scope).into()),
-    }
-}
 
 #[allow(dead_code)]
 fn node_add_event_listener(
@@ -2524,7 +2176,7 @@ fn insert_after_self(
     insert_relative_to_self(scope, args, true);
 }
 
-fn parsed_html_nodes(html: &str) -> Vec<NodePtr> {
+pub(super) fn parsed_html_nodes(html: &str) -> Vec<NodePtr> {
     let parsed = crate::html::Parser::new(html).parse_document();
     let mut bodies = Vec::new();
     query::collect_by_tag(&parsed, "body", &mut bodies);
@@ -2682,50 +2334,8 @@ fn get_elements_by_class_name(
     retval.set(array.into());
 }
 
-fn get_last_element_child(
-    scope: &mut v8::PinScope<'_, '_>,
-    _name: v8::Local<v8::Name>,
-    args: v8::PropertyCallbackArguments,
-    mut retval: v8::ReturnValue,
-) {
-    let node_data = node_data_from(args.data());
-    let last = child_nodes_of(&node_data.node)
-        .into_iter()
-        .rev()
-        .find(|c| node_type(c) == 1);
-    match last {
-        Some(node) => {
-            let js_node = create_js_node(scope, node, &node_data.registry, &node_data.document);
-            retval.set(js_node.into());
-        }
-        None => retval.set(v8::null(scope).into()),
-    }
-}
 
-fn get_child_element_count(
-    scope: &mut v8::PinScope<'_, '_>,
-    _name: v8::Local<v8::Name>,
-    args: v8::PropertyCallbackArguments,
-    mut retval: v8::ReturnValue,
-) {
-    let node_data = node_data_from(args.data());
-    let count = child_nodes_of(&node_data.node)
-        .into_iter()
-        .filter(|c| node_type(c) == 1)
-        .count();
-    retval.set(v8::Integer::new(scope, count as i32).into());
-}
 
-fn get_is_connected(
-    scope: &mut v8::PinScope<'_, '_>,
-    _name: v8::Local<v8::Name>,
-    args: v8::PropertyCallbackArguments,
-    mut retval: v8::ReturnValue,
-) {
-    let node_data = node_data_from(args.data());
-    let connected = mutation::is_connected_to(&node_data.document, &node_data.node);
-    retval.set(v8::Boolean::new(scope, connected).into());
-}
 
 /// `element.attachInternals()` — the `ElementInternals` handle a
 /// form-associated custom element uses to publish its submission value and
@@ -3058,16 +2668,6 @@ fn attach_shadow(
         scope,
         v8_str(scope, "__aurora_node_id").into(),
         v8::Integer::new(scope, shadow_id as i32).into(),
-    );
-    sr.set(
-        scope,
-        v8_str(scope, "nodeType").into(),
-        v8::Integer::new(scope, 11).into(),
-    );
-    sr.set(
-        scope,
-        v8_str(scope, "nodeName").into(),
-        v8_str(scope, "#document-fragment").into(),
     );
     sr.set(
         scope,

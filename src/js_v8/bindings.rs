@@ -316,6 +316,22 @@ impl ToJs for NodePtr {
     }
 }
 
+/// Interim `NodeList`/`HTMLCollection`: a fresh array, as before P2.3.
+impl ToJs for Vec<NodePtr> {
+    fn to_js<'s>(
+        self,
+        scope: &mut v8::PinScope<'s, '_>,
+        registry: &Rc<NodeRegistry>,
+    ) -> v8::Local<'s, v8::Value> {
+        let array = v8::Array::new(scope, self.len() as i32);
+        for (index, node) in self.into_iter().enumerate() {
+            let wrapper = node.to_js(scope, registry);
+            array.set_index(scope, index as u32, wrapper);
+        }
+        array.into()
+    }
+}
+
 impl<T: ToJs> ToJs for Option<T> {
     fn to_js<'s>(
         self,

@@ -21,7 +21,10 @@ alias of `Document`.
 The parser accepts a deliberate subset and rejects everything else, so
 unsupported IDL fails the build instead of producing wrong bindings:
 
-- `interface Name [: Parent] { ... };`, no partials, mixins or namespaces.
+- `interface Name [: Parent] { ... };`, `interface mixin Name { ... };` and
+  `Name includes Mixin;`. No partials or namespaces. A mixin gets one
+  `<Mixin>Members` trait; each including interface gets its own callbacks,
+  brand-checked against that interface.
 - `const` integer or boolean members, installed on the interface object and
   its prototype (read-only, enumerable, non-configurable).
 - `[readonly] attribute T name;` as accessor properties on the prototype.
@@ -29,7 +32,9 @@ unsupported IDL fails the build instead of producing wrong bindings:
   rejected; `optional` arguments may have literal defaults.
 - Types: `DOMString`/`USVString`, `boolean`, all integer types, `float`,
   `double` and their `unrestricted` forms, interface types, `undefined` as
-  a return type, and `T?`.
+  a return type, and `T?`. `NodeList` and `HTMLCollection` are allowed only
+  as non-null read-only attribute types and return a fresh array, as the
+  hand-written accessors did, until those interfaces exist.
 - Extended attributes: `[CEReactions]` on members, and
   `[LegacyNullToEmptyString]` on non-nullable string types.
 
@@ -42,8 +47,12 @@ rejection for restricted floats, interface brand checks), wrap
 `[CEReactions]` members in a reactions scope, and map errors to `TypeError`
 or a native `DOMException`.
 
-Members currently on generated bindings: `Node`'s constants,
-`Node.contains()`, and all of `CharacterData` (`data`, `length`,
+Members currently on generated bindings: `Node`'s constants, `contains()`
+and its navigation attributes (`nodeType`, `nodeName`, `isConnected`,
+`ownerDocument`, `parentNode`, `parentElement`, `childNodes`, `firstChild`,
+`lastChild`, `previousSibling`, `nextSibling`, `textContent`); `Element.className`;
+the `ParentNode`, `NonDocumentTypeChildNode` and `InnerHTML` mixins; and all
+of `CharacterData` (`data`, `length`,
 `substringData`, `appendData`, `insertData`, `deleteData`, `replaceData`).
 CharacterData offsets count UTF-16 code units; strings cross into Rust as
 UTF-8, so lone surrogates are stored as U+FFFD. Everything else is still on the hand-written wrapper
@@ -81,3 +90,15 @@ is identical; existing JS errors and replay misses remain:
 | Home | 1291 | 0 | 0 | 0 | 0 | 2 | 0 |
 | Search | 2125 | 13 | 8 | 0 | 0 | 2 | 11 |
 | Watch | 1538 | 0 | 0 | 0 | 0 | 0 | 1 |
+
+## ShadyDOM descriptor mode
+
+YouTube's ShadyDOM checks whether `Node.prototype.firstChild` is a
+configurable getter. If it is, ShadyDOM copies native accessors from the
+prototypes (`Node`: `parentNode firstChild lastChild previousSibling
+nextSibling childNodes parentElement textContent`; `Element`:
+`firstElementChild lastElementChild children childElementCount
+previousElementSibling nextElementSibling innerHTML className`) instead of
+using TreeWalker fallbacks. Moving only some of them to prototypes leaves the
+rest `undefined` in ShadyDOM (`tp-yt-iron-icon` then throws reading
+`childNodes`), so all sixteen moved together.
