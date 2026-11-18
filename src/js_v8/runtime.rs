@@ -243,6 +243,7 @@ impl V8Runtime {
             document_method(scope, document_obj, "createComment", create_comment, doc_external);
             document_method(scope, document_obj, "elementFromPoint", element_from_point, doc_external);
             global.set(scope, v8_str(scope, "document").into(), document_obj.into());
+            install_audio_factory(scope, &registry, doc_external);
 
             // Native custom-element registry bindings (Phase 1 of the native
             // custom-element-reaction plan, docs/NATIVE_CUSTOM_ELEMENTS_PLAN.md).
@@ -1655,6 +1656,55 @@ fn ce_define_native(
 use super::dom_exception::throw_dom_exception;
 
 /// Install a document-only method as an own property of the document wrapper.
+/// HTML's legacy factory function `new Audio(src)`: an `<audio>` element with
+/// `preload="auto"`, whose `prototype` is the intrinsic
+/// `HTMLAudioElement.prototype`.
+/// <https://html.spec.whatwg.org/multipage/media.html#dom-audio>
+fn install_audio_factory<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    registry: &NodeRegistry,
+    doc_external: v8::Local<'s, v8::External>,
+) {
+    let template = v8::FunctionTemplate::builder(construct_audio)
+        .data(doc_external.into())
+        .length(0)
+        .build(scope);
+    template.set_class_name(v8_str(scope, "Audio"));
+    let function = template.get_function(scope).expect("Audio factory");
+    let prototype = registry.interface_prototypes.borrow().get("HTMLAudioElement").map(|p| v8::Local::new(scope, p));
+    if let Some(prototype) = prototype {
+        let fixed = v8::PropertyAttribute::READ_ONLY
+            | v8::PropertyAttribute::DONT_ENUM
+            | v8::PropertyAttribute::DONT_DELETE;
+        function.define_own_property(scope, v8_str(scope, "prototype").into(), prototype.into(), fixed);
+    }
+    let global = scope.get_current_context().global(scope);
+    global.define_own_property(scope, v8_str(scope, "Audio").into(), function.into(), v8::PropertyAttribute::DONT_ENUM);
+}
+
+fn construct_audio(
+    scope: &mut v8::PinScope<'_, '_>,
+    args: v8::FunctionCallbackArguments,
+    mut retval: v8::ReturnValue,
+) {
+    if !args.is_construct_call() {
+        let message = v8_str(scope, "Failed to construct 'Audio': Please use the 'new' operator.");
+        let error = v8::Exception::type_error(scope, message);
+        scope.throw_exception(error);
+        return;
+    }
+    let mut attributes = std::collections::BTreeMap::new();
+    attributes.insert("preload".to_string(), "auto".to_string());
+    if !args.get(0).is_undefined() {
+        let Some(src) = args.get(0).to_string(scope) else { return };
+        attributes.insert("src".to_string(), src.to_rust_string_lossy(scope));
+    }
+    let doc_data: &DocumentData = super::node_create::external_data(args.data());
+    let node = Node::element_with_attributes("audio", attributes, vec![]);
+    let js_node = create_js_node(scope, node, &doc_data.registry, &doc_data.document);
+    retval.set(js_node.into());
+}
+
 fn document_method<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     document: v8::Local<'s, v8::Object>,

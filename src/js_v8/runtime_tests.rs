@@ -3631,3 +3631,22 @@ fn v8_fragment_self_append_is_tolerated_for_shadow_adoption() {
         Ok("1|true".into())
     );
 }
+
+#[test]
+fn v8_audio_factory_creates_audio_elements() {
+    let mut runtime = V8Runtime::new(blank_dom());
+    assert_eq!(
+        runtime.eval_to_string(
+            r#"(() => {
+        const a = new Audio('clip.ogg'), b = new Audio();
+        const d = Object.getOwnPropertyDescriptor(Audio, 'prototype');
+        const out = [a instanceof HTMLAudioElement, a.localName, a.getAttribute('src'),
+            a.getAttribute('preload'), b.hasAttribute('src'), Audio.prototype === HTMLAudioElement.prototype,
+            d.writable, d.configurable, Audio.name, Audio.length];
+        try { Audio(); } catch (e) { out.push(e.constructor.name); }
+        return out.join();
+    })()"#
+        ),
+        Ok("true,audio,clip.ogg,auto,false,true,false,false,Audio,0,TypeError".into())
+    );
+}
