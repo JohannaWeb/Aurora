@@ -208,6 +208,7 @@ impl V8Runtime {
             global.set(scope, v8_str(scope, "self").into(), global.into());
             super::bindings::install(scope, &registry);
             super::dom_exception::install(scope);
+            super::performance::install(scope);
 
             // Simple console.log implementation.
             let console_template = v8::ObjectTemplate::new(scope);

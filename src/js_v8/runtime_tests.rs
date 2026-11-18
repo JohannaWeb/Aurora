@@ -3631,3 +3631,35 @@ fn v8_fragment_self_append_is_tolerated_for_shadow_adoption() {
         Ok("1|true".into())
     );
 }
+
+#[test]
+fn v8_performance_supports_now_and_user_timing() {
+    let mut runtime = V8Runtime::new(blank_dom());
+    assert_eq!(
+        runtime.eval_to_string(
+            r#"(() => {
+        const t = performance.now();
+        const a = performance.mark('a');
+        performance.mark('b', {startTime: t + 5});
+        const m = performance.measure('ab', 'a', 'b');
+        const d = performance.measure('dict', {start: 1, duration: 2});
+        const out = [typeof t, t >= 0, performance.timeOrigin > 0,
+            performance.timing.navigationStart === Math.floor(performance.timeOrigin),
+            a.entryType, m.duration === t + 5 - a.startTime, d.startTime, d.duration,
+            performance.getEntriesByType('mark').map(e => e.name).join('+'),
+            performance.getEntriesByName('ab', 'measure').length,
+            performance.getEntriesByType('resource').length,
+            performance instanceof Performance, performance instanceof EventTarget,
+            Object.prototype.toString.call(performance)];
+        try { performance.measure('x', 'missing'); } catch (e) { out.push(e.name); }
+        try { new Performance(); } catch (e) { out.push(e.constructor.name); }
+        performance.clearMarks('a');
+        out.push(performance.getEntries().length);
+        performance.clearMarks(); performance.clearMeasures(); performance.clearResourceTimings();
+        out.push(performance.getEntries().length);
+        return out.join();
+    })()"#
+        ),
+        Ok("number,true,true,true,mark,true,1,2,a+b,1,0,true,true,[object Performance],SyntaxError,TypeError,3,0".into())
+    );
+}

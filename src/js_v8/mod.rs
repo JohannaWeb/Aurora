@@ -15,6 +15,7 @@ mod determinism;
 mod form_associated;
 mod mutation_observer;
 mod node_create;
+mod performance;
 mod registry;
 mod runtime;
 #[cfg(test)]
