@@ -104,6 +104,8 @@ fn convert_arg(arg: &Argument, name: &str) -> String {
     let conversion = convert(&arg.ty.kind);
     let value = if arg.ty.nullable {
         format!("if v.is_null_or_undefined() {{ None }} else {{ Some({conversion}?) }}")
+    } else if arg.ty.null_to_empty {
+        format!("if v.is_null() {{ String::new() }} else {{ {conversion}? }}")
     } else if arg.optional && arg.default.is_none() {
         format!("if v.is_undefined() {{ None }} else {{ Some({conversion}?) }}")
     } else {

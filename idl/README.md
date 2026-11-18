@@ -30,7 +30,8 @@ unsupported IDL fails the build instead of producing wrong bindings:
 - Types: `DOMString`/`USVString`, `boolean`, all integer types, `float`,
   `double` and their `unrestricted` forms, interface types, `undefined` as
   a return type, and `T?`.
-- Extended attributes: `[CEReactions]` only.
+- Extended attributes: `[CEReactions]` on members, and
+  `[LegacyNullToEmptyString]` on non-nullable string types.
 
 For each interface with members, `codegen/generate.rs` emits a
 `<Interface>Members` trait that `Dom` in `src/js_v8/dom_impl.rs` implements,
@@ -41,8 +42,11 @@ rejection for restricted floats, interface brand checks), wrap
 `[CEReactions]` members in a reactions scope, and map errors to `TypeError`
 or a native `DOMException`.
 
-Members currently on generated bindings: `Node`'s constants and
-`Node.contains()`. Everything else is still on the hand-written wrapper
+Members currently on generated bindings: `Node`'s constants,
+`Node.contains()`, and all of `CharacterData` (`data`, `length`,
+`substringData`, `appendData`, `insertData`, `deleteData`, `replaceData`).
+CharacterData offsets count UTF-16 code units; strings cross into Rust as
+UTF-8, so lone surrogates are stored as U+FFFD. Everything else is still on the hand-written wrapper
 templates in `node_create.rs` and migrates in P2.3–P2.5. Missing parents,
 duplicate names, unknown types and inheritance cycles fail the build.
 

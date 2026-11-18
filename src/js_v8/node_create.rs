@@ -251,18 +251,10 @@ pub(super) fn create_js_node<'s>(
         set_text_content,
         node_external,
     );
-    // CharacterData surface, installed ONLY on Text/Comment wrappers: a
-    // `data` accessor on element wrappers would shadow application-level
-    // `.data` properties (Polymer components store their bound data there).
+    // `nodeValue` only on Text/Comment wrappers until Node moves to generated
+    // bindings (P2.3): an own accessor on element wrappers would shadow
+    // application-level properties. `data` is on CharacterData.prototype.
     if matches!(&*node.borrow(), Node::Text(_) | Node::Comment(_)) {
-        install_accessor(
-            scope,
-            template,
-            "data",
-            get_text_content,
-            set_text_content,
-            node_external,
-        );
         install_accessor(
             scope,
             template,

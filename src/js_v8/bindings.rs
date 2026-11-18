@@ -15,7 +15,6 @@ include!(concat!(env!("OUT_DIR"), "/web_interfaces.rs"));
 
 /// Why a binding call failed, mapped to the exception WebIDL requires.
 #[derive(Debug)]
-#[allow(dead_code)] // `Dom` is first produced by members migrating in P2.3.
 pub(super) enum Error {
     Type(String),
     Dom { name: &'static str, message: String },

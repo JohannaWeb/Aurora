@@ -152,6 +152,38 @@ fn generated_operation_brand_checks_and_converts_arguments() {
 }
 
 #[test]
+fn character_data_members_count_utf16_units_and_render_text() {
+    let mut runtime = runtime();
+    assert_eq!(
+        runtime.eval_to_string(
+            r#"(() => {
+        const text = document.createTextNode('a\u{1F600}b');
+        document.body.appendChild(text);
+        const out = [Object.hasOwn(text, 'data'), text.length, text.substringData(1, 2) === '\u{1F600}'];
+        text.appendData('cd'); text.insertData(0, '>'); text.deleteData(1, 1);
+        text.replaceData(0, 3, 'X');
+        out.push(text.data, document.body.textContent);
+        text.data = null;
+        out.push(JSON.stringify(text.data), text.length);
+        const comment = document.createComment('note');
+        comment.data = 7;
+        out.push(comment.substringData(0, 4294967296 + 1), comment instanceof CharacterData);
+        for (const call of [() => text.substringData(1, 0), () => text.insertData(-1, 'x')]) {
+            try { call(); out.push('no throw'); } catch (e) { out.push(e instanceof DOMException && e.name); }
+        }
+        for (const call of [() => CharacterData.prototype.appendData.call(document.body, 'x'),
+                            () => comment.replaceData(0, 1)]) {
+            try { call(); out.push('no throw'); } catch (e) { out.push(e.constructor.name); }
+        }
+        return out.join();
+    })()"#
+        ),
+        Ok("false,4,true,Xbcd,Xbcd,\"\",0,7,true,IndexSizeError,IndexSizeError,TypeError,TypeError"
+            .into())
+    );
+}
+
+#[test]
 fn generated_constants_are_on_interface_and_prototype() {
     let mut runtime = runtime();
     assert_eq!(

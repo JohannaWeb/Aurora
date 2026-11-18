@@ -31,6 +31,8 @@ impl Member {
 pub struct Type {
     pub kind: TypeKind,
     pub nullable: bool,
+    /// `[LegacyNullToEmptyString]`: `null` converts to `""`, not `"null"`.
+    pub null_to_empty: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -244,6 +246,14 @@ fn member(tokens: &mut Tokens) -> Result<Member, String> {
 fn parse_type(tokens: &mut Tokens) -> Result<Type, String> {
     let integer = |bits, signed| TypeKind::Integer { bits, signed };
     let float = |double, unrestricted| TypeKind::Float { double, unrestricted };
+    let mut null_to_empty = false;
+    if tokens.eat("[") {
+        match tokens.identifier()?.as_str() {
+            "LegacyNullToEmptyString" => null_to_empty = true,
+            other => return Err(format!("unsupported type extended attribute [{other}]")),
+        }
+        tokens.expect("]")?;
+    }
     let kind = match tokens.next() {
         Some("DOMString" | "USVString") => TypeKind::String,
         Some("boolean") => TypeKind::Boolean,
@@ -277,7 +287,10 @@ fn parse_type(tokens: &mut Tokens) -> Result<Type, String> {
     if nullable && kind == TypeKind::Undefined {
         return Err("undefined cannot be nullable".into());
     }
-    Ok(Type { kind, nullable })
+    if null_to_empty && (nullable || kind != TypeKind::String) {
+        return Err("[LegacyNullToEmptyString] needs a non-nullable string type".into());
+    }
+    Ok(Type { kind, nullable, null_to_empty })
 }
 
 pub fn inheritance_order(mut pending: Vec<Interface>) -> Result<Vec<Interface>, String> {
@@ -356,6 +369,7 @@ mod tests {
                 const unsigned short ELEMENT_NODE = 1;
                 readonly attribute DOMString? nodeValue;
                 [CEReactions] attribute unsigned long long size;
+                attribute [LegacyNullToEmptyString] DOMString data;
                 boolean contains(Node? other);
                 [CEReactions] undefined set(DOMString _default,
                     optional unrestricted double x = 1.5, optional boolean flag);
@@ -367,7 +381,11 @@ mod tests {
             members[0],
             Member::Const {
                 name: "ELEMENT_NODE".into(),
-                ty: Type { kind: TypeKind::Integer { bits: 16, signed: false }, nullable: false },
+                ty: Type {
+                    kind: TypeKind::Integer { bits: 16, signed: false },
+                    nullable: false,
+                    null_to_empty: false,
+                },
                 value: "1".into(),
             }
         );
@@ -377,7 +395,9 @@ mod tests {
             matches!(&members[2], Member::Attribute { readonly: false, ce_reactions: true, ty, .. }
             if ty.kind == TypeKind::Integer { bits: 64, signed: false })
         );
-        let Member::Operation { args, ce_reactions, ret, .. } = &members[4] else {
+        assert!(matches!(&members[3], Member::Attribute { ty, .. }
+            if ty.null_to_empty && ty.kind == TypeKind::String));
+        let Member::Operation { args, ce_reactions, ret, .. } = &members[5] else {
             panic!("expected operation");
         };
         assert!(*ce_reactions && ret.kind == TypeKind::Undefined);
@@ -401,6 +421,9 @@ mod tests {
             "interface A { const DOMString X = \"x\"; };",
             "interface A { attribute undefined x; };",
             "interface A { undefined f(long... rest); };",
+            "interface A { attribute [LegacyNullToEmptyString] DOMString? x; };",
+            "interface A { attribute [LegacyNullToEmptyString] long x; };",
+            "interface A { attribute [Clamp] long x; };",
         ] {
             assert!(parse(source).is_err(), "{source}");
         }
