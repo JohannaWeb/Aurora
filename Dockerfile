@@ -2,8 +2,11 @@
 
 FROM rust:1-bookworm AS builder
 
+# git and python3 run scripts/vendor_patches.py.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
+        git \
+        python3 \
         libfontconfig1-dev \
         libwayland-dev \
         libx11-dev \
@@ -21,7 +24,7 @@ WORKDIR /workspace
 COPY . ./Aurora
 
 WORKDIR /workspace/Aurora
-RUN cargo build --release --locked
+RUN scripts/vendor_patches.py apply && cargo build --release --locked
 
 FROM debian:bookworm-slim AS runtime
 

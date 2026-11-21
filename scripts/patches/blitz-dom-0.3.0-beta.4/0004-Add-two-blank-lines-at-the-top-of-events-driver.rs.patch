@@ -1,0 +1,17 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: JohannaWeb <joaocordeiroalmeida@gmail.com>
+Date: Sat, 21 Nov 2026 00:00:00 +0000
+Subject: [PATCH] Add two blank lines at the top of events/driver.rs
+
+Carried over from the third_party fork unchanged.
+
+diff --git a/src/events/driver.rs b/src/events/driver.rs
+index 136e8c8..4b4de08 100644
+--- a/src/events/driver.rs
++++ b/src/events/driver.rs
+@@ -1,3 +1,5 @@
++
++
+ use crate::Document;
+ use blitz_traits::events::{
+     BlitzPointerEvent, BlitzPointerId, DomEvent, DomEventData, EventState, Point, PointerCoords,

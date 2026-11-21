@@ -1798,8 +1798,8 @@ fn catch_stylo_panic<T>(context: &str, f: impl FnOnce() -> T) -> Option<T> {
 /// snapshot rebuild that would otherwise paint, so the page is wedged forever.
 ///
 /// The original trigger (stylo#387's `ElementStyles::primary` unwrap on a
-/// content-bearing YouTube route) is now fixed at the source in our local stylo
-/// fork (`third_party/stylo`, see `[patch.crates-io]`), so this no longer fires
+/// content-bearing YouTube route) is now fixed at the source by Aurora's stylo
+/// patch (`scripts/patches/stylo-0.22.0/`), so this no longer fires
 /// on that path. It stays as a general safety net: any future Stylo panic that
 /// we catch must not leave the thread-state wedged.
 ///

@@ -1,0 +1,58 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: JohannaWeb <joaocordeiroalmeida@gmail.com>
+Date: Sat, 21 Nov 2026 00:00:00 +0000
+Subject: [PATCH] Match selectors through Aurora's synthetic shadow container
+
+Aurora mirrors each shadow root as a synthetic `display: contents`
+`<div data-aurora-shadow-root>` inside its host. It is a rendering
+artifact, not a DOM element, so `selectors::Element::parent_element`
+skips it (`Node::is_synthetic_shadow_container`): ShadyDOM-scoped CSS
+such as `ytd-page-manager > .ytd-page-manager` expects shadow content to
+be the host's direct children.
+
+Aurora-specific. Covered by
+child_combinator_matches_through_synthetic_shadow_container in
+src/blitz_document.rs. Drop when Aurora's shadow trees no longer need the
+synthetic container (roadmap Phase 4).
+
+diff --git a/src/node/node.rs b/src/node/node.rs
+index 66190f4..2dff68c 100644
+--- a/src/node/node.rs
++++ b/src/node/node.rs
+@@ -1182,6 +1182,14 @@ impl Node {
+         })
+     }
+
++    /// Whether this is Aurora's synthetic shadow-root container: a
++    /// `display: contents` `<div data-aurora-shadow-root>` that mirrors a
++    /// ShadowRoot inside its host. It is not a real DOM element.
++    pub fn is_synthetic_shadow_container(&self) -> bool {
++        self.data.is_element_with_tag_name(&local_name!("div"))
++            && self.attr(LocalName::from("data-aurora-shadow-root")).is_some()
++    }
++
+     /// The node's computed `writing-mode` (horizontal-tb for nodes without styles)
+     #[cfg(feature = "writing-mode")]
+     pub fn writing_mode(&self) -> stylo_taffy::WritingMode {
+diff --git a/src/stylo.rs b/src/stylo.rs
+index 96998d7..3ddcbf4 100644
+--- a/src/stylo.rs
++++ b/src/stylo.rs
+@@ -376,7 +376,16 @@ impl selectors::Element for BlitzNode<'_> {
+     }
+
+     fn parent_element(&self) -> Option<Self> {
+-        TElement::traversal_parent(self)
++        // Aurora mirrors each shadow root as a synthetic `display: contents`
++        // `<div data-aurora-shadow-root>` inside its host. It is a rendering
++        // artifact, not a DOM element, so selector matching must see through
++        // it: ShadyDOM-scoped CSS such as `ytd-page-manager > .ytd-page-manager`
++        // expects shadow content to be the host's direct children.
++        let mut parent = TElement::traversal_parent(self)?;
++        while parent.is_synthetic_shadow_container() {
++            parent = TElement::traversal_parent(&parent)?;
++        }
++        Some(parent)
+     }
+
+     fn parent_node_is_shadow_root(&self) -> bool {

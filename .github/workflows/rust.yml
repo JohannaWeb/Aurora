@@ -63,6 +63,9 @@ jobs:
     - name: Cache cargo build
       uses: Swatinem/rust-cache@v2
 
+    - name: Apply vendored crate patches
+      run: scripts/vendor_patches.py apply
+
     - name: Build
       run: cargo build --locked
 
@@ -110,6 +113,9 @@ jobs:
     - name: Cache cargo build
       uses: Swatinem/rust-cache@v2
 
+    - name: Apply vendored crate patches
+      run: scripts/vendor_patches.py apply
+
     - name: Run clippy
       # Lint the crate's own code (lib + bins). `-D warnings` makes any clippy
       # lint a hard CI failure so regressions can't land. If the first run is
@@ -141,6 +147,9 @@ jobs:
 
     - name: Cache cargo build
       uses: Swatinem/rust-cache@v2
+
+    - name: Apply vendored crate patches
+      run: scripts/vendor_patches.py apply
 
     - name: Fetch web-platform-tests
       run: scripts/wpt.py fetch
