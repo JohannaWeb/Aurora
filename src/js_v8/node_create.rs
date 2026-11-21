@@ -71,25 +71,9 @@ pub(super) fn create_js_node<'s>(
     install_method(scope, template, "matches", matches, node_external);
     install_method(scope, template, "closest", closest, node_external);
 
-    // Mutation methods
-    install_method(scope, template, "appendChild", append_child, node_external);
-    install_method(scope, template, "removeChild", remove_child, node_external);
-    install_method(
-        scope,
-        template,
-        "insertBefore",
-        insert_before,
-        node_external,
-    );
-    install_method(
-        scope,
-        template,
-        "replaceChild",
-        replace_child,
-        node_external,
-    );
+    // Mutation methods. Node's own (appendChild, insertBefore, removeChild,
+    // replaceChild, cloneNode, hasChildNodes) are on Node.prototype.
     install_method(scope, template, "remove", remove_node, node_external);
-    // cloneNode and hasChildNodes are on Node.prototype.
     install_method(scope, template, "prepend", prepend_children, node_external);
     install_method(scope, template, "before", insert_before_self, node_external);
     install_method(scope, template, "after", insert_after_self, node_external);
@@ -534,7 +518,7 @@ pub(super) fn create_js_node<'s>(
 /// Inserting an *empty* DocumentFragment: give the JS custom-element shim a
 /// chance to refill it with nodes its detached-stamp composition moved out
 /// earlier, so they land where the fragment's creator actually inserts it.
-fn reclaim_composed_fragment(
+pub(super) fn reclaim_composed_fragment(
     scope: &mut v8::PinScope<'_, '_>,
     arg: v8::Local<v8::Value>,
     node: &NodePtr,
@@ -819,7 +803,7 @@ pub(super) fn is_document_fragment(node: &NodePtr) -> bool {
     matches!(&*node.borrow(), Node::Element(el) if el.tag_name == "#document-fragment")
 }
 
-fn track_fragment_children(
+pub(super) fn track_fragment_children(
     scope: &mut v8::PinScope<'_, '_>,
     registry: &Rc<NodeRegistry>,
     document: &NodePtr,
@@ -934,171 +918,6 @@ fn closest(
         current = find_parent_for(node_data, &n);
     }
     retval.set(v8::null(scope).into());
-}
-
-fn append_child(
-    scope: &mut v8::PinScope<'_, '_>,
-    args: v8::FunctionCallbackArguments,
-    mut retval: v8::ReturnValue,
-) {
-    let data = args.data();
-    let node_data = node_data_from(data);
-    let _reactions = CeReactionsGuard::new(scope, &node_data.registry);
-
-    if let Some(child) = node_from_js(scope, args.get(0), &node_data.registry) {
-        if reject_invalid_insertion(scope, &node_data.node, std::slice::from_ref(&child)) {
-            return;
-        }
-        reclaim_composed_fragment(scope, args.get(0), &child);
-        let fragment_children = if is_document_fragment(&child) {
-            child_nodes_of(&child)
-        } else {
-            Vec::new()
-        };
-        let _mutation_result = mutation::apply_dom_mutation(
-            &node_data.registry,
-            mutation::DomMutation::AppendChild {
-                parent: &node_data.node,
-                child: &child,
-            },
-        );
-        if fragment_children.is_empty() {
-            if let Ok(child_obj) = v8::Local::<v8::Object>::try_from(args.get(0)) {
-                call_global_hook(scope, "__aurora_track_custom_element__", child_obj);
-            }
-        } else {
-            track_fragment_children(
-                scope,
-                &node_data.registry,
-                &node_data.document,
-                &fragment_children,
-            );
-        }
-        node_data.registry.mark_layout_dirty(&node_data.node);
-        retval.set(args.get(0));
-    } else {
-        retval.set(v8::null(scope).into());
-    }
-}
-
-fn remove_child(
-    scope: &mut v8::PinScope<'_, '_>,
-    args: v8::FunctionCallbackArguments,
-    mut retval: v8::ReturnValue,
-) {
-    let data = args.data();
-    let node_data = node_data_from(data);
-    let _reactions = CeReactionsGuard::new(scope, &node_data.registry);
-
-    if let Some(child) = node_from_js(scope, args.get(0), &node_data.registry) {
-        let _mutation_result = mutation::apply_dom_mutation(
-            &node_data.registry,
-            mutation::DomMutation::RemoveChild {
-                parent: &node_data.node,
-                child: &child,
-            },
-        );
-        retval.set(args.get(0));
-    } else {
-        retval.set(v8::null(scope).into());
-    }
-}
-
-fn insert_before(
-    scope: &mut v8::PinScope<'_, '_>,
-    args: v8::FunctionCallbackArguments,
-    mut retval: v8::ReturnValue,
-) {
-    let data = args.data();
-    let node_data = node_data_from(data);
-    let _reactions = CeReactionsGuard::new(scope, &node_data.registry);
-
-    let new_child = node_from_js(scope, args.get(0), &node_data.registry);
-    let ref_child = node_from_js(scope, args.get(1), &node_data.registry);
-
-    if let Some(new_c) = new_child {
-        if reject_invalid_insertion(scope, &node_data.node, std::slice::from_ref(&new_c)) {
-            return;
-        }
-        reclaim_composed_fragment(scope, args.get(0), &new_c);
-        let fragment_children = if is_document_fragment(&new_c) {
-            child_nodes_of(&new_c)
-        } else {
-            Vec::new()
-        };
-        let _mutation_result = mutation::apply_dom_mutation(
-            &node_data.registry,
-            mutation::DomMutation::InsertBefore {
-                parent: &node_data.node,
-                new_child: &new_c,
-                ref_child: ref_child.as_ref(),
-            },
-        );
-        if fragment_children.is_empty() {
-            if let Ok(new_obj) = v8::Local::<v8::Object>::try_from(args.get(0)) {
-                call_global_hook(scope, "__aurora_track_custom_element__", new_obj);
-            }
-        } else {
-            track_fragment_children(
-                scope,
-                &node_data.registry,
-                &node_data.document,
-                &fragment_children,
-            );
-        }
-        node_data.registry.mark_layout_dirty(&node_data.node);
-        retval.set(args.get(0));
-    } else {
-        retval.set(v8::null(scope).into());
-    }
-}
-
-fn replace_child(
-    scope: &mut v8::PinScope<'_, '_>,
-    args: v8::FunctionCallbackArguments,
-    mut retval: v8::ReturnValue,
-) {
-    let data = args.data();
-    let node_data = node_data_from(data);
-    let _reactions = CeReactionsGuard::new(scope, &node_data.registry);
-
-    let new_child = node_from_js(scope, args.get(0), &node_data.registry);
-    let old_child = node_from_js(scope, args.get(1), &node_data.registry);
-
-    if let (Some(new_c), Some(old_c)) = (new_child, old_child) {
-        if reject_invalid_insertion(scope, &node_data.node, std::slice::from_ref(&new_c)) {
-            return;
-        }
-        let fragment_children = if is_document_fragment(&new_c) {
-            child_nodes_of(&new_c)
-        } else {
-            Vec::new()
-        };
-        let _mutation_result = mutation::apply_dom_mutation(
-            &node_data.registry,
-            mutation::DomMutation::ReplaceChild {
-                parent: &node_data.node,
-                new_child: &new_c,
-                old_child: &old_c,
-            },
-        );
-        if fragment_children.is_empty() {
-            if let Ok(new_obj) = v8::Local::<v8::Object>::try_from(args.get(0)) {
-                call_global_hook(scope, "__aurora_track_custom_element__", new_obj);
-            }
-        } else {
-            track_fragment_children(
-                scope,
-                &node_data.registry,
-                &node_data.document,
-                &fragment_children,
-            );
-        }
-        node_data.registry.mark_layout_dirty(&node_data.node);
-        retval.set(args.get(1));
-    } else {
-        retval.set(v8::null(scope).into());
-    }
 }
 
 fn remove_node(

@@ -147,9 +147,9 @@
 
     // ShadyDOM renders a ShadyRoot's content as its host's *physical*
     // children: a logical insert into the root ends in a captured-native
-    // `host.appendChild/insertBefore` (reaching us via these prototype
-    // forwarders — page code calling `el.appendChild` hits the wrapper's own
-    // native method instead). Aurora adopts ShadyDOM roots as real shadow roots
+    // `host.appendChild/insertBefore` (ShadyDOM copies Node.prototype's
+    // methods, i.e. these forwarders, as `__shady_native_*`). Aurora adopts
+    // ShadyDOM roots as real shadow roots
     // and renders those, so such content must go into the root; left in the
     // host's light DOM it is never painted (e.g. yt-formatted-string text set
     // via `root.textContent`). Existing light children are left alone: they
@@ -162,9 +162,23 @@
         return root;
     }
 
+    // The redirect is meant only for ShadyDOM's captured natives. Page code
+    // calling `el.appendChild` must get the plain DOM method, as it did while
+    // these were own methods of each wrapper, so element wrappers get own
+    // aliases of the generated natives (see __aurora_decorate_element__).
+    // Remove both with the redirect (prs.md P2.4).
+    var unredirectedNodeMethods = {};
+
     function installPrototypeForward(proto, name) {
         if (!proto || !name) return;
+        // Members already on generated bindings live on the prototype itself;
+        // the forwarder wraps them instead of looking for an own method.
+        var existing = Object.getOwnPropertyDescriptor(proto, name);
+        var native = existing && typeof existing.value === 'function' ? existing.value : null;
         var redirectsToShadyRoot = name === 'appendChild' || name === 'insertBefore';
+        if (native && (redirectsToShadyRoot || name === 'removeChild')) {
+            unredirectedNodeMethods[name] = native;
+        }
         var forward = function() {
             // The matching physical removal: ShadyDOM removes a root child
             // from the host, but Aurora keeps it in the adopted root.
@@ -183,12 +197,16 @@
                     return root.appendChild(arguments[0]);
                 }
             }
+            if (native) return native.apply(this, arguments);
             var own = Object.prototype.hasOwnProperty.call(this, name) ? this[name] : null;
             if (typeof own === 'function' && own !== forward) {
                 return own.apply(this, arguments);
             }
             return undefined;
         };
+        if (native) {
+            try { Object.defineProperty(forward, 'length', { value: native.length }); } catch (e) {}
+        }
         try {
             Object.defineProperty(proto, name, {
                 value: forward,
@@ -201,8 +219,7 @@
     }
 
     [
-        'appendChild', 'insertBefore', 'removeChild', 'replaceChild',
-        'getRootNode',
+        'appendChild', 'insertBefore', 'removeChild', 'getRootNode',
         'append', 'prepend', 'before', 'after', 'remove',
         'replaceChildren', 'replaceWith'
     ].forEach(function(name) {
@@ -282,6 +299,15 @@
     // Element decoration — called from the native bridge for every element
     // wrapper. Installs per-element JS APIs that are simpler here than native.
     globalThis.__aurora_decorate_element__ = function(el) {
+        for (var methodName in unredirectedNodeMethods) {
+            try {
+                Object.defineProperty(el, methodName, {
+                    value: unredirectedNodeMethods[methodName],
+                    configurable: true,
+                    writable: true
+                });
+            } catch (e) {}
+        }
         // The native classList bridge returns an array-like snapshot; DOMTokenList
         // is iterable, and YouTube spreads it in its element-name diagnostics.
         // Most wrappers inherit these through HTMLElement -> Node -> EventTarget,

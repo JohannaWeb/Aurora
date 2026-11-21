@@ -9,7 +9,8 @@ use super::bindings::{
 };
 use super::node_create::{
     call_global_hook, child_nodes_of, create_js_node, inner_html_target, is_document_fragment,
-    node_name, node_type, parent_of, parsed_html_nodes, sibling_of,
+    node_name, node_type, parent_of, parsed_html_nodes, reclaim_composed_fragment, sibling_of,
+    track_fragment_children,
 };
 use super::registry::NodeRegistry;
 use super::tree::{mutation, navigation};
@@ -132,6 +133,81 @@ impl NodeMembers for Dom {
     fn is_same_node(_: Scope, _: &Rc<NodeRegistry>, this: &NodePtr, other: Option<NodePtr>) -> Fallible<bool> {
         Ok(other.is_some_and(|other| Rc::ptr_eq(this, &other)))
     }
+
+    /// <https://dom.spec.whatwg.org/#dom-node-insertbefore>
+    fn insert_before(
+        scope: Scope,
+        registry: &Rc<NodeRegistry>,
+        this: &NodePtr,
+        node: NodePtr,
+        child: Option<NodePtr>,
+    ) -> Fallible<NodePtr> {
+        insert(scope, registry, this, &node, |parent, node| mutation::DomMutation::InsertBefore {
+            parent,
+            new_child: node,
+            ref_child: child.as_ref(),
+        })?;
+        Ok(node)
+    }
+
+    /// <https://dom.spec.whatwg.org/#dom-node-appendchild>
+    fn append_child(scope: Scope, registry: &Rc<NodeRegistry>, this: &NodePtr, node: NodePtr) -> Fallible<NodePtr> {
+        insert(scope, registry, this, &node, |parent, child| mutation::DomMutation::AppendChild {
+            parent,
+            child,
+        })?;
+        Ok(node)
+    }
+
+    /// <https://dom.spec.whatwg.org/#dom-node-replacechild>
+    fn replace_child(
+        scope: Scope,
+        registry: &Rc<NodeRegistry>,
+        this: &NodePtr,
+        node: NodePtr,
+        child: NodePtr,
+    ) -> Fallible<NodePtr> {
+        insert(scope, registry, this, &node, |parent, node| mutation::DomMutation::ReplaceChild {
+            parent,
+            new_child: node,
+            old_child: &child,
+        })?;
+        Ok(child)
+    }
+
+    /// <https://dom.spec.whatwg.org/#dom-node-removechild>
+    fn remove_child(_: Scope, registry: &Rc<NodeRegistry>, this: &NodePtr, child: NodePtr) -> Fallible<NodePtr> {
+        mutation::apply_dom_mutation(registry, mutation::DomMutation::RemoveChild { parent: this, child: &child });
+        Ok(child)
+    }
+}
+
+/// The shared steps of insertBefore, appendChild and replaceChild: the
+/// hierarchy checks of "ensure pre-insertion validity" (the child checks are
+/// not enforced yet), the mutation, then custom-element tracking of the
+/// inserted node or, for a fragment, of the children it carried.
+fn insert<'n>(
+    scope: Scope,
+    registry: &Rc<NodeRegistry>,
+    parent: &'n NodePtr,
+    node: &'n NodePtr,
+    mutation: impl FnOnce(&'n NodePtr, &'n NodePtr) -> mutation::DomMutation<'n>,
+) -> Fallible<()> {
+    if let Some(message) = mutation::hierarchy_error(parent, node) {
+        return Err(Error::Dom { name: "HierarchyRequestError", message: message.into() });
+    }
+    let document = document(registry, parent);
+    let wrapper = create_js_node(scope, node.clone(), registry, &document);
+    reclaim_composed_fragment(scope, wrapper.into(), node);
+    let fragment_children = if is_document_fragment(node) { child_nodes_of(node) } else { Vec::new() };
+    mutation::apply_dom_mutation(registry, mutation(parent, node));
+    if fragment_children.is_empty() {
+        call_global_hook(scope, "__aurora_track_custom_element__", wrapper);
+    } else {
+        track_fragment_children(scope, registry, &document, &fragment_children);
+    }
+    registry.mark_layout_dirty(parent);
+    Ok(())
 }
 
 /// The node's data as UTF-16 code units, the unit CharacterData offsets count.

@@ -39,6 +39,11 @@ interface Node : EventTarget {
   boolean hasChildNodes();
   boolean isSameNode(Node? otherNode);
   boolean contains(Node? other);
+
+  [CEReactions] Node insertBefore(Node node, Node? child);
+  [CEReactions] Node appendChild(Node node);
+  [CEReactions] Node replaceChild(Node node, Node child);
+  [CEReactions] Node removeChild(Node child);
 };
 interface Document : Node {};
 interface DocumentType : Node {};

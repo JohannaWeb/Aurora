@@ -250,6 +250,36 @@ fn node_queries_are_generated_prototype_operations() {
 }
 
 #[test]
+fn node_mutations_are_generated_prototype_operations() {
+    let mut runtime = runtime();
+    assert_eq!(
+        runtime.eval_to_string(
+            r#"(() => {
+        const names = ['appendChild', 'insertBefore', 'removeChild', 'replaceChild'];
+        const div = document.createElement('div');
+        // Element wrappers alias the three redirect-wrapped methods as own
+        // properties until the ShadyDOM redirect goes (v8_post.js).
+        const aliased = ['appendChild', 'insertBefore', 'removeChild'];
+        const misplaced = names.filter(n => typeof Node.prototype[n] !== 'function'
+            || Object.prototype.hasOwnProperty.call(div, n) !== aliased.includes(n));
+        const a = div.appendChild(document.createElement('a'));
+        const b = div.insertBefore(document.createTextNode('b'), a);
+        const c = document.createElement('c');
+        const old = div.replaceChild(c, a);
+        const out = [misplaced.length, div.childNodes.length, div.firstChild === b, old === a,
+            div.removeChild(b) === b, div.hasChildNodes(), div.isSameNode(div), div.isSameNode(null),
+            div.cloneNode(true).firstChild.localName, div.cloneNode().hasChildNodes()];
+        try { div.appendChild('x'); } catch (e) { out.push(e instanceof TypeError); }
+        try { c.appendChild(div); } catch (e) { out.push(e instanceof DOMException && e.name); }
+        try { Node.prototype.appendChild.call({}, c); } catch (e) { out.push(e instanceof TypeError); }
+        return out.join();
+    })()"#
+        ),
+        Ok("0,2,true,true,true,true,true,false,c,false,true,HierarchyRequestError,true".into())
+    );
+}
+
+#[test]
 fn snake_case_member_names() {
     #[path = "../../codegen/generate.rs"]
     #[allow(dead_code)]

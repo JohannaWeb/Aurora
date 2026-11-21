@@ -48,8 +48,10 @@ rejection for restricted floats, interface brand checks), wrap
 `[CEReactions]` members in a reactions scope, and map errors to `TypeError`
 or a native `DOMException`.
 
-Members currently on generated bindings: `Node`'s constants, `cloneNode()`,
-`hasChildNodes()`, `isSameNode()`, `contains()` and its navigation attributes (`nodeType`, `nodeName`, `isConnected`,
+Members currently on generated bindings: `Node`'s constants, its tree
+operations (`appendChild`, `insertBefore`, `replaceChild`, `removeChild`,
+`cloneNode`, `hasChildNodes`, `isSameNode`, `contains`) and its navigation
+attributes (`nodeType`, `nodeName`, `isConnected`,
 `ownerDocument`, `parentNode`, `parentElement`, `childNodes`, `firstChild`,
 `lastChild`, `previousSibling`, `nextSibling`, `textContent`); `Element.className`;
 the `ParentNode`, `NonDocumentTypeChildNode` and `InnerHTML` mixins; and all
@@ -103,3 +105,15 @@ previousElementSibling nextElementSibling innerHTML className`) instead of
 using TreeWalker fallbacks. Moving only some of them to prototypes leaves the
 rest `undefined` in ShadyDOM (`tp-yt-iron-icon` then throws reading
 `childNodes`), so all sixteen moved together.
+
+ShadyDOM also copies `appendChild insertBefore removeChild replaceChild
+cloneNode contains` from `Node.prototype` as its `__shady_native_*` methods.
+`v8_post.js` still wraps `appendChild`, `insertBefore` and `removeChild` on
+`Node.prototype` with the adopted-shadow-root redirect (keeping the native
+`length`). Page code must not take the redirect, so `__aurora_decorate_element__`
+gives each element wrapper own aliases of the three unwrapped generated
+methods, matching the old split between ShadyDOM's captured natives and the
+wrappers' own methods. Measured 2026-11-21 on the replay captures: without
+the redirect, search gains 100 elements (2127 → 2227) with duplicate and
+misplacement counts still at 0. Removing the redirect and the aliases
+belongs with the other compose heuristics (prs.md P2.4).
