@@ -81,8 +81,8 @@ blitz-dom = { version = "0.3.0-beta.4", features = ["custom-widget", "tracing", 
 # Pinned to the exact version blitz-dom uses so we share the same compiled crate
 # (and therefore the same thread-local style state). Used to repair Stylo's
 # leaked LAYOUT thread-state flag after a caught panic in resolve (see
-# `catch_stylo_panic` in src/blitz_document.rs). The crate itself is sourced from
-# our local fork via `[patch.crates-io]` below.
+# `catch_stylo_panic` in src/blitz_document.rs). The crate itself is the patched
+# copy that `[patch.crates-io]` below points at.
 style = { version = "=0.22.0", package = "stylo" }
 blitz-html = "0.3.0-beta.4"
 blitz-paint = "0.3.0-beta.4"
@@ -94,14 +94,12 @@ dioxus = { version = "0.7.9", default-features = false, features = ["macro", "si
 dioxus-ssr = "0.7.9"
 # vello_svg removed: v0.9.0 links against vello 0.7 + usvg 0.46, incompatible with our vello 0.9 + usvg 0.47
 
-# Local fork of Stylo (== the version blitz-dom uses). This patch redirects every
-# stylo consumer in the tree -- our `style` dep AND blitz-dom's transitive one --
-# to third_party/stylo. The only change vs. crates.io (see third_party/stylo/UPSTREAM)
-# is `ElementStyles::is_display_none` no longer unwrapping a missing primary style
-# (upstream stylo#387, still present in 0.22.0), which otherwise aborts the whole
-# style resolve on content-bearing YouTube routes. See third_party/stylo/data.rs.
-# To move the forks to a new upstream release, see scripts/update_forks.py.
+# Aurora's patched copies of these crates: the crates.io release plus the patch
+# series in scripts/patches/<crate>-<version>/, built into target/vendor-patched/
+# by `scripts/vendor_patches.py apply` (run it before the first build). The
+# stylo patch redirects every stylo consumer -- our `style` dep AND blitz-dom's
+# transitive one. See scripts/patches/README.md.
 [patch.crates-io]
-stylo = { path = "third_party/stylo" }
-blitz-dom = { path = "third_party/blitz-dom" }
-blitz-paint = { path = "third_party/blitz-paint" }
+stylo = { path = "target/vendor-patched/stylo-0.22.0" }
+blitz-dom = { path = "target/vendor-patched/blitz-dom-0.3.0-beta.4" }
+blitz-paint = { path = "target/vendor-patched/blitz-paint-0.3.0-beta.4" }

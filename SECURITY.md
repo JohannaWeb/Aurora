@@ -71,8 +71,8 @@ We especially want reports of:
   content.
 - **Crashes or panics reachable from page content** that could plausibly
   be escalated beyond a denial of service.
-- **Bugs in Aurora's patches to the vendored crates** under `third_party/`
-  (`blitz-dom`, `blitz-paint`); see their `PATCHES.md` files.
+- **Bugs in Aurora's patches to the vendored crates** (`blitz-dom`,
+  `blitz-paint`, `stylo`); see the patch series in `scripts/patches/`.
 
 ### Out of scope / known limitations
 

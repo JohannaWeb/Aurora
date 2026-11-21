@@ -1,0 +1,41 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: JohannaWeb <joaocordeiroalmeida@gmail.com>
+Date: Sat, 21 Nov 2026 00:00:00 +0000
+Subject: [PATCH] Treat an element without a primary style as not display:none
+
+stylo#387. An element can reach style invalidation with `ElementData`
+allocated but no primary computed style yet: a freshly created node
+(blitz `create_element` initialises default `ElementData`) whose ancestor
+has an attribute snapshot, so targeted invalidation descends into it
+before the normal traversal styles it. `should_process_descendants` calls
+`is_display_none`, and `self.primary().unwrap()` aborted the whole
+resolve. A not-yet-styled element is not `display: none`, so a missing
+primary style answers false and the normal traversal styles it.
+
+Drop when the upstream fix for #387 is released.
+
+diff --git a/data.rs b/data.rs
+index ff6120d..e70f83c 100644
+--- a/data.rs
++++ b/data.rs
+@@ -188,8 +188,19 @@ impl ElementStyles {
+     }
+
+     /// Whether this element `display` value is `none`.
++    ///
++    /// Aurora fork (stylo#387): an element can reach style invalidation with
++    /// `ElementData` allocated but no primary computed style yet — e.g. a
++    /// freshly created node (blitz `create_element` initialises default
++    /// `ElementData`) whose ancestor has an attribute snapshot, so targeted
++    /// invalidation descends into it before the normal traversal styles it.
++    /// `should_process_descendants` calls this, and the original
++    /// `self.primary().unwrap()` aborted the whole resolve. A not-yet-styled
++    /// element is not `display: none`, so treat a missing primary as `false`
++    /// and let the normal traversal style it.
+     pub fn is_display_none(&self) -> bool {
+-        self.primary().get_box().clone_display().is_none()
++        self.get_primary()
++            .map_or(false, |s| s.get_box().clone_display().is_none())
+     }
+
+     /// Whether this element uses viewport units.

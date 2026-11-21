@@ -1,0 +1,37 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: JohannaWeb <joaocordeiroalmeida@gmail.com>
+Date: Sat, 21 Nov 2026 00:00:00 +0000
+Subject: [PATCH] Keep the message receiver in place if a handler panics
+
+`handle_messages` took the receiver out of the document and put it back
+after the loop, so a handler panic caught by the embedder left `rx` as
+None and every later frame panicked on the unwrap. Borrow it per message
+instead.
+
+Upstreamable.
+
+diff --git a/src/document.rs b/src/document.rs
+index 934baa6..832d629 100644
+--- a/src/document.rs
++++ b/src/document.rs
+@@ -1267,16 +1267,12 @@ impl BaseDocument {
+     }
+
+     pub fn handle_messages(&mut self) {
+-        // Remove event Reciever from the Document so that we can process events
+-        // without holding a borrow to the Document
+-        let rx = self.rx.take().unwrap();
+-
+-        while let Ok(msg) = rx.try_recv() {
++        // Pull one message at a time rather than taking the receiver out of the
++        // Document: if a handler panics (and the embedder catches it), the
++        // receiver must still be in place for the next frame.
++        while let Some(msg) = self.rx.as_ref().and_then(|rx| rx.try_recv().ok()) {
+             self.handle_message(msg);
+         }
+-
+-        // Put Reciever back
+-        self.rx = Some(rx);
+     }
+
+     pub fn handle_message(&mut self, msg: DocumentEvent) {

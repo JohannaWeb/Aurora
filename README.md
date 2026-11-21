@@ -103,6 +103,14 @@ Aurora does not yet claim:
 
 ## Run
 
+Aurora builds against patched copies of blitz-dom, blitz-paint and stylo.
+Build them once before the first `cargo` command, and again after pulling a
+change to `scripts/patches/` (it is a no-op otherwise):
+
+```bash
+scripts/vendor_patches.py apply
+```
+
 ```bash
 # Bundled demo page
 cargo run

@@ -9,8 +9,17 @@ VIEWPORT_HEIGHT ?= 786
 SCREENSHOT_DIR := $(dir $(abspath $(SCREENSHOT)))
 SCREENSHOT_FILE := $(notdir $(SCREENSHOT))
 
-.PHONY: yt-capture yt-scorecard wpt wpt-fetch wpt-update
+.PHONY: vendor vendor-regen yt-capture yt-scorecard wpt wpt-fetch wpt-update
 .PHONY: docker-build docker-run docker-fixture docker-x11 docker-screenshot screenshot mockup-screenshot dynamic-screenshot raf-screenshot all-renders check-line-cap
+
+# Build the patched blitz-dom/blitz-paint/stylo trees that Cargo.toml's
+# [patch.crates-io] points at (scripts/patches/README.md). No-op when current.
+vendor:
+	scripts/vendor_patches.py apply
+
+# Rewrite the patch series from commits made in target/vendor-patched/<crate>/.
+vendor-regen:
+	scripts/vendor_patches.py regen
 
 docker-build:
 	docker build -f $(DOCKERFILE) -t $(IMAGE) $(PROJECT_DIR)
@@ -33,7 +42,7 @@ docker-screenshot:
 		-v $(SCREENSHOT_DIR):/out \
 		$(IMAGE) --fixture google-homepage
 
-screenshot:
+screenshot: vendor
 	AURORA_VIEWPORT_WIDTH=$(VIEWPORT_WIDTH) \
 	AURORA_VIEWPORT_HEIGHT=$(VIEWPORT_HEIGHT) \
 	AURORA_SCREENSHOT_WIDTH=$(VIEWPORT_WIDTH) \
@@ -69,11 +78,11 @@ check-line-cap:
 # Record the scorecard pages from the live site into .captures/ (see
 # scripts/scorecard/pages.txt), then replay them offline. Pass
 # BASELINE=old.json to flag regressions, JSON=new.json to save results.
-yt-capture:
+yt-capture: vendor
 	cargo build --release
 	scripts/yt_capture.sh
 
-yt-scorecard:
+yt-scorecard: vendor
 	cargo build --release
 	scripts/yt_scorecard.py $(if $(JSON),--json $(JSON)) $(if $(BASELINE),--baseline $(BASELINE))
 
@@ -83,10 +92,10 @@ yt-scorecard:
 wpt-fetch:
 	scripts/wpt.py fetch
 
-wpt:
+wpt: vendor
 	cargo build --release
 	scripts/wpt.py run $(WPT_PATHS)
 
-wpt-update:
+wpt-update: vendor
 	cargo build --release
 	scripts/wpt.py run --update $(WPT_PATHS)

@@ -1,0 +1,33 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: JohannaWeb <joaocordeiroalmeida@gmail.com>
+Date: Sat, 21 Nov 2026 00:00:00 +0000
+Subject: [PATCH] Drop a stylesheet whose node was removed before it loaded
+
+A stylesheet load can complete after script removed its <link>/<style>
+node. The NodeId is then gone, or reused by a non-element, and
+`add_stylesheet_for_node` panicked on it. Drop the sheet instead.
+
+Upstreamable. Covered by stylesheet_load_for_removed_node_is_ignored in
+src/blitz_document.rs.
+
+diff --git a/src/document.rs b/src/document.rs
+index 96d7ed0..934baa6 100644
+--- a/src/document.rs
++++ b/src/document.rs
+@@ -1214,6 +1214,16 @@ impl BaseDocument {
+     }
+
+     pub fn add_stylesheet_for_node(&mut self, stylesheet: DocumentStyleSheet, node_id: NodeId) {
++        // A stylesheet load can complete after script removed its <link>/<style>
++        // node; the slot is gone (or reused by a non-element), so drop the sheet.
++        if !self
++            .nodes
++            .get(node_id)
++            .is_some_and(|node| node.element_data().is_some())
++        {
++            return;
++        }
++
+         let old = self.nodes_to_stylesheet.insert(node_id, stylesheet.clone());
+         self.stylesheet_generation += 1;
+
