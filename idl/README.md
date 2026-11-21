@@ -1,7 +1,8 @@
-# Interface skeletons (P2.1)
+# WebIDL interfaces
 
 These checked-in WebIDL files describe Aurora's initial interface inheritance
-graph. They are curated, member-free declarations based on the
+graph and the members that have moved onto generated bindings. They are
+curated declarations based on the
 [DOM](https://dom.spec.whatwg.org/),
 [HTML](https://html.spec.whatwg.org/multipage/indices.html#element-interfaces)
 and [SVG](https://svgwg.org/svg2-draft/types.html#InterfaceSVGElement) standards,
@@ -15,17 +16,55 @@ registry retains intrinsic prototypes, so replacing a global constructor cannot
 change the class of newly created DOM wrappers. `HTMLDocument` is the legacy
 alias of `Document`.
 
-The parser deliberately accepts only empty `interface Name [: Parent] {};`
-declarations and comments. Members, extended attributes, partials and mixins
-are rejected until their semantics are implemented. Missing parents, duplicate
-names and inheritance cycles fail the build. Source order need not match
-inheritance order.
+## Supported IDL (P2.2)
 
-Existing Rust wrapper members and JS behavior remain until P2.2–P2.5 migrate
-them. Constructors other than `HTMLElement` retain their previous placeholder
-behavior; the native `HTMLElement` entry point delegates to the existing custom
-element construction hook. Namespace storage and SVG subclass selection are
-also deferred; this step preserves the existing SVG classification.
+The parser accepts a deliberate subset and rejects everything else, so
+unsupported IDL fails the build instead of producing wrong bindings:
+
+- `interface Name [: Parent] { ... };`, `interface mixin Name { ... };` and
+  `Name includes Mixin;`. No partials or namespaces. A mixin gets one
+  `<Mixin>Members` trait; each including interface gets its own callbacks,
+  brand-checked against that interface.
+- `const` integer or boolean members, installed on the interface object and
+  its prototype (read-only, enumerable, non-configurable).
+- `[readonly] attribute T name;` as accessor properties on the prototype.
+- `T name(args);` regular operations. Overloads, variadics and `any` are
+  rejected; `optional` arguments may have literal defaults.
+- Types: `DOMString`/`USVString`, `boolean`, all integer types, `float`,
+  `double` and their `unrestricted` forms, interface types, `undefined` as
+  a return type, and `T?`. `NodeList` and `HTMLCollection` are allowed only
+  as non-null read-only attribute types and return a fresh array, as the
+  hand-written accessors did, until those interfaces exist.
+- Extended attributes: `[CEReactions]` and `[NewObject]` (no generated
+  effect) on members, and `[LegacyNullToEmptyString]` on non-nullable
+  string types.
+
+For each interface with members, `codegen/generate.rs` emits a
+`<Interface>Members` trait that `Dom` in `src/js_v8/dom_impl.rs` implements,
+so a declared but unimplemented member is a compile error. Generated
+callbacks brand-check `this` against the generated inheritance chain, check
+arity, convert arguments per WebIDL (ConvertToInt wrapping, non-finite
+rejection for restricted floats, interface brand checks), wrap
+`[CEReactions]` members in a reactions scope, and map errors to `TypeError`
+or a native `DOMException`.
+
+Members currently on generated bindings: `Node`'s constants, its tree
+operations (`appendChild`, `insertBefore`, `replaceChild`, `removeChild`,
+`cloneNode`, `hasChildNodes`, `isSameNode`, `contains`) and its navigation
+attributes (`nodeType`, `nodeName`, `isConnected`,
+`ownerDocument`, `parentNode`, `parentElement`, `childNodes`, `firstChild`,
+`lastChild`, `previousSibling`, `nextSibling`, `textContent`); `Element.className`;
+the `ParentNode`, `NonDocumentTypeChildNode` and `InnerHTML` mixins; and all
+of `CharacterData` (`data`, `length`,
+`substringData`, `appendData`, `insertData`, `deleteData`, `replaceData`).
+CharacterData offsets count UTF-16 code units; strings cross into Rust as
+UTF-8, so lone surrogates are stored as U+FFFD. Everything else is still on the hand-written wrapper
+templates in `node_create.rs` and migrates in P2.3–P2.5. Missing parents,
+duplicate names, unknown types and inheritance cycles fail the build.
+
+Constructors other than `HTMLElement` retain their placeholder behavior; the
+native `HTMLElement` entry point delegates to the existing custom element
+construction hook. Namespace storage and SVG subclass selection are deferred.
 
 ## Validation, 2026-11-16
 
@@ -54,3 +93,27 @@ is identical; existing JS errors and replay misses remain:
 | Home | 1291 | 0 | 0 | 0 | 0 | 2 | 0 |
 | Search | 2125 | 13 | 8 | 0 | 0 | 2 | 11 |
 | Watch | 1538 | 0 | 0 | 0 | 0 | 0 | 1 |
+
+## ShadyDOM descriptor mode
+
+YouTube's ShadyDOM checks whether `Node.prototype.firstChild` is a
+configurable getter. If it is, ShadyDOM copies native accessors from the
+prototypes (`Node`: `parentNode firstChild lastChild previousSibling
+nextSibling childNodes parentElement textContent`; `Element`:
+`firstElementChild lastElementChild children childElementCount
+previousElementSibling nextElementSibling innerHTML className`) instead of
+using TreeWalker fallbacks. Moving only some of them to prototypes leaves the
+rest `undefined` in ShadyDOM (`tp-yt-iron-icon` then throws reading
+`childNodes`), so all sixteen moved together.
+
+ShadyDOM also copies `appendChild insertBefore removeChild replaceChild
+cloneNode contains` from `Node.prototype` as its `__shady_native_*` methods.
+`v8_post.js` still wraps `appendChild`, `insertBefore` and `removeChild` on
+`Node.prototype` with the adopted-shadow-root redirect (keeping the native
+`length`). Page code must not take the redirect, so `__aurora_decorate_element__`
+gives each element wrapper own aliases of the three unwrapped generated
+methods, matching the old split between ShadyDOM's captured natives and the
+wrappers' own methods. Measured 2026-11-21 on the replay captures: without
+the redirect, search gains 100 elements (2127 → 2227) with duplicate and
+misplacement counts still at 0. Removing the redirect and the aliases
+belongs with the other compose heuristics (prs.md P2.4).

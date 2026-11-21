@@ -127,3 +127,168 @@ fn document_has_a_single_wrapper() {
         Ok("true|true|true|true|9|#document|true|function|function|function".into())
     );
 }
+
+#[test]
+fn generated_operation_brand_checks_and_converts_arguments() {
+    let mut runtime = runtime();
+    assert_eq!(
+        runtime.eval_to_string(
+            r#"(() => {
+        const body = document.body, div = document.getElementById('parsed');
+        const detached = document.createElement('p');
+        const contains = Node.prototype.contains;
+        const thrown = f => { try { f(); return 'none'; } catch (e) { return e.constructor.name; } };
+        return [
+            document.contains(div), body.contains(body), div.contains(body),
+            body.contains(detached), body.contains(null), body.contains(undefined),
+            thrown(() => body.contains()), thrown(() => body.contains({})),
+            thrown(() => contains.call({}, body)), thrown(() => new contains(body)),
+            contains.name, contains.length, Object.hasOwn(div, 'contains'),
+        ].join('|');
+    })()"#
+        ),
+        Ok("true|true|false|false|false|false|TypeError|TypeError|TypeError|TypeError|contains|1|false".into())
+    );
+}
+
+#[test]
+fn character_data_members_count_utf16_units_and_render_text() {
+    let mut runtime = runtime();
+    assert_eq!(
+        runtime.eval_to_string(
+            r#"(() => {
+        const text = document.createTextNode('a\u{1F600}b');
+        document.body.appendChild(text);
+        const out = [Object.hasOwn(text, 'data'), text.length, text.substringData(1, 2) === '\u{1F600}'];
+        text.appendData('cd'); text.insertData(0, '>'); text.deleteData(1, 1);
+        text.replaceData(0, 3, 'X');
+        out.push(text.data, document.body.textContent);
+        text.data = null;
+        out.push(JSON.stringify(text.data), text.length);
+        const comment = document.createComment('note');
+        comment.data = 7;
+        out.push(comment.substringData(0, 4294967296 + 1), comment instanceof CharacterData);
+        for (const call of [() => text.substringData(1, 0), () => text.insertData(-1, 'x')]) {
+            try { call(); out.push('no throw'); } catch (e) { out.push(e instanceof DOMException && e.name); }
+        }
+        for (const call of [() => CharacterData.prototype.appendData.call(document.body, 'x'),
+                            () => comment.replaceData(0, 1)]) {
+            try { call(); out.push('no throw'); } catch (e) { out.push(e.constructor.name); }
+        }
+        return out.join();
+    })()"#
+        ),
+        Ok("false,4,true,Xbcd,Xbcd,\"\",0,7,true,IndexSizeError,IndexSizeError,TypeError,TypeError"
+            .into())
+    );
+}
+
+#[test]
+fn shadydom_descriptor_accessors_live_on_prototypes() {
+    // ShadyDOM switches to copying these from the prototypes once
+    // Node.prototype.firstChild is a configurable getter; a missing one
+    // leaves its __shady_native_ copy undefined.
+    let mut runtime = runtime();
+    assert_eq!(
+        runtime.eval_to_string(
+            r#"(() => {
+        const node = ['parentNode', 'firstChild', 'lastChild', 'previousSibling', 'nextSibling',
+            'childNodes', 'parentElement', 'textContent'];
+        const element = ['firstElementChild', 'lastElementChild', 'children', 'childElementCount',
+            'previousElementSibling', 'nextElementSibling', 'innerHTML', 'className'];
+        const div = document.getElementById('parsed');
+        const bad = [...node.map(n => [Node.prototype, n]), ...element.map(n => [Element.prototype, n])]
+            .filter(([proto, name]) => {
+                const d = Object.getOwnPropertyDescriptor(proto, name);
+                return !d || !d.configurable || typeof d.get !== 'function' || Object.hasOwn(div, name);
+            }).map(([, name]) => name);
+        div.innerHTML = '<b>x</b>text<i></i>';
+        bad.push(div.childNodes.length, div.children.length, div.firstElementChild.localName,
+            div.firstChild.nextSibling.textContent, div.lastElementChild.previousElementSibling.localName,
+            document.ownerDocument, div.ownerDocument === document, document.body.firstChild.parentNode === document.body);
+        return bad.join();
+    })()"#
+        ),
+        Ok("3,2,b,text,b,,true,true".into())
+    );
+}
+
+#[test]
+fn generated_constants_are_on_interface_and_prototype() {
+    let mut runtime = runtime();
+    assert_eq!(
+        runtime.eval_to_string(
+            r#"(() => {
+        const d = Object.getOwnPropertyDescriptor(Node, 'DOCUMENT_POSITION_CONTAINED_BY');
+        return [Node.ELEMENT_NODE, document.body.TEXT_NODE, Node.prototype.NOTATION_NODE,
+            d.value, d.writable, d.enumerable, d.configurable].join('|');
+    })()"#
+        ),
+        Ok("1|3|12|16|false|true|false".into())
+    );
+}
+
+#[test]
+fn node_queries_are_generated_prototype_operations() {
+    let mut runtime = runtime();
+    assert_eq!(
+        runtime.eval_to_string(
+            r#"(() => {
+        const div = document.createElement('div');
+        div.appendChild(document.createElement('c'));
+        const misplaced = ['cloneNode', 'hasChildNodes', 'isSameNode'].filter(n =>
+            Object.prototype.hasOwnProperty.call(div, n) || typeof Node.prototype[n] !== 'function');
+        const out = [misplaced.length, div.hasChildNodes(), div.isSameNode(div), div.isSameNode(null),
+            div.cloneNode(true).firstChild.localName, div.cloneNode().hasChildNodes()];
+        try { div.isSameNode('x'); } catch (e) { out.push(e instanceof TypeError); }
+        try { Node.prototype.cloneNode.call({}); } catch (e) { out.push(e instanceof TypeError); }
+        return out.join();
+    })()"#
+        ),
+        Ok("0,true,true,false,c,false,true,true".into())
+    );
+}
+
+#[test]
+fn node_mutations_are_generated_prototype_operations() {
+    let mut runtime = runtime();
+    assert_eq!(
+        runtime.eval_to_string(
+            r#"(() => {
+        const names = ['appendChild', 'insertBefore', 'removeChild', 'replaceChild'];
+        const div = document.createElement('div');
+        // Element wrappers alias the three redirect-wrapped methods as own
+        // properties until the ShadyDOM redirect goes (v8_post.js).
+        const aliased = ['appendChild', 'insertBefore', 'removeChild'];
+        const misplaced = names.filter(n => typeof Node.prototype[n] !== 'function'
+            || Object.prototype.hasOwnProperty.call(div, n) !== aliased.includes(n));
+        const a = div.appendChild(document.createElement('a'));
+        const b = div.insertBefore(document.createTextNode('b'), a);
+        const c = document.createElement('c');
+        const old = div.replaceChild(c, a);
+        const out = [misplaced.length, div.childNodes.length, div.firstChild === b, old === a,
+            div.removeChild(b) === b, div.hasChildNodes(), div.isSameNode(div), div.isSameNode(null),
+            div.cloneNode(true).firstChild.localName, div.cloneNode().hasChildNodes()];
+        try { div.appendChild('x'); } catch (e) { out.push(e instanceof TypeError); }
+        try { c.appendChild(div); } catch (e) { out.push(e instanceof DOMException && e.name); }
+        try { Node.prototype.appendChild.call({}, c); } catch (e) { out.push(e instanceof TypeError); }
+        return out.join();
+    })()"#
+        ),
+        Ok("0,2,true,true,true,true,true,false,c,false,true,HierarchyRequestError,true".into())
+    );
+}
+
+#[test]
+fn snake_case_member_names() {
+    #[path = "../../codegen/generate.rs"]
+    #[allow(dead_code)]
+    mod generate;
+    use generate::snake_case;
+    assert_eq!(snake_case("compareDocumentPosition"), "compare_document_position");
+    assert_eq!(snake_case("innerHTML"), "inner_html");
+    assert_eq!(snake_case("getElementsByTagNameNS"), "get_elements_by_tag_name_ns");
+    assert_eq!(snake_case("HTMLElement"), "html_element");
+    assert_eq!(snake_case("type"), "r#type");
+}
+

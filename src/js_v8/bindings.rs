@@ -1,12 +1,42 @@
-use super::{node_create::v8_str, registry::NodeRegistry};
+//! Runtime support for the bindings generated from `idl/*.idl` (see
+//! `codegen/generate.rs`): interface objects, WebIDL argument conversion,
+//! receiver brand checks and exception mapping. Member behaviour lives in
+//! `dom_impl.rs`, which implements the generated `<Interface>Members` traits.
+
+#[allow(unused_imports)] // Used by generated [CEReactions] members.
+use super::custom_elements::CeReactionsGuard;
+use super::dom_impl::Dom;
+use super::node_create::{create_js_node, interface_for, node_from_js, v8_str};
+use super::registry::NodeRegistry;
+use crate::dom::NodePtr;
+use std::rc::Rc;
 
 include!(concat!(env!("OUT_DIR"), "/web_interfaces.rs"));
+
+/// Why a binding call failed, mapped to the exception WebIDL requires.
+#[derive(Debug)]
+pub(super) enum Error {
+    Type(String),
+    Dom { name: &'static str, message: String },
+    /// A JS exception is already pending (e.g. a throwing `toString`).
+    Pending,
+}
+
+pub(super) type Fallible<T> = Result<T, Error>;
+
+pub(super) fn install(scope: &mut v8::PinScope<'_, '_>, registry: &Rc<NodeRegistry>) {
+    // Generated callbacks find the registry here rather than in per-function
+    // data, so it lives exactly as long as the context.
+    scope.get_current_context().set_slot(registry.clone());
+    install_interfaces(scope, registry);
+}
 
 fn define_interface<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     registry: &NodeRegistry,
     name: &'static str,
     parent: Option<v8::Local<'s, v8::FunctionTemplate>>,
+    members: fn(&mut v8::PinScope<'_, '_>, v8::Local<v8::FunctionTemplate>),
 ) -> v8::Local<'s, v8::FunctionTemplate> {
     let template = v8::FunctionTemplate::builder(constructor)
         .data(v8_str(scope, name).into())
@@ -21,6 +51,8 @@ fn define_interface<'s>(
         v8_str(scope, name).into(),
         v8::PropertyAttribute::READ_ONLY | v8::PropertyAttribute::DONT_ENUM,
     );
+    // Templates freeze once instantiated, so members go on first.
+    members(scope, template);
     let function = template.get_function(scope).expect("interface constructor");
     if let Some(parent) = parent {
         let parent = parent.get_function(scope).expect("parent constructor");
@@ -83,6 +115,276 @@ fn constructor(
             &[args.new_target(), is_constructor.into()],
         ) {
             rv.set(value);
+        }
+    }
+}
+
+// ─── Helpers used by generated code ──────────────────────────────────────────
+
+/// A non-constructor function for an operation or accessor.
+fn accessor<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    callback: impl v8::MapFnTo<v8::FunctionCallback>,
+    name: &str,
+    length: i32,
+) -> v8::Local<'s, v8::FunctionTemplate> {
+    let function = v8::FunctionTemplate::builder(callback)
+        .length(length)
+        .constructor_behavior(v8::ConstructorBehavior::Throw)
+        .build(scope);
+    function.set_class_name(v8_str(scope, name));
+    function.remove_prototype();
+    function
+}
+
+/// Constants live on both the interface object and its prototype.
+fn define_constant(
+    scope: &mut v8::PinScope<'_, '_>,
+    template: v8::Local<v8::FunctionTemplate>,
+    proto: v8::Local<v8::ObjectTemplate>,
+    name: &str,
+    value: v8::Local<v8::Data>,
+) {
+    let attributes = || v8::PropertyAttribute::READ_ONLY | v8::PropertyAttribute::DONT_DELETE;
+    template.set_with_attr(v8_str(scope, name).into(), value, attributes());
+    proto.set_with_attr(v8_str(scope, name).into(), value, attributes());
+}
+
+/// Whether the generated interface `name` is `target` or inherits from it.
+pub(super) fn implements(mut name: &str, target: &str) -> bool {
+    loop {
+        if name == target {
+            return true;
+        }
+        match parent_interface(name) {
+            Some(parent) => name = parent,
+            None => return false,
+        }
+    }
+}
+
+/// The node behind `value`, if it is a wrapper implementing `interface`.
+fn unwrap_node(
+    scope: &mut v8::PinScope<'_, '_>,
+    registry: &NodeRegistry,
+    value: v8::Local<v8::Value>,
+    interface: &str,
+) -> Option<NodePtr> {
+    node_from_js(scope, value, registry).filter(|node| implements(interface_for(node), interface))
+}
+
+fn unwrap_this(
+    scope: &mut v8::PinScope<'_, '_>,
+    registry: &NodeRegistry,
+    this: v8::Local<v8::Object>,
+    interface: &str,
+) -> Fallible<NodePtr> {
+    unwrap_node(scope, registry, this.into(), interface)
+        .ok_or_else(|| Error::Type("Illegal invocation".into()))
+}
+
+fn check_arity(args: &v8::FunctionCallbackArguments, required: i32, context: &str) -> Fallible<()> {
+    if args.length() >= required {
+        return Ok(());
+    }
+    let plural = if required == 1 { "" } else { "s" };
+    Err(Error::Type(format!(
+        "{context}: {required} argument{plural} required, but only {} present.",
+        args.length()
+    )))
+}
+
+/// WebIDL §3.2 conversions from JS values.
+#[allow(dead_code)] // Each conversion is used once an IDL member needs it.
+mod conv {
+    use super::{Error, Fallible, NodePtr, NodeRegistry, unwrap_node};
+
+    pub(super) fn string(
+        scope: &mut v8::PinScope<'_, '_>,
+        v: v8::Local<v8::Value>,
+    ) -> Fallible<String> {
+        Ok(v.to_string(scope).ok_or(Error::Pending)?.to_rust_string_lossy(scope))
+    }
+
+    /// ConvertToInt without [EnforceRange]/[Clamp]: truncate, then wrap
+    /// modulo 2^bits into the type's range.
+    pub(super) fn integer(
+        scope: &mut v8::PinScope<'_, '_>,
+        v: v8::Local<v8::Value>,
+        bits: u32,
+        signed: bool,
+    ) -> Fallible<f64> {
+        Ok(wrap_integer(v.number_value(scope).ok_or(Error::Pending)?, bits, signed))
+    }
+
+    pub(super) fn wrap_integer(x: f64, bits: u32, signed: bool) -> f64 {
+        if !x.is_finite() || x == 0.0 {
+            return 0.0;
+        }
+        let modulus = 2f64.powi(bits as i32);
+        let x = x.trunc().rem_euclid(modulus);
+        if signed && x >= modulus / 2.0 { x - modulus } else { x }
+    }
+
+    pub(super) fn float(
+        scope: &mut v8::PinScope<'_, '_>,
+        v: v8::Local<v8::Value>,
+        double: bool,
+        unrestricted: bool,
+    ) -> Fallible<f64> {
+        let x = v.number_value(scope).ok_or(Error::Pending)?;
+        let x = if double { x } else { x as f32 as f64 };
+        if !unrestricted && !x.is_finite() {
+            return Err(Error::Type("The provided value is non-finite.".into()));
+        }
+        Ok(x)
+    }
+
+    pub(super) fn interface(
+        scope: &mut v8::PinScope<'_, '_>,
+        registry: &NodeRegistry,
+        v: v8::Local<v8::Value>,
+        interface: &str,
+    ) -> Fallible<NodePtr> {
+        unwrap_node(scope, registry, v, interface)
+            .ok_or_else(|| Error::Type(format!("parameter is not of type '{interface}'.")))
+    }
+}
+
+/// Conversion of a binding's Rust result back to JS.
+trait ToJs {
+    fn to_js<'s>(
+        self,
+        scope: &mut v8::PinScope<'s, '_>,
+        registry: &Rc<NodeRegistry>,
+    ) -> v8::Local<'s, v8::Value>;
+}
+
+impl ToJs for () {
+    fn to_js<'s>(
+        self,
+        scope: &mut v8::PinScope<'s, '_>,
+        _: &Rc<NodeRegistry>,
+    ) -> v8::Local<'s, v8::Value> {
+        v8::undefined(scope).into()
+    }
+}
+
+impl ToJs for bool {
+    fn to_js<'s>(
+        self,
+        scope: &mut v8::PinScope<'s, '_>,
+        _: &Rc<NodeRegistry>,
+    ) -> v8::Local<'s, v8::Value> {
+        v8::Boolean::new(scope, self).into()
+    }
+}
+
+impl ToJs for String {
+    fn to_js<'s>(
+        self,
+        scope: &mut v8::PinScope<'s, '_>,
+        _: &Rc<NodeRegistry>,
+    ) -> v8::Local<'s, v8::Value> {
+        v8_str(scope, &self).into()
+    }
+}
+
+macro_rules! number_to_js {
+    ($($t:ty),*) => {$(
+        impl ToJs for $t {
+            fn to_js<'s>(
+                self,
+                scope: &mut v8::PinScope<'s, '_>,
+                _: &Rc<NodeRegistry>,
+            ) -> v8::Local<'s, v8::Value> {
+                v8::Number::new(scope, self as f64).into()
+            }
+        }
+    )*};
+}
+number_to_js!(i8, u8, i16, u16, i32, u32, i64, u64, f32, f64);
+
+impl ToJs for NodePtr {
+    fn to_js<'s>(
+        self,
+        scope: &mut v8::PinScope<'s, '_>,
+        registry: &Rc<NodeRegistry>,
+    ) -> v8::Local<'s, v8::Value> {
+        let document = registry.document.borrow().clone().unwrap_or_else(|| self.clone());
+        create_js_node(scope, self, registry, &document).into()
+    }
+}
+
+/// Interim `NodeList`/`HTMLCollection`: a fresh array, as before P2.3.
+impl ToJs for Vec<NodePtr> {
+    fn to_js<'s>(
+        self,
+        scope: &mut v8::PinScope<'s, '_>,
+        registry: &Rc<NodeRegistry>,
+    ) -> v8::Local<'s, v8::Value> {
+        let array = v8::Array::new(scope, self.len() as i32);
+        for (index, node) in self.into_iter().enumerate() {
+            let wrapper = node.to_js(scope, registry);
+            array.set_index(scope, index as u32, wrapper);
+        }
+        array.into()
+    }
+}
+
+impl<T: ToJs> ToJs for Option<T> {
+    fn to_js<'s>(
+        self,
+        scope: &mut v8::PinScope<'s, '_>,
+        registry: &Rc<NodeRegistry>,
+    ) -> v8::Local<'s, v8::Value> {
+        match self {
+            Some(value) => value.to_js(scope, registry),
+            None => v8::null(scope).into(),
+        }
+    }
+}
+
+fn finish<T: ToJs>(
+    scope: &mut v8::PinScope<'_, '_>,
+    registry: &Rc<NodeRegistry>,
+    result: Fallible<T>,
+    rv: &mut v8::ReturnValue,
+) {
+    match result {
+        Ok(value) => rv.set(value.to_js(scope, registry)),
+        Err(Error::Type(message)) => {
+            let message = v8_str(scope, &message);
+            let error = v8::Exception::type_error(scope, message);
+            scope.throw_exception(error);
+        }
+        Err(Error::Dom { name, message }) => {
+            super::dom_exception::throw_dom_exception(scope, name, &message);
+        }
+        Err(Error::Pending) => {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::conv::wrap_integer;
+
+    #[test]
+    fn integer_conversion_wraps_like_webidl() {
+        let cases = [
+            (1.9, 32, true, 1.0),
+            (-1.9, 32, true, -1.0),
+            (f64::NAN, 32, true, 0.0),
+            (f64::INFINITY, 16, false, 0.0),
+            (-1.0, 16, false, 65535.0),
+            (65536.0 + 5.0, 16, false, 5.0),
+            (2147483648.0, 32, true, -2147483648.0),
+            (4294967295.0, 32, true, -1.0),
+            (-129.0, 8, true, 127.0),
+            (300.0, 8, false, 44.0),
+        ];
+        for (input, bits, signed, expected) in cases {
+            assert_eq!(wrap_integer(input, bits, signed), expected, "{input} as {bits}/{signed}");
         }
     }
 }
