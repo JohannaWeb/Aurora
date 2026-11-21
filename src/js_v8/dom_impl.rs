@@ -8,8 +8,8 @@ use super::bindings::{
     NodeMembers, NonDocumentTypeChildNodeMembers, ParentNodeMembers,
 };
 use super::node_create::{
-    child_nodes_of, inner_html_target, node_name, node_type, parent_of, parsed_html_nodes,
-    sibling_of,
+    call_global_hook, child_nodes_of, create_js_node, inner_html_target, is_document_fragment,
+    node_name, node_type, parent_of, parsed_html_nodes, sibling_of,
 };
 use super::registry::NodeRegistry;
 use super::tree::{mutation, navigation};
@@ -111,6 +111,26 @@ impl NodeMembers for Dom {
         other: Option<NodePtr>,
     ) -> Fallible<bool> {
         Ok(other.is_some_and(|other| mutation::contains_ptr(this, &other)))
+    }
+
+    /// <https://dom.spec.whatwg.org/#dom-node-clonenode>
+    fn clone_node(scope: Scope, registry: &Rc<NodeRegistry>, this: &NodePtr, subtree: bool) -> Fallible<NodePtr> {
+        let clone = mutation::clone_node(this, subtree);
+        if is_document_fragment(&clone) {
+            let wrapper = create_js_node(scope, clone.clone(), registry, &document(registry, this));
+            call_global_hook(scope, "__aurora_track_fragment__", wrapper);
+        }
+        Ok(clone)
+    }
+
+    /// <https://dom.spec.whatwg.org/#dom-node-haschildnodes>
+    fn has_child_nodes(_: Scope, _: &Rc<NodeRegistry>, this: &NodePtr) -> Fallible<bool> {
+        Ok(!child_nodes_of(this).is_empty())
+    }
+
+    /// <https://dom.spec.whatwg.org/#dom-node-issamenode>
+    fn is_same_node(_: Scope, _: &Rc<NodeRegistry>, this: &NodePtr, other: Option<NodePtr>) -> Fallible<bool> {
+        Ok(other.is_some_and(|other| Rc::ptr_eq(this, &other)))
     }
 }
 

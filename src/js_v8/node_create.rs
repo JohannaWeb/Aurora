@@ -89,14 +89,7 @@ pub(super) fn create_js_node<'s>(
         node_external,
     );
     install_method(scope, template, "remove", remove_node, node_external);
-    install_method(scope, template, "cloneNode", clone_node, node_external);
-    install_method(
-        scope,
-        template,
-        "hasChildNodes",
-        has_child_nodes,
-        node_external,
-    );
+    // cloneNode and hasChildNodes are on Node.prototype.
     install_method(scope, template, "prepend", prepend_children, node_external);
     install_method(scope, template, "before", insert_before_self, node_external);
     install_method(scope, template, "after", insert_after_self, node_external);
@@ -554,7 +547,7 @@ fn reclaim_composed_fragment(
     }
 }
 
-fn call_global_hook(scope: &mut v8::PinScope<'_, '_>, name: &str, arg: v8::Local<v8::Object>) {
+pub(super) fn call_global_hook(scope: &mut v8::PinScope<'_, '_>, name: &str, arg: v8::Local<v8::Object>) {
     let context = scope.get_current_context();
     let global = context.global(scope);
     let key = v8_str(scope, name);
@@ -822,7 +815,7 @@ pub(super) fn node_from_js(
     registry.dom_node_for_blitz_id(blitz_dom::NodeId::from_u64(blitz_id))
 }
 
-fn is_document_fragment(node: &NodePtr) -> bool {
+pub(super) fn is_document_fragment(node: &NodePtr) -> bool {
     matches!(&*node.borrow(), Node::Element(el) if el.tag_name == "#document-fragment")
 }
 
@@ -1200,37 +1193,6 @@ pub(super) fn sibling_of(
         }
     }
     None
-}
-
-fn clone_node(
-    scope: &mut v8::PinScope<'_, '_>,
-    args: v8::FunctionCallbackArguments,
-    mut retval: v8::ReturnValue,
-) {
-    let data = args.data();
-    let node_data = node_data_from(data);
-
-    let deep = args.get(0).is_true();
-    let cloned = mutation::clone_node(&node_data.node, deep);
-    let is_fragment = matches!(
-        &*cloned.borrow(),
-        Node::Element(el) if el.tag_name == "#document-fragment"
-    );
-    let js_node = create_js_node(scope, cloned, &node_data.registry, &node_data.document);
-    if is_fragment {
-        call_global_hook(scope, "__aurora_track_fragment__", js_node);
-    }
-    retval.set(js_node.into());
-}
-
-fn has_child_nodes(
-    scope: &mut v8::PinScope<'_, '_>,
-    args: v8::FunctionCallbackArguments,
-    mut retval: v8::ReturnValue,
-) {
-    let data = args.data();
-    let node_data = node_data_from(data);
-    retval.set(v8::Boolean::new(scope, !child_nodes_of(&node_data.node).is_empty()).into());
 }
 
 fn get_attribute(

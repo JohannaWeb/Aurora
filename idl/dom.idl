@@ -35,6 +35,9 @@ interface Node : EventTarget {
   readonly attribute Node? nextSibling;
   [CEReactions] attribute DOMString? textContent;
 
+  [CEReactions, NewObject] Node cloneNode(optional boolean subtree = false);
+  boolean hasChildNodes();
+  boolean isSameNode(Node? otherNode);
   boolean contains(Node? other);
 };
 interface Document : Node {};

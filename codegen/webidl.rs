@@ -246,6 +246,8 @@ fn member(tokens: &mut Tokens) -> Result<Member, String> {
         loop {
             match tokens.identifier()?.as_str() {
                 "CEReactions" => ce_reactions = true,
+                // Only says the result is a fresh object; nothing to generate.
+                "NewObject" => {}
                 other => return Err(format!("unsupported extended attribute [{other}]")),
             }
             if tokens.eat("]") {

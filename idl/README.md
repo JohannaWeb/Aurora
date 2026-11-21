@@ -35,8 +35,9 @@ unsupported IDL fails the build instead of producing wrong bindings:
   a return type, and `T?`. `NodeList` and `HTMLCollection` are allowed only
   as non-null read-only attribute types and return a fresh array, as the
   hand-written accessors did, until those interfaces exist.
-- Extended attributes: `[CEReactions]` on members, and
-  `[LegacyNullToEmptyString]` on non-nullable string types.
+- Extended attributes: `[CEReactions]` and `[NewObject]` (no generated
+  effect) on members, and `[LegacyNullToEmptyString]` on non-nullable
+  string types.
 
 For each interface with members, `codegen/generate.rs` emits a
 `<Interface>Members` trait that `Dom` in `src/js_v8/dom_impl.rs` implements,
@@ -47,8 +48,8 @@ rejection for restricted floats, interface brand checks), wrap
 `[CEReactions]` members in a reactions scope, and map errors to `TypeError`
 or a native `DOMException`.
 
-Members currently on generated bindings: `Node`'s constants, `contains()`
-and its navigation attributes (`nodeType`, `nodeName`, `isConnected`,
+Members currently on generated bindings: `Node`'s constants, `cloneNode()`,
+`hasChildNodes()`, `isSameNode()`, `contains()` and its navigation attributes (`nodeType`, `nodeName`, `isConnected`,
 `ownerDocument`, `parentNode`, `parentElement`, `childNodes`, `firstChild`,
 `lastChild`, `previousSibling`, `nextSibling`, `textContent`); `Element.className`;
 the `ParentNode`, `NonDocumentTypeChildNode` and `InnerHTML` mixins; and all

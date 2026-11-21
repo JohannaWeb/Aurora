@@ -229,6 +229,27 @@ fn generated_constants_are_on_interface_and_prototype() {
 }
 
 #[test]
+fn node_queries_are_generated_prototype_operations() {
+    let mut runtime = runtime();
+    assert_eq!(
+        runtime.eval_to_string(
+            r#"(() => {
+        const div = document.createElement('div');
+        div.appendChild(document.createElement('c'));
+        const misplaced = ['cloneNode', 'hasChildNodes', 'isSameNode'].filter(n =>
+            Object.prototype.hasOwnProperty.call(div, n) || typeof Node.prototype[n] !== 'function');
+        const out = [misplaced.length, div.hasChildNodes(), div.isSameNode(div), div.isSameNode(null),
+            div.cloneNode(true).firstChild.localName, div.cloneNode().hasChildNodes()];
+        try { div.isSameNode('x'); } catch (e) { out.push(e instanceof TypeError); }
+        try { Node.prototype.cloneNode.call({}); } catch (e) { out.push(e instanceof TypeError); }
+        return out.join();
+    })()"#
+        ),
+        Ok("0,true,true,false,c,false,true,true".into())
+    );
+}
+
+#[test]
 fn snake_case_member_names() {
     #[path = "../../codegen/generate.rs"]
     #[allow(dead_code)]
