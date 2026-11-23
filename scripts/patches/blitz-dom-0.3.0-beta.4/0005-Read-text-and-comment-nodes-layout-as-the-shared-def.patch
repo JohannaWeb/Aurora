@@ -1,0 +1,42 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: JohannaWeb <joaocordeiroalmeida@gmail.com>
+Date: Sat, 21 Nov 2026 00:00:00 +0000
+Subject: [PATCH] Read text and comment nodes' layout as the shared default
+
+`Node::layout_data` panicked ("`layout_data` is not available on this
+node kind") for text and comment nodes, and so did every read accessor
+built on it (`final_layout`, `unrounded_layout`, `scroll_offset`, ...).
+Code that walks `children` reaches those nodes routinely: Aurora's
+`document_height`, run on every wheel scroll, panicked on the first text
+child. They have no box, so return the shared default layout (zero size
+at the origin) that elements without layout output already get. Writes
+through `layout_data_mut` still panic.
+
+Still present on blitz main. Covered by
+layout_queries_on_text_and_comment_nodes_do_not_panic in
+src/blitz_document.rs.
+
+diff --git a/src/node/node.rs b/src/node/node.rs
+index 2dff68c..9d282f9 100644
+--- a/src/node/node.rs
++++ b/src/node/node.rs
+@@ -183,14 +183,16 @@ impl Node {
+     /// This node's layout output state, or a shared default if layout has
+     /// never written to this node.
+     ///
+-    /// Panics for node kinds which do not participate in layout (text and
+-    /// comment nodes).
++    /// Node kinds which do not participate in layout (text and comment nodes)
++    /// have no box, so they read as the shared default (zero size at the
++    /// origin) rather than panicking: callers walking `children` (e.g. to
++    /// measure content height) reach them routinely.
+     #[inline]
+     pub fn layout_data(&self) -> &LayoutData {
+         match &self.data {
+             NodeData::Element(data) | NodeData::AnonymousBlock(data) => data.layout_data(),
+             NodeData::Document(data) => data.layout_data(),
+-            _ => panic!("`layout_data` is not available on this node kind"),
++            _ => &super::element::DEFAULT_LAYOUT_DATA,
+         }
+     }
+
