@@ -328,6 +328,55 @@
         return fire(MouseEvent, 'click', 0);
     };
 
+    // A trusted key event from the window (V8Runtime::dispatch_key), sent to
+    // the focused element or the body. A press fires keydown, then keypress for
+    // keys that produce text; if neither was cancelled and the target is a
+    // text control, the edit is applied natively and `input` fires. Returns
+    // bit 1 when the default action was prevented, bit 2 when the target is a
+    // text control (which owns the key).
+    globalThis.__aurora_dispatch_key__ = function(key, code, keyCode, text, modifiers, released) {
+        var target = document.activeElement || document.body;
+        if (!target || typeof target.dispatchEvent !== 'function') return 0;
+        var edit = globalThis.__aurora_edit_text_input__;
+        var editable = typeof edit === 'function' && edit(target, 'check', '');
+        function fire(type, charCode) {
+            var event = new KeyboardEvent(type, {
+                bubbles: true, cancelable: true, composed: true, view: window,
+                key: key, keyCode: type === 'keypress' ? charCode : keyCode
+            });
+            event.isTrusted = true;
+            event.code = code;
+            event.which = type === 'keypress' ? charCode : keyCode;
+            event.charCode = type === 'keypress' ? charCode : 0;
+            event.location = 0; event.repeat = false; event.isComposing = false;
+            event.shiftKey = !!(modifiers & 1); event.ctrlKey = !!(modifiers & 2);
+            event.altKey = !!(modifiers & 4); event.metaKey = !!(modifiers & 8);
+            event.getModifierState = function(name) {
+                return (name === 'Shift' && event.shiftKey) || (name === 'Control' && event.ctrlKey)
+                    || (name === 'Alt' && event.altKey) || (name === 'Meta' && event.metaKey);
+            };
+            return target.dispatchEvent(event);
+        }
+        function fireInput(inputType, data) {
+            var event = new InputEvent('input', { bubbles: true, cancelable: false, composed: true });
+            event.isTrusted = true; event.inputType = inputType; event.data = data; event.isComposing = false;
+            target.dispatchEvent(event);
+        }
+        if (released) return fire('keyup', 0) ? (editable ? 2 : 0) : (1 | (editable ? 2 : 0));
+        var allowed = fire('keydown', 0);
+        var chord = (modifiers & 2) || (modifiers & 8);
+        if (allowed && text && !chord) {
+            allowed = fire('keypress', text.charCodeAt(0));
+            var printable = text !== '\r' && text !== '\n' && text !== '\t' && text !== '\b';
+            if (allowed && editable && printable && edit(target, 'insertText', text)) {
+                fireInput('insertText', text);
+            }
+        } else if (allowed && editable && key === 'Backspace') {
+            if (edit(target, 'deleteContentBackward', '')) fireInput('deleteContentBackward', null);
+        }
+        return (allowed ? 0 : 1) | (editable ? 2 : 0);
+    };
+
     // Element decoration — called from the native bridge for every element
     // wrapper. Installs per-element JS APIs that are simpler here than native.
     globalThis.__aurora_decorate_element__ = function(el) {

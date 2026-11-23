@@ -5,9 +5,9 @@
 
 use super::bindings::{
     CharacterDataMembers, ChildNodeMembers, DocumentMembers, ElementMembers, Error, Fallible,
-    FocusOptions, GetRootNodeOptions, HTMLHyperlinkElementUtilsMembers, HTMLOrSVGElementMembers,
-    InnerHTMLMembers, NodeMembers, NodeOrString, NonDocumentTypeChildNodeMembers,
-    ParentNodeMembers,
+    FocusOptions, GetRootNodeOptions, HTMLHyperlinkElementUtilsMembers, HTMLInputElementMembers,
+    HTMLOrSVGElementMembers, InnerHTMLMembers, NodeMembers, NodeOrString,
+    NonDocumentTypeChildNodeMembers, ParentNodeMembers,
 };
 use super::node_create::{
     call_global_hook, child_nodes_of, create_js_node, inner_html_target, interface_for,
@@ -1325,6 +1325,80 @@ impl HTMLOrSVGElementMembers for Dom {
         if focused.is_some_and(|f| Rc::ptr_eq(&f, this)) {
             set_focus(scope, registry, None);
         }
+        Ok(())
+    }
+}
+
+// --- Text input --------------------------------------------------------------
+// <https://html.spec.whatwg.org/multipage/input.html#concept-fe-value>: an
+// input's value starts as its `value` attribute and becomes independent once
+// set or edited (the dirty value flag). Values are not sanitized per type yet.
+
+/// `<input>` types whose value is edited as text.
+pub(super) fn is_text_control(node: &NodePtr) -> bool {
+    match &*node.borrow() {
+        Node::Element(el) if el.tag_name.eq_ignore_ascii_case("input") => {
+            let kind = el.attributes.get("type").map(|t| t.to_ascii_lowercase()).unwrap_or_default();
+            matches!(kind.as_str(), "" | "text" | "search" | "email" | "url" | "tel" | "password" | "number")
+        }
+        _ => false,
+    }
+}
+
+pub(super) fn input_value(registry: &NodeRegistry, node: &NodePtr) -> String {
+    let id = registry.register(node.clone());
+    if let Some(value) = registry.input_values.borrow().get(&id) {
+        return value.clone();
+    }
+    attribute(node, "value").unwrap_or_default()
+}
+
+/// Sets the input's value (marking it dirty) and shows it in the rendering.
+pub(super) fn set_input_value(registry: &NodeRegistry, node: &NodePtr, value: String) {
+    let id = registry.register(node.clone());
+    if let Some(render) = registry.render_document() {
+        render.borrow_mut().show_text_input_value(node, &value);
+    }
+    registry.input_values.borrow_mut().insert(id, value);
+    registry.mark_layout_dirty(node);
+}
+
+/// One editing operation from the keyboard on a focused text control:
+/// `insertText` appends `data`, `deleteContentBackward` drops the last
+/// character. Returns whether the value changed. There is no caret yet, so
+/// edits happen at the end.
+pub(super) fn edit_text_input(registry: &NodeRegistry, node: &NodePtr, operation: &str, data: &str) -> bool {
+    if !is_text_control(node) {
+        return false;
+    }
+    let mut value = input_value(registry, node);
+    match operation {
+        "insertText" if !data.is_empty() => value.push_str(data),
+        "deleteContentBackward" if value.pop().is_some() => {}
+        _ => return false,
+    }
+    set_input_value(registry, node, value);
+    true
+}
+
+impl HTMLInputElementMembers for Dom {
+    /// <https://html.spec.whatwg.org/multipage/input.html#dom-input-defaultvalue>
+    fn default_value(_: Scope, _: &Rc<NodeRegistry>, this: &NodePtr) -> Fallible<String> {
+        Ok(attribute(this, "value").unwrap_or_default())
+    }
+
+    fn set_default_value(_: Scope, registry: &Rc<NodeRegistry>, this: &NodePtr, value: String) -> Fallible<()> {
+        set_attribute(registry, this, "value", &value);
+        Ok(())
+    }
+
+    /// <https://html.spec.whatwg.org/multipage/input.html#dom-input-value>
+    fn value(_: Scope, registry: &Rc<NodeRegistry>, this: &NodePtr) -> Fallible<String> {
+        Ok(input_value(registry, this))
+    }
+
+    fn set_value(_: Scope, registry: &Rc<NodeRegistry>, this: &NodePtr, value: String) -> Fallible<()> {
+        set_input_value(registry, this, value);
         Ok(())
     }
 }

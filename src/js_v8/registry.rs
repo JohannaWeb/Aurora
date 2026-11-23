@@ -37,6 +37,9 @@ pub(super) struct NodeRegistry {
     pub(super) ce_registry: super::custom_elements::CeRegistry,
     /// The document's focused element (`document.activeElement`), if any.
     pub(super) focused: RefCell<Option<NodePtr>>,
+    /// Current values of `<input>` elements whose value was set or edited
+    /// (HTML's "dirty value"), by node id; others show their `value` attribute.
+    pub(super) input_values: RefCell<BTreeMap<u32, String>>,
     /// When set, the native insertion path enqueues custom-element lifecycle
     /// reactions (connected/disconnected/attributeChanged) and the JS shim's
     /// upgrade path defers connectedCallback to the native trampoline. Default
@@ -68,6 +71,7 @@ impl NodeRegistry {
             snapshot_rebuild_reason: RefCell::new(None),
             ce_registry: super::custom_elements::CeRegistry::default(),
             focused: RefCell::new(None),
+            input_values: RefCell::new(BTreeMap::new()),
             native_ce_reactions: std::cell::Cell::new(native_ce_reactions_default(
                 std::env::var("AURORA_NATIVE_CE_REACTIONS").ok().as_deref(),
             )),

@@ -48,7 +48,10 @@ interface HTMLTableRowElement : HTMLElement {};
 interface HTMLTableCellElement : HTMLElement {};
 interface HTMLFormElement : HTMLElement {};
 interface HTMLLabelElement : HTMLElement {};
-interface HTMLInputElement : HTMLElement {};
+interface HTMLInputElement : HTMLElement {
+  [CEReactions] attribute DOMString defaultValue;
+  [CEReactions] attribute [LegacyNullToEmptyString] DOMString value;
+};
 interface HTMLButtonElement : HTMLElement {};
 interface HTMLSelectElement : HTMLElement {};
 interface HTMLDataListElement : HTMLElement {};
