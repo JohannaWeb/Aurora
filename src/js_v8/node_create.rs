@@ -277,49 +277,7 @@ pub(super) fn create_js_node<'s>(
             el.tag_name.eq_ignore_ascii_case("video") || el.tag_name.eq_ignore_ascii_case("audio");
         is_iframe = el.tag_name.eq_ignore_ascii_case("iframe");
         if el.tag_name != "#document-fragment" {
-            obj.set(
-                scope,
-                v8_str(scope, "tagName").into(),
-                v8_str(scope, &el.tag_name.to_uppercase()).into(),
-            );
-            obj.set(
-                scope,
-                v8_str(scope, "localName").into(),
-                v8_str(scope, &el.tag_name.to_lowercase()).into(),
-            );
-            if matches!(
-                el.tag_name.as_str(),
-                "svg"
-                    | "path"
-                    | "g"
-                    | "circle"
-                    | "rect"
-                    | "line"
-                    | "polyline"
-                    | "polygon"
-                    | "ellipse"
-                    | "text"
-                    | "use"
-                    | "defs"
-                    | "symbol"
-                    | "clipPath"
-                    | "linearGradient"
-                    | "radialGradient"
-                    | "stop"
-                    | "mask"
-                    | "pattern"
-                    | "marker"
-                    | "foreignObject"
-                    | "feGaussianBlur"
-                    | "feOffset"
-                    | "feColorMatrix"
-            ) {
-                obj.set(
-                    scope,
-                    v8_str(scope, "namespaceURI").into(),
-                    v8_str(scope, "http://www.w3.org/2000/svg").into(),
-                );
-            }
+            // tagName, localName, namespaceURI and prefix are on Element.prototype.
             // Initial attribute snapshot for wrapper props. `<a>` and `<area>`
             // get `href` from HTMLHyperlinkElementUtils on their prototype.
             let hyperlink = matches!(el.tag_name.to_ascii_lowercase().as_str(), "a" | "area");
@@ -692,6 +650,8 @@ pub(super) fn node_name(node: &NodePtr) -> String {
         Node::Element(el) if el.tag_name == "#document-fragment" => {
             "#document-fragment".to_string()
         }
+        // The element's tagName: SVG names keep their case.
+        Node::Element(el) if interface_for(node) == "SVGElement" => el.tag_name.clone(),
         Node::Element(el) => el.tag_name.to_uppercase(),
         Node::Text(_) => "#text".to_string(),
         Node::Comment(_) => "#comment".to_string(),

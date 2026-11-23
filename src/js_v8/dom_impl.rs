@@ -9,9 +9,9 @@ use super::bindings::{
     NonDocumentTypeChildNodeMembers, ParentNodeMembers,
 };
 use super::node_create::{
-    call_global_hook, child_nodes_of, create_js_node, inner_html_target, is_document_fragment,
-    node_name, node_type, parent_of, parsed_html_nodes, reclaim_composed_fragment, sibling_of,
-    track_fragment_children, v8_str,
+    call_global_hook, child_nodes_of, create_js_node, inner_html_target, interface_for,
+    is_document_fragment, node_name, node_type, parent_of, parsed_html_nodes,
+    reclaim_composed_fragment, sibling_of, track_fragment_children, v8_str,
 };
 use super::registry::NodeRegistry;
 use super::tree::{mutation, navigation};
@@ -529,7 +529,47 @@ fn remove_attribute(registry: &Rc<NodeRegistry>, this: &NodePtr, name: &str) {
 
 /// The `NS` forms ignore the namespace, as the hand-written ones did, until
 /// Aurora stores attribute namespaces.
+const HTML_NAMESPACE: &str = "http://www.w3.org/1999/xhtml";
+const SVG_NAMESPACE: &str = "http://www.w3.org/2000/svg";
+
+/// Aurora keeps no element namespace: SVG elements are the tags
+/// `interface_for` maps to SVGElement, every other element is HTML.
+fn is_svg(this: &NodePtr) -> bool {
+    interface_for(this) == "SVGElement"
+}
+
+fn tag_name_of(this: &NodePtr) -> String {
+    match &*this.borrow() {
+        Node::Element(el) => el.tag_name.clone(),
+        _ => String::new(),
+    }
+}
+
 impl ElementMembers for Dom {
+    /// <https://dom.spec.whatwg.org/#dom-element-namespaceuri>
+    fn namespace_uri(_: Scope, _: &Rc<NodeRegistry>, this: &NodePtr) -> Fallible<Option<String>> {
+        Ok(Some(if is_svg(this) { SVG_NAMESPACE } else { HTML_NAMESPACE }.to_string()))
+    }
+
+    /// Always null: Aurora keeps no prefixes.
+    fn prefix(_: Scope, _: &Rc<NodeRegistry>, _: &NodePtr) -> Fallible<Option<String>> {
+        Ok(None)
+    }
+
+    /// <https://dom.spec.whatwg.org/#dom-element-localname>: HTML names are
+    /// lowercase; SVG names keep their case (`clipPath`).
+    fn local_name(_: Scope, _: &Rc<NodeRegistry>, this: &NodePtr) -> Fallible<String> {
+        let name = tag_name_of(this);
+        Ok(if is_svg(this) { name } else { name.to_ascii_lowercase() })
+    }
+
+    /// <https://dom.spec.whatwg.org/#dom-element-tagname>: uppercase for
+    /// HTML elements (in an HTML document), as-is otherwise.
+    fn tag_name(_: Scope, _: &Rc<NodeRegistry>, this: &NodePtr) -> Fallible<String> {
+        let name = tag_name_of(this);
+        Ok(if is_svg(this) { name } else { name.to_ascii_uppercase() })
+    }
+
     /// <https://dom.spec.whatwg.org/#dom-element-id>
     fn id(_: Scope, _: &Rc<NodeRegistry>, this: &NodePtr) -> Fallible<String> {
         Ok(attribute(this, "id").unwrap_or_default())
