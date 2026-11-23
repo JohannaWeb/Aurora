@@ -62,7 +62,10 @@ operations (`appendChild`, `insertBefore`, `replaceChild`, `removeChild`,
 `compareDocumentPosition`, `contains`, `getRootNode`) and its attributes
 (`nodeType`, `nodeName`, `nodeValue`, `isConnected`,
 `ownerDocument`, `parentNode`, `parentElement`, `childNodes`, `firstChild`,
-`lastChild`, `previousSibling`, `nextSibling`, `textContent`); `Element.className`;
+`lastChild`, `previousSibling`, `nextSibling`, `textContent`); `Element`'s
+`id`, `className` and attribute methods (`get`/`set`/`remove`/`has`/`toggle`
+`Attribute`, their `NS` forms, `hasAttributes`; names match exactly and the
+`NS` forms ignore the namespace until Aurora stores one);
 the `ParentNode`, `NonDocumentTypeChildNode` and `InnerHTML` mixins; and all
 of `CharacterData` (`data`, `length`,
 `substringData`, `appendData`, `insertData`, `deleteData`, `replaceData`).

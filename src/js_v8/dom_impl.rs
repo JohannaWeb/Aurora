@@ -509,7 +509,135 @@ fn element_children(node: &NodePtr) -> impl DoubleEndedIterator<Item = NodePtr> 
     child_nodes_of(node).into_iter().filter(|child| node_type(child) == 1)
 }
 
+/// The element's attribute `name`, matched exactly. Aurora keeps no
+/// attribute namespaces or prefixes, and does not lowercase names yet.
+fn attribute(this: &NodePtr, name: &str) -> Option<String> {
+    match &*this.borrow() {
+        Node::Element(el) => el.attributes.get(name).cloned(),
+        _ => None,
+    }
+}
+
+fn set_attribute(registry: &Rc<NodeRegistry>, this: &NodePtr, name: &str, value: &str) {
+    mutation::apply_dom_mutation(registry, mutation::DomMutation::SetAttribute { node: this, name, value });
+}
+
+fn remove_attribute(registry: &Rc<NodeRegistry>, this: &NodePtr, name: &str) {
+    mutation::apply_dom_mutation(registry, mutation::DomMutation::RemoveAttribute { node: this, name });
+}
+
+/// The `NS` forms ignore the namespace, as the hand-written ones did, until
+/// Aurora stores attribute namespaces.
 impl ElementMembers for Dom {
+    /// <https://dom.spec.whatwg.org/#dom-element-id>
+    fn id(_: Scope, _: &Rc<NodeRegistry>, this: &NodePtr) -> Fallible<String> {
+        Ok(attribute(this, "id").unwrap_or_default())
+    }
+
+    /// Clearing removes the attribute, as the hand-written accessor did.
+    fn set_id(_: Scope, registry: &Rc<NodeRegistry>, this: &NodePtr, value: String) -> Fallible<()> {
+        if value.is_empty() {
+            remove_attribute(registry, this, "id");
+        } else {
+            set_attribute(registry, this, "id", &value);
+        }
+        Ok(())
+    }
+
+    /// <https://dom.spec.whatwg.org/#dom-element-hasattributes>
+    fn has_attributes(_: Scope, _: &Rc<NodeRegistry>, this: &NodePtr) -> Fallible<bool> {
+        Ok(matches!(&*this.borrow(), Node::Element(el) if !el.attributes.is_empty()))
+    }
+
+    /// <https://dom.spec.whatwg.org/#dom-element-getattribute>
+    fn get_attribute(_: Scope, _: &Rc<NodeRegistry>, this: &NodePtr, name: String) -> Fallible<Option<String>> {
+        Ok(attribute(this, &name))
+    }
+
+    fn get_attribute_ns(
+        _: Scope,
+        _: &Rc<NodeRegistry>,
+        this: &NodePtr,
+        _namespace: Option<String>,
+        local_name: String,
+    ) -> Fallible<Option<String>> {
+        Ok(attribute(this, &local_name))
+    }
+
+    /// <https://dom.spec.whatwg.org/#dom-element-setattribute>
+    fn set_attribute(_: Scope, registry: &Rc<NodeRegistry>, this: &NodePtr, name: String, value: String) -> Fallible<()> {
+        set_attribute(registry, this, &name, &value);
+        Ok(())
+    }
+
+    fn set_attribute_ns(
+        _: Scope,
+        registry: &Rc<NodeRegistry>,
+        this: &NodePtr,
+        _namespace: Option<String>,
+        qualified_name: String,
+        value: String,
+    ) -> Fallible<()> {
+        set_attribute(registry, this, &qualified_name, &value);
+        Ok(())
+    }
+
+    /// <https://dom.spec.whatwg.org/#dom-element-removeattribute>
+    fn remove_attribute(_: Scope, registry: &Rc<NodeRegistry>, this: &NodePtr, name: String) -> Fallible<()> {
+        remove_attribute(registry, this, &name);
+        Ok(())
+    }
+
+    fn remove_attribute_ns(
+        _: Scope,
+        registry: &Rc<NodeRegistry>,
+        this: &NodePtr,
+        _namespace: Option<String>,
+        local_name: String,
+    ) -> Fallible<()> {
+        remove_attribute(registry, this, &local_name);
+        Ok(())
+    }
+
+    /// <https://dom.spec.whatwg.org/#dom-element-toggleattribute>: adds the
+    /// attribute (as "") unless `force` is false, removes it unless `force`
+    /// is true, and returns whether it is present afterwards.
+    fn toggle_attribute(
+        _: Scope,
+        registry: &Rc<NodeRegistry>,
+        this: &NodePtr,
+        name: String,
+        force: Option<bool>,
+    ) -> Fallible<bool> {
+        let present = attribute(this, &name).is_some();
+        Ok(match (present, force) {
+            (false, None | Some(true)) => {
+                set_attribute(registry, this, &name, "");
+                true
+            }
+            (true, None | Some(false)) => {
+                remove_attribute(registry, this, &name);
+                false
+            }
+            (present, _) => present,
+        })
+    }
+
+    /// <https://dom.spec.whatwg.org/#dom-element-hasattribute>
+    fn has_attribute(_: Scope, _: &Rc<NodeRegistry>, this: &NodePtr, name: String) -> Fallible<bool> {
+        Ok(attribute(this, &name).is_some())
+    }
+
+    fn has_attribute_ns(
+        _: Scope,
+        _: &Rc<NodeRegistry>,
+        this: &NodePtr,
+        _namespace: Option<String>,
+        local_name: String,
+    ) -> Fallible<bool> {
+        Ok(attribute(this, &local_name).is_some())
+    }
+
     /// <https://dom.spec.whatwg.org/#dom-element-classname>
     fn class_name(_: Scope, _: &Rc<NodeRegistry>, this: &NodePtr) -> Fallible<String> {
         Ok(match &*this.borrow() {

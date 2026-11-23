@@ -60,7 +60,19 @@ interface DocumentType : Node {};
 interface DocumentFragment : Node {};
 interface ShadowRoot : DocumentFragment {};
 interface Element : Node {
+  [CEReactions] attribute DOMString id;
   [CEReactions] attribute DOMString className;
+
+  boolean hasAttributes();
+  DOMString? getAttribute(DOMString qualifiedName);
+  DOMString? getAttributeNS(DOMString? namespace, DOMString localName);
+  [CEReactions] undefined setAttribute(DOMString qualifiedName, DOMString value);
+  [CEReactions] undefined setAttributeNS(DOMString? namespace, DOMString qualifiedName, DOMString value);
+  [CEReactions] undefined removeAttribute(DOMString qualifiedName);
+  [CEReactions] undefined removeAttributeNS(DOMString? namespace, DOMString localName);
+  [CEReactions] boolean toggleAttribute(DOMString qualifiedName, optional boolean force);
+  boolean hasAttribute(DOMString qualifiedName);
+  boolean hasAttributeNS(DOMString? namespace, DOMString localName);
 };
 interface Attr : Node {};
 interface CharacterData : Node {

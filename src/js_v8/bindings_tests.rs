@@ -398,6 +398,55 @@ fn normalize_merges_adjacent_text_and_drops_empty_text() {
 }
 
 #[test]
+fn element_attributes_are_generated_and_toggle_attribute_works() {
+    let mut runtime = runtime();
+    assert_eq!(
+        runtime.eval_to_string(
+            r#"(() => {
+        const names = ['getAttribute', 'setAttribute', 'removeAttribute', 'hasAttribute',
+            'toggleAttribute', 'hasAttributes', 'getAttributeNS', 'setAttributeNS',
+            'removeAttributeNS', 'hasAttributeNS'];
+        const el = document.createElement('div');
+        const misplaced = names.filter(n => typeof Element.prototype[n] !== 'function'
+            || Object.prototype.hasOwnProperty.call(el, n));
+        const text = document.createTextNode('t');
+        const onText = names.filter(n => n in text);
+
+        el.setAttribute('a', 1);
+        const basics = [el.getAttribute('a'), el.getAttribute('missing'), el.hasAttribute('a'),
+            el.hasAttributes(), el.getAttributeNS(null, 'a'), el.hasAttributeNS('x', 'a')];
+        el.removeAttribute('a');
+        basics.push(el.hasAttributes());
+
+        const toggles = [el.toggleAttribute('t'), el.getAttribute('t'), el.toggleAttribute('t'),
+            el.hasAttribute('t'), el.toggleAttribute('t', false), el.hasAttribute('t'),
+            el.toggleAttribute('t', true), el.toggleAttribute('t', true), el.getAttribute('t')];
+
+        el.id = 'x';
+        const ids = [el.id, el.getAttribute('id'), Object.getOwnPropertyDescriptor(Element.prototype, 'id').set !== undefined];
+
+        const seen = [];
+        class Watched extends HTMLElement {
+            static get observedAttributes() { return ['flag']; }
+            attributeChangedCallback(name, oldValue, newValue) { seen.push(name + ':' + oldValue + '>' + newValue); }
+        }
+        customElements.define('x-watched', Watched);
+        const watched = document.createElement('x-watched');
+        watched.toggleAttribute('flag');
+        watched.setAttribute('flag', 'on');
+        watched.removeAttribute('flag');
+
+        let arity = '';
+        try { el.setAttribute('only-one'); } catch (e) { arity = e instanceof TypeError; }
+        return [misplaced.length, onText.join(';'), basics.join('|'), toggles.join('|'),
+            ids.join('|'), seen.join(','), arity].join(' / ');
+    })()"#
+        ),
+        Ok("0 /  / 1||true|true|1|true|false / true||false|false|false|false|true|true| / x|x|true / flag:null>,flag:>on,flag:on>null / true".into())
+    );
+}
+
+#[test]
 fn snake_case_member_names() {
     #[path = "../../codegen/generate.rs"]
     #[allow(dead_code)]
