@@ -179,7 +179,10 @@ def start_server(root: Path) -> http.server.ThreadingHTTPServer:
 def parse_report(output: str) -> dict:
     """Turn a run's output into {"harness": status, "subtests": {name: status}}."""
     report = None
-    for line in output.splitlines():
+    # Split on "\n" only: str.splitlines() also breaks at U+0085, U+2028,
+    # U+2029, \v and \f, which JSON.stringify leaves unescaped in subtest
+    # names and messages, so a report line containing one was lost.
+    for line in output.split("\n"):
         if line.startswith("[wpt] "):
             try:
                 report = json.loads(line[len("[wpt] ") :])

@@ -30,6 +30,17 @@ class ParseReportTests(unittest.TestCase):
         self.assertEqual(wpt.parse_report("[wpt] {not json")["harness"], "CRASH")
         self.assertEqual(wpt.parse_report('[wpt] {"missing": true}')["harness"], "CRASH")
 
+    def test_report_line_may_contain_unicode_line_breaks(self):
+        # JSON.stringify leaves these unescaped; str.splitlines() splits on them.
+        name = "class \u2028 \u2029 \u0085 \x0b \x0c"
+        line = "[wpt] " + json.dumps(
+            {"complete": True, "harness": {"status": 0, "message": None},
+             "tests": [{"name": name, "status": 1, "message": name}]},
+            ensure_ascii=False,
+        )
+        result = wpt.parse_report("noise\r\n" + line + "\r\nmore noise\n")
+        self.assertEqual(result, {"harness": "OK", "subtests": {name: "FAIL"}})
+
     def test_harness_error(self):
         self.assertEqual(wpt.parse_report(report([], harness=1))["harness"], "ERROR")
 
