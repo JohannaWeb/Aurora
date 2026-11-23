@@ -24,6 +24,13 @@ pub(super) enum Error {
 
 pub(super) type Fallible<T> = Result<T, Error>;
 
+/// A `(Node or DOMString)` argument.
+#[derive(Debug)]
+pub(super) enum NodeOrString {
+    Node(NodePtr),
+    String(String),
+}
+
 pub(super) fn install(scope: &mut v8::PinScope<'_, '_>, registry: &Rc<NodeRegistry>) {
     // Generated callbacks find the registry here rather than in per-function
     // data, so it lives exactly as long as the context.
@@ -197,7 +204,7 @@ fn check_arity(args: &v8::FunctionCallbackArguments, required: i32, context: &st
 /// WebIDL §3.2 conversions from JS values.
 #[allow(dead_code)] // Each conversion is used once an IDL member needs it.
 mod conv {
-    use super::{Error, Fallible, NodePtr, NodeRegistry, unwrap_node};
+    use super::{Error, Fallible, NodeOrString, NodePtr, NodeRegistry, unwrap_node};
 
     pub(super) fn string(
         scope: &mut v8::PinScope<'_, '_>,
@@ -248,6 +255,18 @@ mod conv {
     ) -> Fallible<NodePtr> {
         unwrap_node(scope, registry, v, interface)
             .ok_or_else(|| Error::Type(format!("parameter is not of type '{interface}'.")))
+    }
+
+    /// A Node stays a node; anything else converts to a string.
+    pub(super) fn node_or_string(
+        scope: &mut v8::PinScope<'_, '_>,
+        registry: &NodeRegistry,
+        v: v8::Local<v8::Value>,
+    ) -> Fallible<NodeOrString> {
+        match unwrap_node(scope, registry, v, "Node") {
+            Some(node) => Ok(NodeOrString::Node(node)),
+            None => string(scope, v).map(NodeOrString::String),
+        }
     }
 }
 

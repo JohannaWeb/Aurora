@@ -4,9 +4,9 @@
 //! argument per WebIDL by the time these run.
 
 use super::bindings::{
-    CharacterDataMembers, ElementMembers, Error, Fallible, GetRootNodeOptions,
-    HTMLHyperlinkElementUtilsMembers, InnerHTMLMembers, NodeMembers,
-    NonDocumentTypeChildNodeMembers, ParentNodeMembers,
+    CharacterDataMembers, ChildNodeMembers, DocumentMembers, ElementMembers, Error, Fallible,
+    GetRootNodeOptions, HTMLHyperlinkElementUtilsMembers, InnerHTMLMembers, NodeMembers,
+    NodeOrString, NonDocumentTypeChildNodeMembers, ParentNodeMembers,
 };
 use super::node_create::{
     call_global_hook, child_nodes_of, create_js_node, inner_html_target, interface_for,
@@ -14,6 +14,7 @@ use super::node_create::{
     reclaim_composed_fragment, sibling_of, track_fragment_children, v8_str,
 };
 use super::registry::NodeRegistry;
+use super::selectors::query;
 use super::tree::{mutation, navigation};
 use crate::dom::{Node, NodePtr};
 use std::rc::Rc;
@@ -679,6 +680,40 @@ impl ElementMembers for Dom {
         Ok(attribute(this, &local_name).is_some())
     }
 
+    /// <https://dom.spec.whatwg.org/#dom-element-closest>
+    fn closest(_: Scope, registry: &Rc<NodeRegistry>, this: &NodePtr, selectors: String) -> Fallible<Option<NodePtr>> {
+        let parsed = parse_selectors(&selectors)?;
+        let (root, document) = (selector_root(registry, this), document(registry, this));
+        let mut current = Some(this.clone());
+        while let Some(node) = current.filter(|n| node_type(n) == 1) {
+            if query::matches_any(&node, &parsed, &root) {
+                return Ok(Some(node));
+            }
+            current = parent_of(registry, &document, &node);
+        }
+        Ok(None)
+    }
+
+    /// <https://dom.spec.whatwg.org/#dom-element-matches>
+    fn matches(_: Scope, registry: &Rc<NodeRegistry>, this: &NodePtr, selectors: String) -> Fallible<bool> {
+        let parsed = parse_selectors(&selectors)?;
+        Ok(query::matches_any(this, &parsed, &selector_root(registry, this)))
+    }
+
+    fn webkit_matches_selector(scope: Scope, registry: &Rc<NodeRegistry>, this: &NodePtr, selectors: String) -> Fallible<bool> {
+        <Dom as ElementMembers>::matches(scope, registry, this, selectors)
+    }
+
+    /// <https://dom.spec.whatwg.org/#dom-element-getelementsbytagname>
+    fn get_elements_by_tag_name(_: Scope, _: &Rc<NodeRegistry>, this: &NodePtr, name: String) -> Fallible<Vec<NodePtr>> {
+        Ok(elements_by_tag_name(this, &name))
+    }
+
+    /// <https://dom.spec.whatwg.org/#dom-element-getelementsbyclassname>
+    fn get_elements_by_class_name(_: Scope, _: &Rc<NodeRegistry>, this: &NodePtr, names: String) -> Fallible<Vec<NodePtr>> {
+        Ok(elements_by_class_name(this, &names))
+    }
+
     /// <https://dom.spec.whatwg.org/#dom-element-classname>
     fn class_name(_: Scope, _: &Rc<NodeRegistry>, this: &NodePtr) -> Fallible<String> {
         Ok(match &*this.borrow() {
@@ -699,7 +734,95 @@ impl ElementMembers for Dom {
     }
 }
 
+/// The root selectors match against: the node's shadow root when it is in
+/// one (ShadyDOM-scoped CSS), otherwise the document.
+fn selector_root(registry: &NodeRegistry, this: &NodePtr) -> NodePtr {
+    use crate::dom::ShadowTreeBackend;
+    crate::dom::SyntheticShadowTreeBackend
+        .nearest_shadow_root(this)
+        .unwrap_or_else(|| document(registry, this))
+}
+
+/// <https://dom.spec.whatwg.org/#scope-match-a-selectors-string>: an
+/// invalid selector throws SyntaxError.
+fn parse_selectors(selectors: &str) -> Fallible<query::Selectors> {
+    query::parse(selectors).ok_or_else(|| Error::Dom {
+        name: "SyntaxError",
+        message: format!("'{selectors}' is not a valid selector."),
+    })
+}
+
+/// The node's descendant elements in tree order (template contents and
+/// shadow trees are not descendants).
+fn descendant_elements(node: &NodePtr, out: &mut Vec<NodePtr>) {
+    for child in child_nodes_of(node) {
+        if node_type(&child) == 1 {
+            out.push(child.clone());
+        }
+        descendant_elements(&child, out);
+    }
+}
+
+/// <https://dom.spec.whatwg.org/#concept-getelementsbytagname>. HTML
+/// elements match case-insensitively, SVG elements exactly.
+fn elements_by_tag_name(root: &NodePtr, name: &str) -> Vec<NodePtr> {
+    let mut all = Vec::new();
+    descendant_elements(root, &mut all);
+    if name == "*" {
+        return all;
+    }
+    all.retain(|el| {
+        let tag = tag_name_of(el);
+        if is_svg(el) { tag == name } else { tag.eq_ignore_ascii_case(name) }
+    });
+    all
+}
+
+/// <https://dom.spec.whatwg.org/#concept-getelementsbyclassname>: elements
+/// carrying every class in `names` (split on ASCII whitespace).
+fn elements_by_class_name(root: &NodePtr, names: &str) -> Vec<NodePtr> {
+    let ascii_ws = |c: char| matches!(c, '\t' | '\n' | '\x0C' | '\r' | ' ');
+    let wanted: Vec<&str> = names.split(ascii_ws).filter(|s| !s.is_empty()).collect();
+    if wanted.is_empty() {
+        return Vec::new();
+    }
+    let mut all = Vec::new();
+    descendant_elements(root, &mut all);
+    all.retain(|el| {
+        let class = attribute(el, "class").unwrap_or_default();
+        let have: Vec<&str> = class.split(ascii_ws).collect();
+        wanted.iter().all(|name| have.contains(name))
+    });
+    all
+}
+
+impl DocumentMembers for Dom {
+    /// <https://dom.spec.whatwg.org/#dom-document-getelementsbytagname>,
+    /// as a fresh array until HTMLCollection exists.
+    fn get_elements_by_tag_name(_: Scope, _: &Rc<NodeRegistry>, this: &NodePtr, name: String) -> Fallible<Vec<NodePtr>> {
+        Ok(elements_by_tag_name(this, &name))
+    }
+
+    /// <https://dom.spec.whatwg.org/#dom-document-getelementsbyclassname>
+    fn get_elements_by_class_name(_: Scope, _: &Rc<NodeRegistry>, this: &NodePtr, names: String) -> Fallible<Vec<NodePtr>> {
+        Ok(elements_by_class_name(this, &names))
+    }
+}
+
 impl ParentNodeMembers for Dom {
+    /// <https://dom.spec.whatwg.org/#dom-parentnode-queryselector>
+    fn query_selector(_: Scope, registry: &Rc<NodeRegistry>, this: &NodePtr, selectors: String) -> Fallible<Option<NodePtr>> {
+        let parsed = parse_selectors(&selectors)?;
+        Ok(query::first_match(&selector_root(registry, this), &parsed, this))
+    }
+
+    /// <https://dom.spec.whatwg.org/#dom-parentnode-queryselectorall>, as a
+    /// fresh array until NodeList exists.
+    fn query_selector_all(_: Scope, registry: &Rc<NodeRegistry>, this: &NodePtr, selectors: String) -> Fallible<Vec<NodePtr>> {
+        let parsed = parse_selectors(&selectors)?;
+        Ok(query::all_matches(&selector_root(registry, this), &parsed, this))
+    }
+
     /// <https://dom.spec.whatwg.org/#dom-parentnode-children>, as a fresh
     /// array until HTMLCollection exists.
     fn children(_: Scope, _: &Rc<NodeRegistry>, this: &NodePtr) -> Fallible<Vec<NodePtr>> {
@@ -900,6 +1023,117 @@ impl HTMLHyperlinkElementUtilsMembers for Dom {
             url::quirks::set_hash(url, &value);
             Ok(())
         });
+        Ok(())
+    }
+}
+
+// --- ChildNode ---------------------------------------------------------------
+
+/// <https://dom.spec.whatwg.org/#converting-nodes-into-a-node>: strings
+/// become text nodes; several nodes are gathered into a new fragment.
+fn nodes_into_a_node(registry: &Rc<NodeRegistry>, nodes: Vec<NodeOrString>) -> Fallible<Option<NodePtr>> {
+    let mut nodes: Vec<NodePtr> = nodes
+        .into_iter()
+        .map(|item| match item {
+            NodeOrString::Node(node) => node,
+            NodeOrString::String(text) => Node::text(text),
+        })
+        .collect();
+    if nodes.len() <= 1 {
+        return Ok(nodes.pop());
+    }
+    let fragment = Node::document_fragment(Vec::new());
+    for node in &nodes {
+        if let Some(message) = mutation::hierarchy_error(&fragment, node) {
+            return Err(Error::Dom { name: "HierarchyRequestError", message: message.into() });
+        }
+        mutation::apply_dom_mutation(registry, mutation::DomMutation::AppendChild { parent: &fragment, child: node });
+    }
+    Ok(Some(fragment))
+}
+
+fn given_nodes(nodes: &[NodeOrString]) -> Vec<NodePtr> {
+    nodes
+        .iter()
+        .filter_map(|item| match item {
+            NodeOrString::Node(node) => Some(node.clone()),
+            NodeOrString::String(_) => None,
+        })
+        .collect()
+}
+
+/// The first sibling of `this` in direction `step` (-1 before, 1 after) that
+/// is not one of `excluded`.
+fn viable_sibling(registry: &Rc<NodeRegistry>, this: &NodePtr, step: i32, excluded: &[NodePtr]) -> Option<NodePtr> {
+    let document = document(registry, this);
+    let mut current = sibling_of(registry, &document, this, step, false);
+    while let Some(node) = current {
+        if !excluded.iter().any(|n| Rc::ptr_eq(n, &node)) {
+            return Some(node);
+        }
+        current = sibling_of(registry, &document, &node, step, false);
+    }
+    None
+}
+
+impl ChildNodeMembers for Dom {
+    /// <https://dom.spec.whatwg.org/#dom-childnode-before>
+    fn before(scope: Scope, registry: &Rc<NodeRegistry>, this: &NodePtr, nodes: Vec<NodeOrString>) -> Fallible<()> {
+        let Some(parent) = parent_of(registry, &document(registry, this), this) else { return Ok(()) };
+        let previous = viable_sibling(registry, this, -1, &given_nodes(&nodes));
+        let Some(node) = nodes_into_a_node(registry, nodes)? else { return Ok(()) };
+        let reference = match previous {
+            Some(previous) => sibling_of(registry, &document(registry, this), &previous, 1, false),
+            None => navigation::first_child(&parent, false),
+        };
+        insert(scope, registry, &parent, &node, |parent, node| mutation::DomMutation::InsertBefore {
+            parent,
+            new_child: node,
+            ref_child: reference.as_ref(),
+        })
+    }
+
+    /// <https://dom.spec.whatwg.org/#dom-childnode-after>
+    fn after(scope: Scope, registry: &Rc<NodeRegistry>, this: &NodePtr, nodes: Vec<NodeOrString>) -> Fallible<()> {
+        let Some(parent) = parent_of(registry, &document(registry, this), this) else { return Ok(()) };
+        let next = viable_sibling(registry, this, 1, &given_nodes(&nodes));
+        let Some(node) = nodes_into_a_node(registry, nodes)? else { return Ok(()) };
+        insert(scope, registry, &parent, &node, |parent, node| mutation::DomMutation::InsertBefore {
+            parent,
+            new_child: node,
+            ref_child: next.as_ref(),
+        })
+    }
+
+    /// <https://dom.spec.whatwg.org/#dom-childnode-replacewith>
+    fn replace_with(scope: Scope, registry: &Rc<NodeRegistry>, this: &NodePtr, nodes: Vec<NodeOrString>) -> Fallible<()> {
+        let document = document(registry, this);
+        let Some(parent) = parent_of(registry, &document, this) else { return Ok(()) };
+        let next = viable_sibling(registry, this, 1, &given_nodes(&nodes));
+        let node = nodes_into_a_node(registry, nodes)?;
+        let still_child = parent_of(registry, &document, this).is_some_and(|p| Rc::ptr_eq(&p, &parent));
+        match node {
+            Some(node) if still_child => insert(scope, registry, &parent, &node, |parent, node| {
+                mutation::DomMutation::ReplaceChild { parent, new_child: node, old_child: this }
+            }),
+            Some(node) => insert(scope, registry, &parent, &node, |parent, node| mutation::DomMutation::InsertBefore {
+                parent,
+                new_child: node,
+                ref_child: next.as_ref(),
+            }),
+            None => {
+                mutation::apply_dom_mutation(registry, mutation::DomMutation::RemoveChild { parent: &parent, child: this });
+                registry.mark_layout_dirty(&parent);
+                Ok(())
+            }
+        }
+    }
+
+    /// <https://dom.spec.whatwg.org/#dom-childnode-remove>
+    fn remove(_: Scope, registry: &Rc<NodeRegistry>, this: &NodePtr) -> Fallible<()> {
+        if let Some(parent) = parent_of(registry, &document(registry, this), this) {
+            mutation::apply_dom_mutation(registry, mutation::DomMutation::RemoveChild { parent: &parent, child: this });
+        }
         Ok(())
     }
 }

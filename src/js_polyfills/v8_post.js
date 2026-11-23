@@ -220,14 +220,11 @@
 
     [
         'appendChild', 'insertBefore', 'removeChild',
-        'append', 'prepend', 'before', 'after', 'remove',
-        'replaceChildren', 'replaceWith'
+        'append', 'prepend', 'replaceChildren'
     ].forEach(function(name) {
         installPrototypeForward(globalThis.Node && Node.prototype, name);
     });
     [
-        'querySelector', 'querySelectorAll', 'getElementsByTagName',
-        'getElementsByClassName', 'matches', 'closest',
         'insertAdjacentHTML', 'insertAdjacentElement', 'insertAdjacentText'
     ].forEach(function(name) {
         installPrototypeForward(globalThis.Element && Element.prototype, name);
@@ -579,10 +576,6 @@
         if (state.currentSrc) el.src = state.currentSrc;
     };
 
-    document.getElementsByClassName = function(cls) {
-        var sel = '.' + String(cls).trim().split(/\s+/).join('.');
-        return document.querySelectorAll(sel);
-    };
     document.getElementsByName = function(name) {
         return document.querySelectorAll('[name="' + String(name) + '"]');
     };

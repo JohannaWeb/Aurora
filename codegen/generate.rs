@@ -42,6 +42,7 @@ fn base_type(kind: &TypeKind) -> String {
         TypeKind::Undefined => "()".into(),
         TypeKind::Interface(_) => "NodePtr".into(),
         TypeKind::NodeArray => "Vec<NodePtr>".into(),
+        TypeKind::NodeOrString => "NodeOrString".into(),
         TypeKind::Dictionary(name) => name.clone(),
     }
 }
@@ -55,6 +56,9 @@ fn rust_type(ty: &Type) -> String {
 }
 
 fn arg_type(arg: &Argument) -> String {
+    if arg.variadic {
+        return format!("Vec<{}>", base_type(&arg.ty.kind));
+    }
     // An optional argument without a default can be absent: `Option`. When it
     // is also nullable, null and absent both map to `None`.
     if arg.optional && arg.default.is_none() && !arg.ty.nullable {
@@ -78,6 +82,7 @@ fn convert(kind: &TypeKind) -> String {
         }
         TypeKind::Interface(name) => format!("conv::interface(scope, registry, v, {name:?})"),
         TypeKind::Dictionary(name) => format!("convert_dictionary_{name}(scope, registry, v)"),
+        TypeKind::NodeOrString => "conv::node_or_string(scope, registry, v)".into(),
         TypeKind::Undefined | TypeKind::NodeArray => unreachable!("rejected by the parser"),
     }
 }
@@ -142,7 +147,7 @@ fn callback(
     ce_reactions: bool,
     error_context: &str,
 ) {
-    let required = args.iter().filter(|a| !a.optional).count();
+    let required = args.iter().filter(|a| !a.optional && !a.variadic).count();
     let mut body = format!("let this = unwrap_this(scope, registry, args.this(), {interface:?})?;\n");
     if required > 0 {
         writeln!(body, "check_arity(args, {required}, {error_context:?})?;").unwrap();
@@ -150,8 +155,19 @@ fn callback(
     let mut names = Vec::new();
     for (i, arg) in args.iter().enumerate() {
         let name = format!("arg{i}");
-        writeln!(body, "let v = args.get({i});").unwrap();
-        body.push_str(&convert_arg(arg, &name));
+        if arg.variadic {
+            writeln!(
+                body,
+                "let mut {name}: {} = Vec::new();\nfor index in {i}..args.length() {{ let v = args.get(index); \
+                 {name}.push({}?); }}",
+                arg_type(arg),
+                convert(&arg.ty.kind)
+            )
+            .unwrap();
+        } else {
+            writeln!(body, "let v = args.get({i});").unwrap();
+            body.push_str(&convert_arg(arg, &name));
+        }
         names.push(name);
     }
     if ce_reactions {
@@ -251,7 +267,7 @@ fn emit(out: &mut String, install: &mut String, interface: &str, owner: &str, me
                     let set_name = format!("set_{}", rust_name.trim_start_matches("r#"));
                     writeln!(trait_fns, "fn {set_name}({receiver}, value: {}) -> Fallible<()>;", rust_type(ty))
                         .unwrap();
-                    let value = Argument { name: "value".into(), ty: ty.clone(), optional: false, default: None };
+                    let value = Argument { name: "value".into(), ty: ty.clone(), optional: false, default: None, variadic: false };
                     let context = format!("Failed to set the '{attr}' property on '{name}'");
                     callback(out, name, owner, &setter, &set_name, &[value], "()", *ce_reactions, &context);
                     format!("Some(accessor(scope, {setter}, \"set {attr}\", 1))")
@@ -284,7 +300,7 @@ fn emit(out: &mut String, install: &mut String, interface: &str, owner: &str, me
                     .unwrap();
                 let context = format!("Failed to execute '{op}' on '{name}'");
                 callback(out, name, owner, &fn_name, &rust_name, args, &rust_type(ret), *ce_reactions, &context);
-                let length = args.iter().filter(|a| !a.optional).count();
+                let length = args.iter().filter(|a| !a.optional && !a.variadic).count();
                 writeln!(
                     install,
                     "let function = accessor(scope, {fn_name}, {op:?}, {length});\n\
@@ -326,6 +342,7 @@ pub fn dictionary(dictionary: &Dictionary, all: &[Dictionary]) -> String {
             ty: member.ty.clone(),
             optional: !member.required,
             default: member.default.clone(),
+            variadic: false,
         };
         writeln!(fields, "    pub(super) {field}: {},", arg_type(&arg)).unwrap();
         writeln!(

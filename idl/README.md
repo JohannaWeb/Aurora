@@ -36,13 +36,16 @@ unsupported IDL fails the build instead of producing wrong bindings:
 - `const` integer or boolean members, installed on the interface object and
   its prototype (read-only, enumerable, non-configurable).
 - `[readonly] attribute T name;` as accessor properties on the prototype.
-- `T name(args);` regular operations. Overloads, variadics and `any` are
-  rejected; `optional` arguments may have literal defaults.
+- `T name(args);` regular operations. Overloads and `any` are rejected;
+  `optional` arguments may have literal defaults, and a final `T... name`
+  argument collects the remaining arguments into a `Vec`.
 - Types: `DOMString`/`USVString`, `boolean`, all integer types, `float`,
   `double` and their `unrestricted` forms, interface types, `undefined` as
-  a return type, and `T?`. `NodeList` and `HTMLCollection` are allowed only
-  as non-null read-only attribute types and return a fresh array, as the
-  hand-written accessors did, until those interfaces exist.
+  a return type, `T?`, and the union `(Node or DOMString)` (a
+  `NodeOrString`: nodes stay nodes, anything else converts to a string). `NodeList` and `HTMLCollection` are allowed only
+  as non-null read-only attribute and operation result types, and return
+  a fresh array, as the hand-written members did, until those interfaces
+  exist.
 - `stringifier attribute DOMString name;` (string types only): the attribute
   plus a `toString()` that returns it.
 - Extended attributes: `[CEReactions]` and `[NewObject]` (no generated
@@ -67,7 +70,14 @@ operations (`appendChild`, `insertBefore`, `replaceChild`, `removeChild`,
 `lastChild`, `previousSibling`, `nextSibling`, `textContent`); `Element`'s
 `namespaceURI`, `prefix`, `localName`, `tagName` (an element is SVG when
 `interface_for` maps its tag to SVGElement, otherwise HTML; SVG names keep
-their case), `id`, `className` and attribute methods (`get`/`set`/`remove`/`has`/`toggle`
+their case), `id`, `className`, selector queries (`querySelector`/`All` on
+ParentNode, `matches`, `webkitMatchesSelector`, `closest`; invalid selectors
+throw SyntaxError, though the parser still accepts some unknown
+pseudo-classes; matching is scoped to the node's shadow root),
+`getElementsByTagName`/`ClassName` on Element and Document (descendants
+only, as arrays), the ChildNode mixin (`before`, `after`, `replaceWith`,
+`remove` on Element, CharacterData and DocumentType; no @@unscopables yet),
+and attribute methods (`get`/`set`/`remove`/`has`/`toggle`
 `Attribute`, their `NS` forms, `hasAttributes`; names match exactly and the
 `NS` forms ignore the namespace until Aurora stores one); the
 `HTMLHyperlinkElementUtils` mixin on `<a>` and `<area>` (`href`, `origin`,
