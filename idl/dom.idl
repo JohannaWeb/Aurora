@@ -40,6 +40,8 @@ interface Node : EventTarget {
   [CEReactions] attribute DOMString? nodeValue;
   [CEReactions] attribute DOMString? textContent;
 
+  [CEReactions] undefined normalize();
+
   [CEReactions, NewObject] Node cloneNode(optional boolean subtree = false);
   boolean hasChildNodes();
   boolean isEqualNode(Node? otherNode);

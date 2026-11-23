@@ -236,7 +236,6 @@ pub(super) fn create_js_node<'s>(
         insert_adjacent_text,
         node_external,
     );
-    install_method(scope, template, "normalize", normalize_node, node_external);
     install_method(
         scope,
         template,
@@ -2065,13 +2064,6 @@ fn insert_adjacent_element(
     } else {
         retval.set(v8::null(scope).into());
     }
-}
-
-fn normalize_node(
-    _scope: &mut v8::PinScope<'_, '_>,
-    _args: v8::FunctionCallbackArguments,
-    mut _retval: v8::ReturnValue,
-) {
 }
 
 fn get_elements_by_class_name(

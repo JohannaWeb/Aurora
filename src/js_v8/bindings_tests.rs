@@ -367,6 +367,37 @@ fn node_value_equality_and_document_position() {
 }
 
 #[test]
+fn normalize_merges_adjacent_text_and_drops_empty_text() {
+    let mut runtime = runtime();
+    assert_eq!(
+        runtime.eval_to_string(
+            r#"(() => {
+        const div = document.createElement('div');
+        const first = div.appendChild(document.createTextNode('a'));
+        div.appendChild(document.createTextNode(''));
+        div.appendChild(document.createTextNode('b'));
+        const b = div.appendChild(document.createElement('b'));
+        b.appendChild(document.createTextNode(''));
+        b.appendChild(document.createTextNode('x'));
+        b.appendChild(document.createTextNode('y'));
+        div.appendChild(document.createComment('c'));
+        div.appendChild(document.createTextNode(''));
+        const template = div.appendChild(document.createElement('template'));
+        template.content.appendChild(document.createTextNode('t1'));
+        template.content.appendChild(document.createTextNode('t2'));
+        document.body.appendChild(div);
+        const result = div.normalize();
+        return [result, div.childNodes.length, div.firstChild === first, first.data,
+            b.childNodes.length, b.firstChild.data, template.content.childNodes.length,
+            div.textContent, Object.prototype.hasOwnProperty.call(div, 'normalize'),
+            Element.prototype.hasOwnProperty('normalize')].join('|');
+    })()"#
+        ),
+        Ok("|4|true|ab|1|xy|2|abxy|false|false".into())
+    );
+}
+
+#[test]
 fn snake_case_member_names() {
     #[path = "../../codegen/generate.rs"]
     #[allow(dead_code)]

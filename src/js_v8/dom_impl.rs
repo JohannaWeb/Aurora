@@ -114,6 +114,15 @@ impl NodeMembers for Dom {
         Ok(other.is_some_and(|other| mutation::contains_ptr(this, &other)))
     }
 
+    /// <https://dom.spec.whatwg.org/#dom-node-normalize>: in every
+    /// descendant run of adjacent text nodes, the first takes the run's
+    /// joined data and the rest are removed; empty text nodes are removed.
+    /// Template contents and shadow trees are not descendants.
+    fn normalize(_: Scope, registry: &Rc<NodeRegistry>, this: &NodePtr) -> Fallible<()> {
+        normalize_children(registry, this);
+        Ok(())
+    }
+
     /// <https://dom.spec.whatwg.org/#dom-node-clonenode>
     fn clone_node(scope: Scope, registry: &Rc<NodeRegistry>, this: &NodePtr, subtree: bool) -> Fallible<NodePtr> {
         let clone = mutation::clone_node(this, subtree);
@@ -306,6 +315,54 @@ fn insert<'n>(
     }
     registry.mark_layout_dirty(parent);
     Ok(())
+}
+
+fn text_data(node: &NodePtr) -> Option<String> {
+    match &*node.borrow() {
+        Node::Text(text) => Some(text.content.clone()),
+        _ => None,
+    }
+}
+
+fn normalize_children(registry: &Rc<NodeRegistry>, parent: &NodePtr) {
+    let mut run: Option<(NodePtr, String)> = None;
+    let mut changed = false;
+    for child in child_nodes_of(parent) {
+        let Some(data) = text_data(&child) else {
+            if let Some((first, joined)) = run.take() {
+                changed |= finish_text_run(registry, &first, joined);
+            }
+            normalize_children(registry, &child);
+            continue;
+        };
+        match &mut run {
+            Some((_, joined)) => {
+                joined.push_str(&data);
+                mutation::apply_dom_mutation(registry, mutation::DomMutation::RemoveChild { parent, child: &child });
+                changed = true;
+            }
+            None if data.is_empty() => {
+                mutation::apply_dom_mutation(registry, mutation::DomMutation::RemoveChild { parent, child: &child });
+                changed = true;
+            }
+            None => run = Some((child, data)),
+        }
+    }
+    if let Some((first, joined)) = run {
+        changed |= finish_text_run(registry, &first, joined);
+    }
+    if changed {
+        registry.mark_layout_dirty(parent);
+    }
+}
+
+/// Gives a run's first text node the run's joined data, if that changed it.
+fn finish_text_run(registry: &Rc<NodeRegistry>, first: &NodePtr, joined: String) -> bool {
+    if text_data(first).as_deref() == Some(joined.as_str()) {
+        return false;
+    }
+    mutation::apply_dom_mutation(registry, mutation::DomMutation::SetTextContent { node: first, text: joined });
+    true
 }
 
 /// `node` and its ancestors, root first.

@@ -230,8 +230,7 @@
         'getElementsByClassName', 'matches', 'closest',
         'getAttribute', 'setAttribute', 'removeAttribute', 'hasAttribute',
         'toggleAttribute',
-        'insertAdjacentHTML', 'insertAdjacentElement', 'insertAdjacentText',
-        'normalize'
+        'insertAdjacentHTML', 'insertAdjacentElement', 'insertAdjacentText'
     ].forEach(function(name) {
         installPrototypeForward(globalThis.Element && Element.prototype, name);
         installPrototypeForward(globalThis.HTMLElement && HTMLElement.prototype, name);
