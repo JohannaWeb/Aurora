@@ -2430,6 +2430,24 @@ mod tests {
     }
 
     #[test]
+    fn layout_queries_on_text_and_comment_nodes_do_not_panic() {
+        // Scrolling measures `document_height`, which walks every child,
+        // text and comment nodes included. Those have no layout box; reading
+        // one used to panic in blitz-dom's `Node::layout_data`.
+        let text = Node::text("tall text".to_string());
+        let block = Node::element_with_attributes("div", attr("id", "block"), vec![text.clone()]);
+        let comment = Node::comment("note".to_string());
+        let document = styled_document(
+            "body{margin:0} #block{height:300px}",
+            vec![block, comment],
+        );
+        let blitz_doc = laid_out(&document);
+
+        assert_eq!(blitz_doc.document_height(), 300.0);
+        assert_eq!(blitz_doc.dom_node_layout_metrics(&text).map(|m| m.width), Some(0.0));
+    }
+
+    #[test]
     fn stylesheet_load_for_removed_node_is_ignored() {
         // Scripts can remove a <link> before its stylesheet finishes loading;
         // the late response must not panic and poison later frames.
