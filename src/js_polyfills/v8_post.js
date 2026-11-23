@@ -228,8 +228,6 @@
     [
         'querySelector', 'querySelectorAll', 'getElementsByTagName',
         'getElementsByClassName', 'matches', 'closest',
-        'getAttribute', 'setAttribute', 'removeAttribute', 'hasAttribute',
-        'toggleAttribute',
         'insertAdjacentHTML', 'insertAdjacentElement', 'insertAdjacentText'
     ].forEach(function(name) {
         installPrototypeForward(globalThis.Element && Element.prototype, name);
