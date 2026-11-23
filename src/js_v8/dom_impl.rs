@@ -4,7 +4,7 @@
 //! argument per WebIDL by the time these run.
 
 use super::bindings::{
-    CharacterDataMembers, ElementMembers, Error, Fallible, GetRootNodeOptions,
+    CharacterDataMembers, DocumentMembers, ElementMembers, Error, Fallible, GetRootNodeOptions,
     HTMLHyperlinkElementUtilsMembers, InnerHTMLMembers, NodeMembers,
     NonDocumentTypeChildNodeMembers, ParentNodeMembers,
 };
@@ -14,6 +14,7 @@ use super::node_create::{
     reclaim_composed_fragment, sibling_of, track_fragment_children, v8_str,
 };
 use super::registry::NodeRegistry;
+use super::selectors::query;
 use super::tree::{mutation, navigation};
 use crate::dom::{Node, NodePtr};
 use std::rc::Rc;
@@ -679,6 +680,40 @@ impl ElementMembers for Dom {
         Ok(attribute(this, &local_name).is_some())
     }
 
+    /// <https://dom.spec.whatwg.org/#dom-element-closest>
+    fn closest(_: Scope, registry: &Rc<NodeRegistry>, this: &NodePtr, selectors: String) -> Fallible<Option<NodePtr>> {
+        let parsed = parse_selectors(&selectors)?;
+        let (root, document) = (selector_root(registry, this), document(registry, this));
+        let mut current = Some(this.clone());
+        while let Some(node) = current.filter(|n| node_type(n) == 1) {
+            if query::matches_any(&node, &parsed, &root) {
+                return Ok(Some(node));
+            }
+            current = parent_of(registry, &document, &node);
+        }
+        Ok(None)
+    }
+
+    /// <https://dom.spec.whatwg.org/#dom-element-matches>
+    fn matches(_: Scope, registry: &Rc<NodeRegistry>, this: &NodePtr, selectors: String) -> Fallible<bool> {
+        let parsed = parse_selectors(&selectors)?;
+        Ok(query::matches_any(this, &parsed, &selector_root(registry, this)))
+    }
+
+    fn webkit_matches_selector(scope: Scope, registry: &Rc<NodeRegistry>, this: &NodePtr, selectors: String) -> Fallible<bool> {
+        <Dom as ElementMembers>::matches(scope, registry, this, selectors)
+    }
+
+    /// <https://dom.spec.whatwg.org/#dom-element-getelementsbytagname>
+    fn get_elements_by_tag_name(_: Scope, _: &Rc<NodeRegistry>, this: &NodePtr, name: String) -> Fallible<Vec<NodePtr>> {
+        Ok(elements_by_tag_name(this, &name))
+    }
+
+    /// <https://dom.spec.whatwg.org/#dom-element-getelementsbyclassname>
+    fn get_elements_by_class_name(_: Scope, _: &Rc<NodeRegistry>, this: &NodePtr, names: String) -> Fallible<Vec<NodePtr>> {
+        Ok(elements_by_class_name(this, &names))
+    }
+
     /// <https://dom.spec.whatwg.org/#dom-element-classname>
     fn class_name(_: Scope, _: &Rc<NodeRegistry>, this: &NodePtr) -> Fallible<String> {
         Ok(match &*this.borrow() {
@@ -699,7 +734,95 @@ impl ElementMembers for Dom {
     }
 }
 
+/// The root selectors match against: the node's shadow root when it is in
+/// one (ShadyDOM-scoped CSS), otherwise the document.
+fn selector_root(registry: &NodeRegistry, this: &NodePtr) -> NodePtr {
+    use crate::dom::ShadowTreeBackend;
+    crate::dom::SyntheticShadowTreeBackend
+        .nearest_shadow_root(this)
+        .unwrap_or_else(|| document(registry, this))
+}
+
+/// <https://dom.spec.whatwg.org/#scope-match-a-selectors-string>: an
+/// invalid selector throws SyntaxError.
+fn parse_selectors(selectors: &str) -> Fallible<query::Selectors> {
+    query::parse(selectors).ok_or_else(|| Error::Dom {
+        name: "SyntaxError",
+        message: format!("'{selectors}' is not a valid selector."),
+    })
+}
+
+/// The node's descendant elements in tree order (template contents and
+/// shadow trees are not descendants).
+fn descendant_elements(node: &NodePtr, out: &mut Vec<NodePtr>) {
+    for child in child_nodes_of(node) {
+        if node_type(&child) == 1 {
+            out.push(child.clone());
+        }
+        descendant_elements(&child, out);
+    }
+}
+
+/// <https://dom.spec.whatwg.org/#concept-getelementsbytagname>. HTML
+/// elements match case-insensitively, SVG elements exactly.
+fn elements_by_tag_name(root: &NodePtr, name: &str) -> Vec<NodePtr> {
+    let mut all = Vec::new();
+    descendant_elements(root, &mut all);
+    if name == "*" {
+        return all;
+    }
+    all.retain(|el| {
+        let tag = tag_name_of(el);
+        if is_svg(el) { tag == name } else { tag.eq_ignore_ascii_case(name) }
+    });
+    all
+}
+
+/// <https://dom.spec.whatwg.org/#concept-getelementsbyclassname>: elements
+/// carrying every class in `names` (split on ASCII whitespace).
+fn elements_by_class_name(root: &NodePtr, names: &str) -> Vec<NodePtr> {
+    let ascii_ws = |c: char| matches!(c, '\t' | '\n' | '\x0C' | '\r' | ' ');
+    let wanted: Vec<&str> = names.split(ascii_ws).filter(|s| !s.is_empty()).collect();
+    if wanted.is_empty() {
+        return Vec::new();
+    }
+    let mut all = Vec::new();
+    descendant_elements(root, &mut all);
+    all.retain(|el| {
+        let class = attribute(el, "class").unwrap_or_default();
+        let have: Vec<&str> = class.split(ascii_ws).collect();
+        wanted.iter().all(|name| have.contains(name))
+    });
+    all
+}
+
+impl DocumentMembers for Dom {
+    /// <https://dom.spec.whatwg.org/#dom-document-getelementsbytagname>,
+    /// as a fresh array until HTMLCollection exists.
+    fn get_elements_by_tag_name(_: Scope, _: &Rc<NodeRegistry>, this: &NodePtr, name: String) -> Fallible<Vec<NodePtr>> {
+        Ok(elements_by_tag_name(this, &name))
+    }
+
+    /// <https://dom.spec.whatwg.org/#dom-document-getelementsbyclassname>
+    fn get_elements_by_class_name(_: Scope, _: &Rc<NodeRegistry>, this: &NodePtr, names: String) -> Fallible<Vec<NodePtr>> {
+        Ok(elements_by_class_name(this, &names))
+    }
+}
+
 impl ParentNodeMembers for Dom {
+    /// <https://dom.spec.whatwg.org/#dom-parentnode-queryselector>
+    fn query_selector(_: Scope, registry: &Rc<NodeRegistry>, this: &NodePtr, selectors: String) -> Fallible<Option<NodePtr>> {
+        let parsed = parse_selectors(&selectors)?;
+        Ok(query::first_match(&selector_root(registry, this), &parsed, this))
+    }
+
+    /// <https://dom.spec.whatwg.org/#dom-parentnode-queryselectorall>, as a
+    /// fresh array until NodeList exists.
+    fn query_selector_all(_: Scope, registry: &Rc<NodeRegistry>, this: &NodePtr, selectors: String) -> Fallible<Vec<NodePtr>> {
+        let parsed = parse_selectors(&selectors)?;
+        Ok(query::all_matches(&selector_root(registry, this), &parsed, this))
+    }
+
     /// <https://dom.spec.whatwg.org/#dom-parentnode-children>, as a fresh
     /// array until HTMLCollection exists.
     fn children(_: Scope, _: &Rc<NodeRegistry>, this: &NodePtr) -> Fallible<Vec<NodePtr>> {

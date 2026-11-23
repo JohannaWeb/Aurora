@@ -55,7 +55,10 @@ interface Node : EventTarget {
   [CEReactions] Node replaceChild(Node node, Node child);
   [CEReactions] Node removeChild(Node child);
 };
-interface Document : Node {};
+interface Document : Node {
+  HTMLCollection getElementsByTagName(DOMString qualifiedName);
+  HTMLCollection getElementsByClassName(DOMString classNames);
+};
 interface DocumentType : Node {};
 interface DocumentFragment : Node {};
 interface ShadowRoot : DocumentFragment {};
@@ -78,6 +81,13 @@ interface Element : Node {
   [CEReactions] boolean toggleAttribute(DOMString qualifiedName, optional boolean force);
   boolean hasAttribute(DOMString qualifiedName);
   boolean hasAttributeNS(DOMString? namespace, DOMString localName);
+
+  Element? closest(DOMString selectors);
+  boolean matches(DOMString selectors);
+  boolean webkitMatchesSelector(DOMString selectors); // legacy alias
+
+  HTMLCollection getElementsByTagName(DOMString qualifiedName);
+  HTMLCollection getElementsByClassName(DOMString classNames);
 };
 interface Attr : Node {};
 interface CharacterData : Node {
@@ -102,6 +112,9 @@ interface mixin ParentNode {
   readonly attribute Element? firstElementChild;
   readonly attribute Element? lastElementChild;
   readonly attribute unsigned long childElementCount;
+
+  Element? querySelector(DOMString selectors);
+  [NewObject] NodeList querySelectorAll(DOMString selectors);
 };
 Document includes ParentNode;
 DocumentFragment includes ParentNode;

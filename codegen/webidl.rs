@@ -80,8 +80,9 @@ pub enum TypeKind {
     Float { double: bool, unrestricted: bool },
     Undefined,
     Interface(String),
-    /// `NodeList`/`HTMLCollection`, returned as a JS array until those
-    /// interfaces exist. Only valid as a read-only attribute's type.
+    /// `NodeList`/`HTMLCollection`, returned as a fresh JS array until those
+    /// interfaces exist. Only valid as a non-null read-only attribute's or
+    /// operation result's type.
     NodeArray,
     /// A dictionary type, only as an operation argument. The parser reads
     /// every other capitalized name as an interface; [`resolve_dictionaries`]
@@ -433,8 +434,8 @@ fn member(tokens: &mut Tokens) -> Result<Member, String> {
         return Ok(Member::Attribute { name, ty, readonly, ce_reactions, stringifier });
     }
     let ret = parse_type(tokens)?;
-    if ret.kind == TypeKind::NodeArray {
-        return Err("NodeList/HTMLCollection only as a non-null readonly attribute".into());
+    if ret.kind == TypeKind::NodeArray && ret.nullable {
+        return Err("NodeList/HTMLCollection results cannot be nullable".into());
     }
     let name = tokens.identifier()?;
     tokens.expect("(")?;
@@ -644,7 +645,7 @@ mod tests {
         }
         for source in [
             "interface A { attribute NodeList x; };",
-            "interface A { NodeList f(); };",
+            "interface A { NodeList? f(); };",
             "interface A { undefined f(NodeList x); };",
             "interface A {}; A includes M;",
         ] {

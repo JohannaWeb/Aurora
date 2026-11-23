@@ -6,13 +6,20 @@ use std::rc::Rc;
 
 // ─── Public API ───────────────────────────────────────────────────────────────
 
-pub(crate) fn selector_matches(node: &NodePtr, selector: &str, root: &NodePtr) -> bool {
-    let selectors = parse_selectors(selector);
-    node_matches_any(&selectors, node, root)
+/// A parsed selector list.
+pub(crate) type Selectors = Vec<Selector<AuroraSelectorImpl>>;
+
+/// Parses a selector list, or `None` when it is invalid (DOM APIs throw a
+/// `SyntaxError` for that).
+pub(crate) fn parse(selector: &str) -> Option<Selectors> {
+    parse_selector_list(selector).map(|list| list.slice().to_vec())
 }
 
-pub(crate) fn query_first(root: &NodePtr, selector: &str, start_node: &NodePtr) -> Option<NodePtr> {
-    let selectors = parse_selectors(selector);
+pub(crate) fn matches_any(node: &NodePtr, selectors: &Selectors, root: &NodePtr) -> bool {
+    node_matches_any(selectors, node, root)
+}
+
+pub(crate) fn first_match(root: &NodePtr, selectors: &Selectors, start_node: &NodePtr) -> Option<NodePtr> {
     // Seed the ancestor path once (outermost→parent of `start_node`); the
     // traversal threads it downward instead of re-deriving each node's
     // ancestors via a full-tree `find_parent` walk.
@@ -20,7 +27,7 @@ pub(crate) fn query_first(root: &NodePtr, selector: &str, start_node: &NodePtr) 
     let mut found = None;
     collect_matches(
         start_node,
-        &selectors,
+        selectors,
         &mut ancestors,
         &[],
         0,
@@ -34,12 +41,15 @@ pub(crate) fn query_first(root: &NodePtr, selector: &str, start_node: &NodePtr) 
 }
 
 pub(crate) fn query_all(root: &NodePtr, selector: &str, start_node: &NodePtr) -> Vec<NodePtr> {
-    let selectors = parse_selectors(selector);
+    all_matches(root, &parse_selectors(selector), start_node)
+}
+
+pub(crate) fn all_matches(root: &NodePtr, selectors: &Selectors, start_node: &NodePtr) -> Vec<NodePtr> {
     let mut ancestors = build_ancestor_chain(root, start_node);
     let mut out = Vec::new();
     collect_matches(
         start_node,
-        &selectors,
+        selectors,
         &mut ancestors,
         &[],
         0,
@@ -208,10 +218,8 @@ fn find_parent_scan(root: &NodePtr, target: &NodePtr) -> Option<NodePtr> {
 
 // ─── Internals ────────────────────────────────────────────────────────────────
 
-fn parse_selectors(selector: &str) -> Vec<Selector<AuroraSelectorImpl>> {
-    parse_selector_list(selector)
-        .map(|list| list.slice().to_vec())
-        .unwrap_or_default()
+fn parse_selectors(selector: &str) -> Selectors {
+    parse(selector).unwrap_or_default()
 }
 
 fn node_matches_any(
@@ -318,7 +326,7 @@ fn element_data_of(node: &NodePtr) -> Option<ElementData> {
 /// siblings with repeated full-tree `find_parent` scans.
 ///
 /// `on_match` is invoked for each matching element; returning `true` stops the
-/// traversal early (used by `query_first`). Returns `true` if it stopped.
+/// traversal early (used by `first_match`). Returns `true` if it stopped.
 fn collect_matches(
     node: &NodePtr,
     selectors: &[Selector<AuroraSelectorImpl>],

@@ -235,9 +235,6 @@ impl V8Runtime {
             // generated bindings in P2.5.
             let document_obj = create_js_node(scope, document.clone(), &registry, &document);
             document_method(scope, document_obj, "getElementById", get_element_by_id, doc_external);
-            document_method(scope, document_obj, "getElementsByTagName", get_elements_by_tag_name, doc_external);
-            document_method(scope, document_obj, "querySelector", query_selector, doc_external);
-            document_method(scope, document_obj, "querySelectorAll", query_selector_all, doc_external);
             document_method(scope, document_obj, "createElement", create_element, doc_external);
             document_method(scope, document_obj, "createTextNode", create_text_node, doc_external);
             document_method(scope, document_obj, "createComment", create_comment, doc_external);
@@ -1396,71 +1393,6 @@ fn get_element_by_id(
     } else {
         retval.set(v8::null(scope).into());
     }
-}
-
-fn get_elements_by_tag_name(
-    scope: &mut v8::PinScope<'_, '_>,
-    args: v8::FunctionCallbackArguments,
-    mut retval: v8::ReturnValue,
-) {
-    let tag = args.get(0).to_rust_string_lossy(scope);
-    let data = args.data();
-    let external = v8::Local::<v8::External>::try_from(data)
-        .expect("callback data is always the External we installed");
-    let doc_data_ptr = external.value() as *const DocumentData;
-    let doc_data = unsafe { &*doc_data_ptr };
-
-    let mut out = Vec::new();
-    query::collect_by_tag(&doc_data.document, &tag, &mut out);
-
-    let array = v8::Array::new(scope, out.len() as i32);
-    for (i, node) in out.into_iter().enumerate() {
-        let js_node = create_js_node(scope, node, &doc_data.registry, &doc_data.document);
-        array.set_index(scope, i as u32, js_node.into());
-    }
-    retval.set(array.into());
-}
-
-fn query_selector(
-    scope: &mut v8::PinScope<'_, '_>,
-    args: v8::FunctionCallbackArguments,
-    mut retval: v8::ReturnValue,
-) {
-    let selector = args.get(0).to_rust_string_lossy(scope);
-    let data = args.data();
-    let external = v8::Local::<v8::External>::try_from(data)
-        .expect("callback data is always the External we installed");
-    let doc_data_ptr = external.value() as *const DocumentData;
-    let doc_data = unsafe { &*doc_data_ptr };
-
-    let node = query::query_first(&doc_data.document, &selector, &doc_data.document);
-    if let Some(node) = node {
-        let js_node = create_js_node(scope, node, &doc_data.registry, &doc_data.document);
-        retval.set(js_node.into());
-    } else {
-        retval.set(v8::null(scope).into());
-    }
-}
-
-fn query_selector_all(
-    scope: &mut v8::PinScope<'_, '_>,
-    args: v8::FunctionCallbackArguments,
-    mut retval: v8::ReturnValue,
-) {
-    let selector = args.get(0).to_rust_string_lossy(scope);
-    let data = args.data();
-    let external = v8::Local::<v8::External>::try_from(data)
-        .expect("callback data is always the External we installed");
-    let doc_data_ptr = external.value() as *const DocumentData;
-    let doc_data = unsafe { &*doc_data_ptr };
-
-    let found = query::query_all(&doc_data.document, &selector, &doc_data.document);
-    let array = v8::Array::new(scope, found.len() as i32);
-    for (i, node) in found.into_iter().enumerate() {
-        let js_node = create_js_node(scope, node, &doc_data.registry, &doc_data.document);
-        array.set_index(scope, i as u32, js_node.into());
-    }
-    retval.set(array.into());
 }
 
 fn create_element(

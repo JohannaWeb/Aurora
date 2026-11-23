@@ -46,30 +46,7 @@ pub(super) fn create_js_node<'s>(
 
     // --- Methods ---
 
-    // querySelector / querySelectorAll
-    install_method(
-        scope,
-        template,
-        "querySelector",
-        query_selector,
-        node_external,
-    );
-    install_method(
-        scope,
-        template,
-        "querySelectorAll",
-        query_selector_all,
-        node_external,
-    );
-    install_method(
-        scope,
-        template,
-        "getElementsByTagName",
-        get_elements_by_tag_name,
-        node_external,
-    );
-    install_method(scope, template, "matches", matches, node_external);
-    install_method(scope, template, "closest", closest, node_external);
+    // Selector queries are on the ParentNode/Element/Document prototypes.
 
     // Mutation methods. Node's own (appendChild, insertBefore, removeChild,
     // replaceChild, cloneNode, hasChildNodes) are on Node.prototype.
@@ -170,13 +147,6 @@ pub(super) fn create_js_node<'s>(
         template,
         "insertAdjacentText",
         insert_adjacent_text,
-        node_external,
-    );
-    install_method(
-        scope,
-        template,
-        "getElementsByClassName",
-        get_elements_by_class_name,
         node_external,
     );
 
@@ -704,108 +674,6 @@ pub(super) fn track_fragment_children(
     }
 }
 
-fn query_selector(
-    scope: &mut v8::PinScope<'_, '_>,
-    args: v8::FunctionCallbackArguments,
-    mut retval: v8::ReturnValue,
-) {
-    let selector = args.get(0).to_rust_string_lossy(scope);
-    let data = args.data();
-    let node_data = node_data_from(data);
-
-    let selector_root = crate::dom::SyntheticShadowTreeBackend
-        .nearest_shadow_root(&node_data.node)
-        .unwrap_or_else(|| node_data.document.clone());
-    let found = query::query_first(&selector_root, &selector, &node_data.node);
-    if let Some(found) = found {
-        let js_node = create_js_node(scope, found, &node_data.registry, &node_data.document);
-        retval.set(js_node.into());
-    } else {
-        retval.set(v8::null(scope).into());
-    }
-}
-
-fn query_selector_all(
-    scope: &mut v8::PinScope<'_, '_>,
-    args: v8::FunctionCallbackArguments,
-    mut retval: v8::ReturnValue,
-) {
-    let selector = args.get(0).to_rust_string_lossy(scope);
-    let data = args.data();
-    let node_data = node_data_from(data);
-
-    let selector_root = crate::dom::SyntheticShadowTreeBackend
-        .nearest_shadow_root(&node_data.node)
-        .unwrap_or_else(|| node_data.document.clone());
-    let found = query::query_all(&selector_root, &selector, &node_data.node);
-    let array = v8::Array::new(scope, found.len() as i32);
-    for (i, node) in found.into_iter().enumerate() {
-        let js_node = create_js_node(scope, node, &node_data.registry, &node_data.document);
-        array.set_index(scope, i as u32, js_node.into());
-    }
-    retval.set(array.into());
-}
-
-fn get_elements_by_tag_name(
-    scope: &mut v8::PinScope<'_, '_>,
-    args: v8::FunctionCallbackArguments,
-    mut retval: v8::ReturnValue,
-) {
-    let tag = args.get(0).to_rust_string_lossy(scope).to_lowercase();
-    let data = args.data();
-    let node_data = node_data_from(data);
-
-    let mut out = Vec::new();
-    query::collect_by_tag(&node_data.node, &tag, &mut out);
-
-    let array = v8::Array::new(scope, out.len() as i32);
-    for (i, node) in out.into_iter().enumerate() {
-        let js_node = create_js_node(scope, node, &node_data.registry, &node_data.document);
-        array.set_index(scope, i as u32, js_node.into());
-    }
-    retval.set(array.into());
-}
-
-fn matches(
-    scope: &mut v8::PinScope<'_, '_>,
-    args: v8::FunctionCallbackArguments,
-    mut retval: v8::ReturnValue,
-) {
-    let selector = args.get(0).to_rust_string_lossy(scope);
-    let data = args.data();
-    let node_data = node_data_from(data);
-
-    let selector_root = crate::dom::SyntheticShadowTreeBackend
-        .nearest_shadow_root(&node_data.node)
-        .unwrap_or_else(|| node_data.document.clone());
-    let matched = query::selector_matches(&node_data.node, &selector, &selector_root);
-    retval.set(v8::Boolean::new(scope, matched).into());
-}
-
-fn closest(
-    scope: &mut v8::PinScope<'_, '_>,
-    args: v8::FunctionCallbackArguments,
-    mut retval: v8::ReturnValue,
-) {
-    let selector = args.get(0).to_rust_string_lossy(scope);
-    let data = args.data();
-    let node_data = node_data_from(data);
-
-    let selector_root = crate::dom::SyntheticShadowTreeBackend
-        .nearest_shadow_root(&node_data.node)
-        .unwrap_or_else(|| node_data.document.clone());
-    let mut current = Some(node_data.node.clone());
-    while let Some(n) = current {
-        if query::selector_matches(&n, &selector, &selector_root) {
-            let js_node = create_js_node(scope, n, &node_data.registry, &node_data.document);
-            retval.set(js_node.into());
-            return;
-        }
-        current = find_parent_for(node_data, &n);
-    }
-    retval.set(v8::null(scope).into());
-}
-
 fn remove_node(
     scope: &mut v8::PinScope<'_, '_>,
     args: v8::FunctionCallbackArguments,
@@ -1298,19 +1166,6 @@ pub(super) fn child_nodes_of(node: &NodePtr) -> Vec<NodePtr> {
     }
 }
 
-fn nodes_to_array<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    nodes: Vec<NodePtr>,
-    node_data: &NodeData,
-) -> v8::Local<'s, v8::Array> {
-    let array = v8::Array::new(scope, nodes.len() as i32);
-    for (i, node) in nodes.into_iter().enumerate() {
-        let js_node = create_js_node(scope, node, &node_data.registry, &node_data.document);
-        array.set_index(scope, i as u32, js_node.into());
-    }
-    array
-}
-
 
 
 
@@ -1740,25 +1595,6 @@ fn insert_adjacent_element(
     } else {
         retval.set(v8::null(scope).into());
     }
-}
-
-fn get_elements_by_class_name(
-    scope: &mut v8::PinScope<'_, '_>,
-    args: v8::FunctionCallbackArguments,
-    mut retval: v8::ReturnValue,
-) {
-    let class = args.get(0).to_rust_string_lossy(scope);
-    let selector = format!(
-        ".{}",
-        class.split_whitespace().collect::<Vec<_>>().join(".")
-    );
-    let node_data = node_data_from(args.data());
-    let selector_root = crate::dom::SyntheticShadowTreeBackend
-        .nearest_shadow_root(&node_data.node)
-        .unwrap_or_else(|| node_data.document.clone());
-    let found = query::query_all(&selector_root, &selector, &node_data.node);
-    let array = nodes_to_array(scope, found, node_data);
-    retval.set(array.into());
 }
 
 

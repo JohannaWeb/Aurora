@@ -505,6 +505,45 @@ fn element_identity_is_on_the_prototype() {
 }
 
 #[test]
+fn selector_queries_are_generated_and_spec_shaped() {
+    let mut runtime = runtime();
+    assert_eq!(
+        runtime.eval_to_string(
+            r#"(() => {
+        const box = document.createElement('div');
+        box.className = 'box';
+        box.innerHTML = '<p class="a b">1</p><div><p class="b\u000Ba">2</p><span class="a">3</span></div>';
+        document.body.appendChild(box);
+        const own = ['querySelector', 'querySelectorAll', 'matches', 'closest',
+            'getElementsByTagName', 'getElementsByClassName']
+            .filter(n => Object.prototype.hasOwnProperty.call(box, n)
+                || Object.prototype.hasOwnProperty.call(document, n));
+        const span = box.querySelector('span');
+        const out = [own.length,
+            box.querySelector('p').textContent, box.querySelectorAll('p').length,
+            document.querySelector('.box') === box, document.querySelectorAll('.box p').length,
+            span.matches('.a'), span.webkitMatchesSelector('div > span'), span.closest('.box') === box,
+            span.closest('section'), box.getElementsByTagName('div').length,
+            box.getElementsByTagName('*').length, box.getElementsByClassName('a b').length,
+            box.getElementsByClassName(' ').length, document.getElementsByTagName('P').length >= 2,
+            box.getElementsByClassName('b\u000Ba').length];
+        for (const call of [() => box.querySelector('##'), () => span.matches(''),
+                            () => span.closest('['), () => document.querySelectorAll('a,,b')]) {
+            try { call(); out.push('no throw'); } catch (e) { out.push(e.name); }
+        }
+        const host = document.createElement('div');
+        document.body.appendChild(host);
+        const root = host.attachShadow({ mode: 'open' });
+        root.innerHTML = '<i class="inside"></i>';
+        out.push(root.querySelector('.inside') !== null, document.querySelector('.inside'));
+        return out.join('|');
+    })()"#
+        ),
+        Ok("0|1|2|true|2|true|true|true||1|4|1|0|true|1|SyntaxError|SyntaxError|SyntaxError|SyntaxError|true|".into())
+    );
+}
+
+#[test]
 fn snake_case_member_names() {
     #[path = "../../codegen/generate.rs"]
     #[allow(dead_code)]

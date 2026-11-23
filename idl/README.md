@@ -41,8 +41,9 @@ unsupported IDL fails the build instead of producing wrong bindings:
 - Types: `DOMString`/`USVString`, `boolean`, all integer types, `float`,
   `double` and their `unrestricted` forms, interface types, `undefined` as
   a return type, and `T?`. `NodeList` and `HTMLCollection` are allowed only
-  as non-null read-only attribute types and return a fresh array, as the
-  hand-written accessors did, until those interfaces exist.
+  as non-null read-only attribute and operation result types, and return
+  a fresh array, as the hand-written members did, until those interfaces
+  exist.
 - `stringifier attribute DOMString name;` (string types only): the attribute
   plus a `toString()` that returns it.
 - Extended attributes: `[CEReactions]` and `[NewObject]` (no generated
@@ -67,7 +68,12 @@ operations (`appendChild`, `insertBefore`, `replaceChild`, `removeChild`,
 `lastChild`, `previousSibling`, `nextSibling`, `textContent`); `Element`'s
 `namespaceURI`, `prefix`, `localName`, `tagName` (an element is SVG when
 `interface_for` maps its tag to SVGElement, otherwise HTML; SVG names keep
-their case), `id`, `className` and attribute methods (`get`/`set`/`remove`/`has`/`toggle`
+their case), `id`, `className`, selector queries (`querySelector`/`All` on
+ParentNode, `matches`, `webkitMatchesSelector`, `closest`; invalid selectors
+throw SyntaxError, though the parser still accepts some unknown
+pseudo-classes; matching is scoped to the node's shadow root),
+`getElementsByTagName`/`ClassName` on Element and Document (descendants
+only, as arrays), and attribute methods (`get`/`set`/`remove`/`has`/`toggle`
 `Attribute`, their `NS` forms, `hasAttributes`; names match exactly and the
 `NS` forms ignore the namespace until Aurora stores one); the
 `HTMLHyperlinkElementUtils` mixin on `<a>` and `<area>` (`href`, `origin`,
