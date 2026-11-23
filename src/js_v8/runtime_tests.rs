@@ -1705,12 +1705,16 @@ fn v8_custom_element_calls_attached_when_connected_callback_missing() {
             const el = document.createElement('legacy-attached');
             const before = el.__attached_count__ || 0;
             document.body.appendChild(el);
+            const once = el.__attached_count__;
+            // Per spec the second append re-inserts (disconnect, connect) and
+            // attaches again; Aurora does that only for definitions with a
+            // disconnectedCallback (see mutation::enqueue_lifecycle_reactions).
             document.body.appendChild(el);
-            return before + '|' + el.__attached_count__;
+            return before + '|' + once + '|' + el.__attached_count__;
             })()
             "#
         ),
-        Ok("0|1".to_string())
+        Ok("0|1|1".to_string())
     );
 }
 
@@ -3831,5 +3835,58 @@ fn v8_typing_into_a_focused_input_edits_its_value() {
             ]
             .join(" ")
         ))
+    );
+}
+
+#[test]
+fn v8_moving_a_custom_element_disconnects_then_reconnects_it() {
+    let mut runtime = V8Runtime::new(blank_dom());
+    assert_eq!(
+        runtime.eval_to_string(
+            r#"(() => {
+            const log = [];
+            class Full extends HTMLElement {
+                connectedCallback() { log.push('connected:' + this.parentNode.id); }
+                disconnectedCallback() { log.push('disconnected'); }
+            }
+            class ConnectOnly extends HTMLElement {
+                connectedCallback() { log.push('only:' + this.parentNode.id); }
+            }
+            customElements.define('x-move-full', Full);
+            customElements.define('x-move-only', ConnectOnly);
+            const a = document.createElement('div'); a.id = 'a';
+            const b = document.createElement('div'); b.id = 'b';
+            const loose = document.createElement('div'); loose.id = 'loose';
+            const looseChild = document.createElement('div'); looseChild.id = 'loose-child';
+            loose.appendChild(looseChild);
+            document.body.append(a, b);
+            const el = document.createElement('x-move-full');
+            a.appendChild(el);
+            log.push('|');
+            b.appendChild(el);
+            log.push('|');
+            b.removeChild(el); a.insertBefore(el, null);
+            log.push('|');
+            b.replaceChild(el, b.appendChild(document.createElement('span')));
+            log.push('|');
+            const only = document.createElement('x-move-only');
+            a.appendChild(only); a.removeChild(only); b.appendChild(only);
+            log.push('|');
+            loose.appendChild(el); looseChild.appendChild(el);
+            return log.join(' ');
+        })()"#
+        ),
+        Ok([
+            "connected:a |",
+            "disconnected connected:b |",
+            "disconnected connected:a |",
+            "disconnected connected:b |",
+            // Known gap: without a disconnectedCallback the shim's
+            // once-only connect guard is never reset (see the comment in
+            // mutation::enqueue_lifecycle_reactions), so no second connect.
+            "only:a |",
+            "disconnected",
+        ]
+        .join(" "))
     );
 }

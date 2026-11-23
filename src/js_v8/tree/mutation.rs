@@ -155,6 +155,7 @@ pub(crate) fn apply_dom_mutation(
             let target_id = registry.register(parent.clone());
             let inserted_nodes = insertion_nodes(child);
             let added_ids = node_ids(registry, &inserted_nodes);
+            enqueue_reactions_for_move(registry, child);
             append_child_ptr(parent, child);
             enqueue_connected_reactions(registry, &inserted_nodes);
             let render_synced =
@@ -176,6 +177,7 @@ pub(crate) fn apply_dom_mutation(
             let target_id = registry.register(parent.clone());
             let inserted_nodes = insertion_nodes(child);
             let added_ids = node_ids(registry, &inserted_nodes);
+            enqueue_reactions_for_move(registry, child);
             prepend_child_ptr(parent, child);
             enqueue_connected_reactions(registry, &inserted_nodes);
             let render_synced =
@@ -201,6 +203,7 @@ pub(crate) fn apply_dom_mutation(
             let target_id = registry.register(parent.clone());
             let inserted_nodes = insertion_nodes(new_child);
             let added_ids = node_ids(registry, &inserted_nodes);
+            enqueue_reactions_for_move(registry, new_child);
             insert_before_ptr(parent, new_child, ref_child);
             enqueue_connected_reactions(registry, &inserted_nodes);
             let render_synced =
@@ -251,6 +254,7 @@ pub(crate) fn apply_dom_mutation(
             let added_ids = node_ids(registry, &inserted_nodes);
             let old_id = registry.register(old_child.clone());
             enqueue_disconnected_reactions(registry, old_child);
+            enqueue_reactions_for_move(registry, new_child);
             replace_child_ptr(parent, new_child, old_child);
             enqueue_connected_reactions(registry, &inserted_nodes);
             let render_synced = sync_removed_node_from_render_document(registry, old_child)
@@ -538,14 +542,22 @@ fn enqueue_lifecycle_reactions(
                             }
                         }
                         LifecyclePhase::Disconnected => {
-                            if let Some(callback) = &definition.disconnected {
-                                let id = registry.register(node.clone());
-                                registry.ce_registry.enqueue_callback(
-                                    id,
-                                    callback.clone(),
-                                    Vec::new(),
-                                    false,
-                                );
+                            // Only for custom (upgraded) elements with a
+                            // disconnectedCallback. Running it also marks the
+                            // element disconnected, so its next connection
+                            // runs connectedCallback again. Known gap: an
+                            // element without a disconnectedCallback keeps
+                            // the JS shim's once-only connect guard, because
+                            // fragment parsing upgrades synchronously and
+                            // resetting it there double-connects
+                            // (connected-callbacks-html-fragment-parsing.html).
+                            let id = registry.register(node.clone());
+                            let custom = matches!(
+                                registry.ce_registry.element_state(id),
+                                super::super::custom_elements::CeState::Custom
+                            );
+                            if let Some(callback) = definition.disconnected.clone().filter(|_| custom) {
+                                registry.ce_registry.enqueue_disconnected(id, Some(callback));
                             }
                         }
                     }
@@ -588,6 +600,17 @@ fn enqueue_lifecycle_reactions(
         for child in children.into_iter().rev() {
             stack.push(child);
         }
+    }
+}
+
+/// Inserting a node that already has a parent first removes it from there
+/// (DOM "insert" step 7.1 / "adopt"), with the same disconnect reactions as
+/// an explicit removal. Fragments are not moved themselves (their children
+/// are), and a parentless node has nothing to leave.
+fn enqueue_reactions_for_move(registry: &Rc<NodeRegistry>, node: &NodePtr) {
+    let is_fragment = matches!(&*node.borrow(), Node::Element(el) if el.tag_name == "#document-fragment");
+    if !is_fragment && crate::dom::parent_ptr(node).is_some() {
+        enqueue_disconnected_reactions(registry, node);
     }
 }
 
