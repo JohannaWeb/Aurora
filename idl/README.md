@@ -76,7 +76,8 @@ throw SyntaxError, though the parser still accepts some unknown
 pseudo-classes; matching is scoped to the node's shadow root),
 `getElementsByTagName`/`ClassName` on Element and Document (descendants
 only, as arrays), the ChildNode mixin (`before`, `after`, `replaceWith`,
-`remove` on Element, CharacterData and DocumentType; no @@unscopables yet),
+`remove` on Element, CharacterData and DocumentType) and ParentNode's
+`append`, `prepend` and `replaceChildren` (no @@unscopables yet),
 and attribute methods (`get`/`set`/`remove`/`has`/`toggle`
 `Attribute`, their `NS` forms, `hasAttributes`; names match exactly and the
 `NS` forms ignore the namespace until Aurora stores one); the

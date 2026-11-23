@@ -50,7 +50,6 @@ pub(super) fn create_js_node<'s>(
 
     // Mutation methods. Node's own (appendChild, insertBefore, removeChild,
     // replaceChild, cloneNode, hasChildNodes) are on Node.prototype.
-    install_method(scope, template, "prepend", prepend_children, node_external);
 
     // Attribute methods are on Element.prototype (generated).
 
@@ -114,14 +113,6 @@ pub(super) fn create_js_node<'s>(
         template,
         "__aurora_metric__",
         get_layout_metric,
-        node_external,
-    );
-    install_method(scope, template, "append", append_children, node_external);
-    install_method(
-        scope,
-        template,
-        "replaceChildren",
-        replace_children,
         node_external,
     );
     install_method(
@@ -1266,106 +1257,6 @@ fn get_layout_metric(
 }
 
 /// ParentNode/ChildNode `(Node or DOMString)...` arguments as nodes.
-fn nodes_or_text(
-    scope: &mut v8::PinScope<'_, '_>,
-    args: &v8::FunctionCallbackArguments,
-    node_data: &NodeData,
-) -> Vec<NodePtr> {
-    (0..args.length())
-        .map(|i| {
-            let arg = args.get(i);
-            node_from_js(scope, arg, &node_data.registry)
-                .unwrap_or_else(|| Node::text(arg.to_rust_string_lossy(scope)))
-        })
-        .collect()
-}
-
-fn append_children(
-    scope: &mut v8::PinScope<'_, '_>,
-    args: v8::FunctionCallbackArguments,
-    mut _retval: v8::ReturnValue,
-) {
-    let node_data = node_data_from(args.data());
-    let _reactions = CeReactionsGuard::new(scope, &node_data.registry);
-    let children = nodes_or_text(scope, &args, node_data);
-    if reject_invalid_insertion(scope, &node_data.node, &children) {
-        return;
-    }
-    for (i, child) in children.into_iter().enumerate() {
-        let arg = args.get(i as i32);
-        let fragment_children = if is_document_fragment(&child) {
-            child_nodes_of(&child)
-        } else {
-            Vec::new()
-        };
-        let _mutation_result = mutation::apply_dom_mutation(
-            &node_data.registry,
-            mutation::DomMutation::AppendChild {
-                parent: &node_data.node,
-                child: &child,
-            },
-        );
-        if fragment_children.is_empty() {
-            if let Ok(child_obj) = v8::Local::<v8::Object>::try_from(arg) {
-                call_global_hook(scope, "__aurora_track_custom_element__", child_obj);
-            }
-        } else {
-            track_fragment_children(
-                scope,
-                &node_data.registry,
-                &node_data.document,
-                &fragment_children,
-            );
-        }
-    }
-    node_data.registry.mark_layout_dirty(&node_data.node);
-}
-
-fn replace_children(
-    scope: &mut v8::PinScope<'_, '_>,
-    args: v8::FunctionCallbackArguments,
-    mut _retval: v8::ReturnValue,
-) {
-    let node_data = node_data_from(args.data());
-    let _reactions = CeReactionsGuard::new(scope, &node_data.registry);
-
-    let children = nodes_or_text(scope, &args, node_data);
-    if reject_invalid_insertion(scope, &node_data.node, &children) {
-        return;
-    }
-    let _mutation_result = mutation::apply_dom_mutation(
-        &node_data.registry,
-        mutation::DomMutation::ReplaceChildren {
-            node: &node_data.node,
-            children,
-        },
-    );
-    node_data.registry.mark_layout_dirty(&node_data.node);
-}
-
-fn prepend_children(
-    scope: &mut v8::PinScope<'_, '_>,
-    args: v8::FunctionCallbackArguments,
-    mut _retval: v8::ReturnValue,
-) {
-    let node_data = node_data_from(args.data());
-    let _reactions = CeReactionsGuard::new(scope, &node_data.registry);
-    let children = nodes_or_text(scope, &args, node_data);
-    if reject_invalid_insertion(scope, &node_data.node, &children) {
-        return;
-    }
-    for child in children.into_iter().rev() {
-        let _mutation_result = mutation::apply_dom_mutation(
-            &node_data.registry,
-            mutation::DomMutation::PrependChild {
-                parent: &node_data.node,
-                child: &child,
-            },
-        );
-    }
-    node_data.registry.mark_layout_dirty(&node_data.node);
-}
-
 pub(super) fn parsed_html_nodes(html: &str) -> Vec<NodePtr> {
     let parsed = crate::html::Parser::new(html).parse_document();
     let mut bodies = Vec::new();
@@ -1709,22 +1600,6 @@ fn get_internals_labels(
 }
 
 use super::dom_exception::throw_dom_exception as throw_named_error;
-
-/// Throw `HierarchyRequestError` and return true if any of `nodes` cannot be
-/// inserted into `parent` (see `mutation::hierarchy_error`).
-fn reject_invalid_insertion(
-    scope: &mut v8::PinScope<'_, '_>,
-    parent: &NodePtr,
-    nodes: &[NodePtr],
-) -> bool {
-    match nodes.iter().find_map(|node| mutation::hierarchy_error(parent, node)) {
-        Some(message) => {
-            throw_named_error(scope, "HierarchyRequestError", message);
-            true
-        }
-        None => false,
-    }
-}
 
 /// `internals.setFormValue(value)` — record the element's submission value.
 fn internals_set_form_value(

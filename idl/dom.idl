@@ -125,6 +125,10 @@ interface mixin ParentNode {
   readonly attribute Element? lastElementChild;
   readonly attribute unsigned long childElementCount;
 
+  [CEReactions] undefined prepend((Node or DOMString)... nodes);
+  [CEReactions] undefined append((Node or DOMString)... nodes);
+  [CEReactions] undefined replaceChildren((Node or DOMString)... nodes);
+
   Element? querySelector(DOMString selectors);
   [NewObject] NodeList querySelectorAll(DOMString selectors);
 };

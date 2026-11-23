@@ -3603,9 +3603,12 @@ fn v8_insertions_that_would_corrupt_the_tree_throw() {
                 err(() => inner.append(extra, outer)),
                 err(() => leaf.replaceWith(outer)),
                 err(() => leaf.before(inner)),
-                // Nothing moved, and nothing was half-inserted.
-                outer.parentNode === null, inner.parentNode === outer, leaf.parentNode === inner,
-                extra.parentNode === null, inner.childNodes.length,
+                // Nothing was half-inserted. `append` first gathers its
+                // arguments into a new fragment (DOM "convert nodes into a
+                // node"), so extra and outer stay in that detached fragment
+                // when the insertion is then rejected, as in browsers.
+                outer.parentNode.nodeType === 11, inner.parentNode === outer, leaf.parentNode === inner,
+                extra.parentNode === outer.parentNode, inner.childNodes.length,
                 // Valid insertions still work.
                 err(() => outer.appendChild(leaf)), leaf.parentNode === outer,
             ].join('|');

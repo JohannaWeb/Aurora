@@ -584,6 +584,43 @@ fn child_node_methods_follow_the_spec() {
 }
 
 #[test]
+fn parent_node_methods_follow_the_spec() {
+    let mut runtime = runtime();
+    assert_eq!(
+        runtime.eval_to_string(
+            r#"(() => {
+        const names = (p) => Array.from(p.childNodes, n => n.nodeType === 1 ? n.localName : n.data).join(',');
+        const p = document.createElement('div');
+        const own = ['append', 'prepend', 'replaceChildren']
+            .filter(n => Object.prototype.hasOwnProperty.call(p, n) || typeof Element.prototype[n] !== 'function');
+        const out = [own.length, Element.prototype.append.length];
+        p.append('a', document.createElement('b'));
+        p.prepend('x', 'y');
+        p.append();
+        out.push(names(p));
+
+        const elsewhere = document.createElement('section');
+        const moved = elsewhere.appendChild(document.createElement('m'));
+        p.replaceChildren(moved, 'z');
+        out.push(names(p), elsewhere.childNodes.length, moved.parentNode === p);
+
+        try { p.replaceChildren(p); } catch (e) { out.push(e.name); }
+        out.push(names(p));
+        p.replaceChildren();
+        out.push(p.childNodes.length);
+
+        const fragment = document.createDocumentFragment();
+        fragment.append('f', document.createElement('g'));
+        p.append(fragment);
+        out.push(names(p), fragment.childNodes.length, typeof document.append, typeof fragment.prepend);
+        return out.join(' / ');
+    })()"#
+        ),
+        Ok("0 / 0 / x,y,a,b / m,z / 0 / true / HierarchyRequestError / m,z / 0 / f,g / 0 / function / function".into())
+    );
+}
+
+#[test]
 fn snake_case_member_names() {
     #[path = "../../codegen/generate.rs"]
     #[allow(dead_code)]

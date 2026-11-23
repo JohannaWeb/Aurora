@@ -219,8 +219,7 @@
     }
 
     [
-        'appendChild', 'insertBefore', 'removeChild',
-        'append', 'prepend', 'replaceChildren'
+        'appendChild', 'insertBefore', 'removeChild'
     ].forEach(function(name) {
         installPrototypeForward(globalThis.Node && Node.prototype, name);
     });

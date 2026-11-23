@@ -810,6 +810,48 @@ impl DocumentMembers for Dom {
 }
 
 impl ParentNodeMembers for Dom {
+    /// <https://dom.spec.whatwg.org/#dom-parentnode-prepend>
+    fn prepend(scope: Scope, registry: &Rc<NodeRegistry>, this: &NodePtr, nodes: Vec<NodeOrString>) -> Fallible<()> {
+        let Some(node) = nodes_into_a_node(registry, nodes)? else { return Ok(()) };
+        let first = navigation::first_child(this, false);
+        insert(scope, registry, this, &node, |parent, node| mutation::DomMutation::InsertBefore {
+            parent,
+            new_child: node,
+            ref_child: first.as_ref(),
+        })
+    }
+
+    /// <https://dom.spec.whatwg.org/#dom-parentnode-append>
+    fn append(scope: Scope, registry: &Rc<NodeRegistry>, this: &NodePtr, nodes: Vec<NodeOrString>) -> Fallible<()> {
+        let Some(node) = nodes_into_a_node(registry, nodes)? else { return Ok(()) };
+        insert(scope, registry, this, &node, |parent, child| mutation::DomMutation::AppendChild { parent, child })
+    }
+
+    /// <https://dom.spec.whatwg.org/#dom-parentnode-replacechildren>: checks
+    /// the insertion is valid, removes every child, then appends the new
+    /// node (detaching it from wherever it was).
+    fn replace_children(
+        scope: Scope,
+        registry: &Rc<NodeRegistry>,
+        this: &NodePtr,
+        nodes: Vec<NodeOrString>,
+    ) -> Fallible<()> {
+        let node = nodes_into_a_node(registry, nodes)?;
+        if let Some(message) = node.as_ref().and_then(|node| mutation::hierarchy_error(this, node)) {
+            return Err(Error::Dom { name: "HierarchyRequestError", message: message.into() });
+        }
+        for child in child_nodes_of(this) {
+            mutation::apply_dom_mutation(registry, mutation::DomMutation::RemoveChild { parent: this, child: &child });
+        }
+        registry.mark_layout_dirty(this);
+        match node {
+            Some(node) => {
+                insert(scope, registry, this, &node, |parent, child| mutation::DomMutation::AppendChild { parent, child })
+            }
+            None => Ok(()),
+        }
+    }
+
     /// <https://dom.spec.whatwg.org/#dom-parentnode-queryselector>
     fn query_selector(_: Scope, registry: &Rc<NodeRegistry>, this: &NodePtr, selectors: String) -> Fallible<Option<NodePtr>> {
         let parsed = parse_selectors(&selectors)?;
