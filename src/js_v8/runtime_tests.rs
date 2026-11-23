@@ -2081,7 +2081,8 @@ fn v8_dom_constructor_prototypes_forward_to_native_wrappers() {
             })()
             "#
         ),
-        Ok("child|ok|yes|span|1|true|2".to_string())
+        // The connected span's root is the document (nodeType 9).
+        Ok("child|ok|yes|span|9|true|2".to_string())
     );
 }
 

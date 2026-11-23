@@ -1,8 +1,9 @@
 use std::collections::BTreeSet;
 
 /// A WebIDL subset: interfaces with constants, regular attributes and
-/// regular operations. Anything outside it is a parse error rather than
-/// silently ignored, so unsupported IDL can't produce wrong bindings.
+/// regular operations, plus dictionaries. Anything outside it is a parse
+/// error rather than silently ignored, so unsupported IDL can't produce
+/// wrong bindings.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Interface {
     pub name: String,
@@ -12,6 +13,30 @@ pub struct Interface {
     pub mixin: bool,
     /// Mixins this interface includes, resolved by [`resolve_mixins`].
     pub includes: Vec<Interface>,
+}
+
+/// `dictionary Name [: Parent] { ... };`
+#[derive(Clone, Debug, PartialEq)]
+pub struct Dictionary {
+    pub name: String,
+    pub parent: Option<String>,
+    pub members: Vec<DictionaryMember>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct DictionaryMember {
+    pub name: String,
+    pub ty: Type,
+    pub required: bool,
+    pub default: Option<String>,
+}
+
+/// Everything one IDL source declares.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Definitions {
+    pub interfaces: Vec<Interface>,
+    pub includes: Vec<Includes>,
+    pub dictionaries: Vec<Dictionary>,
 }
 
 /// `A includes B;`
@@ -57,6 +82,10 @@ pub enum TypeKind {
     /// `NodeList`/`HTMLCollection`, returned as a JS array until those
     /// interfaces exist. Only valid as a read-only attribute's type.
     NodeArray,
+    /// A dictionary type, only as an operation argument. The parser reads
+    /// every other capitalized name as an interface; [`resolve_dictionaries`]
+    /// turns the ones naming a dictionary into this.
+    Dictionary(String),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -167,19 +196,24 @@ impl<'a> Tokens<'a> {
 /// Interfaces and mixins only; `includes` statements are an error here.
 #[allow(dead_code)] // build.rs reads includes through parse_definitions.
 pub fn parse(source: &str) -> Result<Vec<Interface>, String> {
-    let (interfaces, includes) = parse_definitions(source)?;
-    match includes.first() {
+    let definitions = parse_definitions(source)?;
+    match definitions.includes.first() {
         Some(i) => Err(format!("unexpected includes statement for {}", i.interface)),
-        None => Ok(interfaces),
+        None => Ok(definitions.interfaces),
     }
 }
 
-pub fn parse_definitions(source: &str) -> Result<(Vec<Interface>, Vec<Includes>), String> {
+pub fn parse_definitions(source: &str) -> Result<Definitions, String> {
     let tokens = tokenize(source)?;
     let mut tokens = Tokens { tokens: tokens.iter().peekable() };
     let mut interfaces = Vec::new();
     let mut includes = Vec::new();
+    let mut dictionaries = Vec::new();
     while tokens.peek().is_some() {
+        if tokens.eat("dictionary") {
+            dictionaries.push(dictionary(&mut tokens)?);
+            continue;
+        }
         if tokens.peek() != Some("interface") {
             let interface = tokens.identifier()?;
             tokens.expect("includes")?;
@@ -207,7 +241,113 @@ pub fn parse_definitions(source: &str) -> Result<(Vec<Interface>, Vec<Includes>)
         tokens.expect(";")?;
         interfaces.push(Interface { name, parent, members, mixin, includes: Vec::new() });
     }
-    Ok((interfaces, includes))
+    Ok(Definitions { interfaces, includes, dictionaries })
+}
+
+/// The body of `dictionary Name [: Parent] { ... };`, after the keyword.
+fn dictionary(tokens: &mut Tokens) -> Result<Dictionary, String> {
+    let name = tokens.identifier()?;
+    let parent = if tokens.eat(":") { Some(tokens.identifier()?) } else { None };
+    tokens.expect("{")?;
+    let mut members: Vec<DictionaryMember> = Vec::new();
+    while !tokens.eat("}") {
+        let required = tokens.eat("required");
+        let ty = parse_type(tokens).map_err(|e| format!("{name}: {e}"))?;
+        if matches!(ty.kind, TypeKind::Undefined | TypeKind::NodeArray) {
+            return Err(format!("{name}: member of type {:?}", ty.kind));
+        }
+        let member = tokens.identifier()?;
+        let default = if tokens.eat("=") { Some(default_literal(tokens)?) } else { None };
+        if required && default.is_some() {
+            return Err(format!("{name}.{member}: required member with a default"));
+        }
+        tokens.expect(";")?;
+        if members.iter().any(|m| m.name == member) {
+            return Err(format!("{name}: duplicate member {member}"));
+        }
+        members.push(DictionaryMember { name: member, ty, required, default });
+    }
+    tokens.expect(";")?;
+    Ok(Dictionary { name, parent, members })
+}
+
+/// A default value: one literal token, or `{}` for a dictionary.
+fn default_literal(tokens: &mut Tokens) -> Result<String, String> {
+    match tokens.next().ok_or("missing default value")? {
+        "{" => {
+            tokens.expect("}")?;
+            Ok("{}".into())
+        }
+        literal => Ok(literal.to_string()),
+    }
+}
+
+/// Turns interface-typed operation arguments and dictionary members that
+/// name a dictionary into [`TypeKind::Dictionary`], and checks the
+/// dictionaries: known parents, no cycles, no shadowed inherited members,
+/// and dictionaries only where they are supported (non-nullable operation
+/// arguments, optional ones defaulting to `{}`).
+pub fn resolve_dictionaries(
+    interfaces: &mut [Interface],
+    dictionaries: &mut [Dictionary],
+) -> Result<(), String> {
+    let names: BTreeSet<String> = dictionaries.iter().map(|d| d.name.clone()).collect();
+    if names.len() != dictionaries.len() {
+        return Err("duplicate dictionary name".into());
+    }
+    let is_dictionary = |ty: &Type| matches!(&ty.kind, TypeKind::Interface(n) if names.contains(n));
+    for dictionary in dictionaries.iter() {
+        let mut seen: Vec<&str> = dictionary.members.iter().map(|m| m.name.as_str()).collect();
+        let mut parent = dictionary.parent.as_deref();
+        let mut depth = 0;
+        while let Some(name) = parent {
+            let found = dictionaries
+                .iter()
+                .find(|d| d.name == name)
+                .ok_or_else(|| format!("{}: unknown parent dictionary {name}", dictionary.name))?;
+            depth += 1;
+            if depth > dictionaries.len() {
+                return Err(format!("{}: dictionary inheritance cycle", dictionary.name));
+            }
+            for member in &found.members {
+                if seen.contains(&member.name.as_str()) {
+                    return Err(format!("{}: member {} shadows {name}'s", dictionary.name, member.name));
+                }
+                seen.push(&member.name);
+            }
+            parent = found.parent.as_deref();
+        }
+        if let Some(member) = dictionary.members.iter().find(|m| is_dictionary(&m.ty)) {
+            return Err(format!("{}.{}: nested dictionaries are unsupported", dictionary.name, member.name));
+        }
+    }
+    for interface in interfaces.iter_mut() {
+        for member in &mut interface.members {
+            match member {
+                Member::Const { ty, name, .. } | Member::Attribute { ty, name, .. } if is_dictionary(ty) => {
+                    return Err(format!("{}.{name}: a dictionary is only valid as an argument", interface.name));
+                }
+                Member::Operation { name, ret, args, .. } => {
+                    if is_dictionary(ret) {
+                        return Err(format!("{}.{name}: dictionary return types are unsupported", interface.name));
+                    }
+                    for arg in args.iter_mut().filter(|a| is_dictionary(&a.ty)) {
+                        if arg.ty.nullable {
+                            return Err(format!("{}.{name}: a dictionary cannot be nullable", interface.name));
+                        }
+                        if arg.optional && arg.default.as_deref() != Some("{}") {
+                            return Err(format!("{}.{name}: optional dictionary {} needs = {{}}", interface.name, arg.name));
+                        }
+                        if let TypeKind::Interface(dictionary) = &arg.ty.kind {
+                            arg.ty.kind = TypeKind::Dictionary(dictionary.clone());
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Attaches each included mixin to its interface and drops the mixins from
@@ -301,11 +441,7 @@ fn member(tokens: &mut Tokens) -> Result<Member, String> {
             return Err(format!("argument of type {:?}", ty.kind));
         }
         let arg_name = tokens.identifier()?;
-        let default = if optional && tokens.eat("=") {
-            Some(tokens.next().ok_or("missing default value")?.to_string())
-        } else {
-            None
-        };
+        let default = if optional && tokens.eat("=") { Some(default_literal(tokens)?) } else { None };
         if !optional && args.iter().any(|a| a.optional) {
             return Err(format!("required argument {arg_name} follows an optional one"));
         }
@@ -481,12 +617,12 @@ mod tests {
 
     #[test]
     fn resolves_mixins_into_including_interfaces() {
-        let (definitions, includes) = parse_definitions(
+        let definitions = parse_definitions(
             "interface mixin M { readonly attribute HTMLCollection children; };
              interface A { readonly attribute long x; }; A includes M;",
         )
         .unwrap();
-        let interfaces = resolve_mixins(definitions, &includes).unwrap();
+        let interfaces = resolve_mixins(definitions.interfaces, &definitions.includes).unwrap();
         assert_eq!(interfaces.len(), 1);
         assert_eq!(interfaces[0].includes[0].name, "M");
         for (source, error) in [
@@ -494,8 +630,9 @@ mod tests {
             ("interface mixin M {}; B includes M;", "unknown interface"),
             ("interface mixin M { attribute long x; }; interface A { attribute long x; }; A includes M;", "clashes"),
         ] {
-            let (definitions, includes) = parse_definitions(source).unwrap();
-            assert!(resolve_mixins(definitions, &includes).unwrap_err().contains(error), "{source}");
+            let definitions = parse_definitions(source).unwrap();
+            let error_text = resolve_mixins(definitions.interfaces, &definitions.includes).unwrap_err();
+            assert!(error_text.contains(error), "{source}");
         }
         for source in [
             "interface A { attribute NodeList x; };",
@@ -504,6 +641,55 @@ mod tests {
             "interface A {}; A includes M;",
         ] {
             assert!(parse(source).is_err(), "{source}");
+        }
+    }
+
+    fn resolved(source: &str) -> Result<Definitions, String> {
+        let mut definitions = parse_definitions(source)?;
+        resolve_dictionaries(&mut definitions.interfaces, &mut definitions.dictionaries)?;
+        Ok(definitions)
+    }
+
+    #[test]
+    fn parses_and_resolves_dictionaries() {
+        let definitions = resolved(
+            "dictionary Base { boolean capture = false; };
+             dictionary Options : Base { required DOMString name; Node? target = null; long count; };
+             interface A { undefined f(DOMString x, optional Options options = {}); };",
+        )
+        .unwrap();
+        let options = &definitions.dictionaries[1];
+        assert_eq!(options.parent.as_deref(), Some("Base"));
+        assert!(options.members[0].required);
+        assert_eq!(options.members[1].default.as_deref(), Some("null"));
+        assert_eq!(options.members[2].default, None);
+        let Member::Operation { args, .. } = &definitions.interfaces[0].members[0] else {
+            panic!("expected an operation");
+        };
+        assert_eq!(args[1].ty.kind, TypeKind::Dictionary("Options".into()));
+        assert_eq!(args[1].default.as_deref(), Some("{}"));
+        assert_eq!(args[0].ty.kind, TypeKind::String);
+
+        for (source, error) in [
+            ("dictionary D : Missing {};", "unknown parent"),
+            ("dictionary D : E {}; dictionary E : D {};", "cycle"),
+            ("dictionary B { long x; }; dictionary D : B { long x; };", "shadows"),
+            ("dictionary D {}; dictionary D {};", "duplicate dictionary"),
+            ("dictionary D {}; dictionary E { D inner; };", "nested"),
+            ("dictionary D {}; interface A { attribute D x; };", "only valid as an argument"),
+            ("dictionary D {}; interface A { D f(); };", "return"),
+            ("dictionary D {}; interface A { undefined f(D? x); };", "nullable"),
+            ("dictionary D {}; interface A { undefined f(optional D x); };", "= {}"),
+        ] {
+            assert!(resolved(source).unwrap_err().contains(error), "{source}");
+        }
+        for source in [
+            "dictionary D { required long x = 1; };",
+            "dictionary D { long x; long x; };",
+            "dictionary D { undefined x; };",
+            "dictionary D { long x }",
+        ] {
+            assert!(parse_definitions(source).is_err(), "{source}");
         }
     }
 

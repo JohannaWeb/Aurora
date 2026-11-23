@@ -280,6 +280,124 @@ fn node_mutations_are_generated_prototype_operations() {
 }
 
 #[test]
+fn get_root_node_converts_its_options_dictionary() {
+    let mut runtime = runtime();
+    assert_eq!(
+        runtime.eval_to_string(
+            r#"(() => {
+        const host = document.createElement('div');
+        document.body.appendChild(host);
+        const root = host.attachShadow({ mode: 'open' });
+        const inner = document.createElement('span');
+        root.appendChild(inner);
+        const loose = document.createElement('p');
+        const child = loose.appendChild(document.createElement('b'));
+        let getterCalls = 0;
+        const options = { get composed() { getterCalls++; return 1; } };
+        const out = [
+            document.body.getRootNode() === document,
+            inner.getRootNode() === root,
+            inner.getRootNode({}) === root,
+            inner.getRootNode(null) === root,
+            inner.getRootNode({ composed: true }) === document,
+            inner.getRootNode(options) === document && getterCalls === 1,
+            child.getRootNode() === loose,
+            Object.prototype.hasOwnProperty.call(host, 'getRootNode'),
+            Node.prototype.getRootNode.length,
+        ];
+        try { inner.getRootNode(5); } catch (e) { out.push(e instanceof TypeError); }
+        return out.join();
+    })()"#
+        ),
+        Ok("true,true,true,true,true,true,true,false,0,true".into())
+    );
+}
+
+#[test]
+fn node_value_equality_and_document_position() {
+    let mut runtime = runtime();
+    assert_eq!(
+        runtime.eval_to_string(
+            r#"(() => {
+        const div = document.createElement('div');
+        const text = div.appendChild(document.createTextNode('hi'));
+        const comment = div.appendChild(document.createComment('c'));
+        text.nodeValue = 'yo';
+        comment.nodeValue = null;
+        div.nodeValue = 'ignored';
+        const values = [div.nodeValue, text.nodeValue, text.data, comment.data === '', document.nodeValue,
+            Object.prototype.hasOwnProperty.call(text, 'nodeValue')];
+
+        const a = document.createElement('p');
+        a.setAttribute('x', '1'); a.setAttribute('y', '2');
+        a.appendChild(document.createTextNode('t'));
+        const b = document.createElement('p');
+        b.setAttribute('y', '2'); b.setAttribute('x', '1');
+        b.appendChild(document.createTextNode('t'));
+        const c = a.cloneNode(true); c.firstChild.data = 'u';
+        const equal = [a.isEqualNode(b), a.isEqualNode(c), a.isEqualNode(null),
+            a.isEqualNode(document.createElement('span')), a.isEqualNode(a)];
+
+        document.body.appendChild(div);
+        const first = document.body.firstChild;
+        const P = Node.DOCUMENT_POSITION_PRECEDING, F = Node.DOCUMENT_POSITION_FOLLOWING,
+              C = Node.DOCUMENT_POSITION_CONTAINS, CB = Node.DOCUMENT_POSITION_CONTAINED_BY,
+              D = Node.DOCUMENT_POSITION_DISCONNECTED, I = Node.DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC;
+        const loose = document.createElement('i');
+        const shadowChild = document.createElement('b');
+        div.attachShadow({ mode: 'open' }).appendChild(shadowChild);
+        const disconnected = text.compareDocumentPosition(loose);
+        const position = [
+            text.compareDocumentPosition(text) === 0,
+            text.compareDocumentPosition(comment) === F,
+            comment.compareDocumentPosition(text) === P,
+            text.compareDocumentPosition(div) === (C | P),
+            div.compareDocumentPosition(text) === (CB | F),
+            document.compareDocumentPosition(text) === (CB | F),
+            (disconnected & (D | I)) === (D | I) && [P, F].includes(disconnected & (P | F)),
+            (loose.compareDocumentPosition(text) & (P | F)) === ((disconnected & (P | F)) ^ (P | F)),
+            (shadowChild.compareDocumentPosition(div) & D) === D,
+        ];
+        try { text.compareDocumentPosition(null); } catch (e) { position.push(e instanceof TypeError); }
+        return [values.join('|'), equal.join('|'), position.join('|'), first !== null].join(' / ');
+    })()"#
+        ),
+        Ok("|yo|yo|true||false / true|false|false|false|true / true|true|true|true|true|true|true|true|true|true / true".into())
+    );
+}
+
+#[test]
+fn normalize_merges_adjacent_text_and_drops_empty_text() {
+    let mut runtime = runtime();
+    assert_eq!(
+        runtime.eval_to_string(
+            r#"(() => {
+        const div = document.createElement('div');
+        const first = div.appendChild(document.createTextNode('a'));
+        div.appendChild(document.createTextNode(''));
+        div.appendChild(document.createTextNode('b'));
+        const b = div.appendChild(document.createElement('b'));
+        b.appendChild(document.createTextNode(''));
+        b.appendChild(document.createTextNode('x'));
+        b.appendChild(document.createTextNode('y'));
+        div.appendChild(document.createComment('c'));
+        div.appendChild(document.createTextNode(''));
+        const template = div.appendChild(document.createElement('template'));
+        template.content.appendChild(document.createTextNode('t1'));
+        template.content.appendChild(document.createTextNode('t2'));
+        document.body.appendChild(div);
+        const result = div.normalize();
+        return [result, div.childNodes.length, div.firstChild === first, first.data,
+            b.childNodes.length, b.firstChild.data, template.content.childNodes.length,
+            div.textContent, Object.prototype.hasOwnProperty.call(div, 'normalize'),
+            Element.prototype.hasOwnProperty('normalize')].join('|');
+    })()"#
+        ),
+        Ok("|4|true|ab|1|xy|2|abxy|false|false".into())
+    );
+}
+
+#[test]
 fn snake_case_member_names() {
     #[path = "../../codegen/generate.rs"]
     #[allow(dead_code)]

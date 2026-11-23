@@ -1,6 +1,10 @@
 // DOM interfaces (https://dom.spec.whatwg.org/). Members are added as they
 // move onto the generated bindings; see idl/README.md.
 interface EventTarget {};
+dictionary GetRootNodeOptions {
+  boolean composed = false;
+};
+
 interface Node : EventTarget {
   const unsigned short ELEMENT_NODE = 1;
   const unsigned short ATTRIBUTE_NODE = 2;
@@ -33,11 +37,17 @@ interface Node : EventTarget {
   readonly attribute Node? lastChild;
   readonly attribute Node? previousSibling;
   readonly attribute Node? nextSibling;
+  [CEReactions] attribute DOMString? nodeValue;
   [CEReactions] attribute DOMString? textContent;
+
+  [CEReactions] undefined normalize();
 
   [CEReactions, NewObject] Node cloneNode(optional boolean subtree = false);
   boolean hasChildNodes();
+  boolean isEqualNode(Node? otherNode);
   boolean isSameNode(Node? otherNode);
+  unsigned short compareDocumentPosition(Node other);
+  Node getRootNode(optional GetRootNodeOptions options = {});
   boolean contains(Node? other);
 
   [CEReactions] Node insertBefore(Node node, Node? child);

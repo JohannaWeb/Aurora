@@ -2,7 +2,7 @@
 //! hand-written `Dom` type implements, plus V8 callbacks that brand-check
 //! `this`, convert arguments per WebIDL and convert the result back.
 
-use super::webidl::{Argument, Interface, Member, Type, TypeKind};
+use super::webidl::{Argument, Dictionary, Interface, Member, Type, TypeKind};
 use std::fmt::Write;
 
 const KEYWORDS: &[&str] = &[
@@ -42,6 +42,7 @@ fn base_type(kind: &TypeKind) -> String {
         TypeKind::Undefined => "()".into(),
         TypeKind::Interface(_) => "NodePtr".into(),
         TypeKind::NodeArray => "Vec<NodePtr>".into(),
+        TypeKind::Dictionary(name) => name.clone(),
     }
 }
 
@@ -76,6 +77,7 @@ fn convert(kind: &TypeKind) -> String {
             format!("conv::float(scope, v, {double}, {unrestricted}).map(|x| x as {})", base_type(kind))
         }
         TypeKind::Interface(name) => format!("conv::interface(scope, registry, v, {name:?})"),
+        TypeKind::Dictionary(name) => format!("convert_dictionary_{name}(scope, registry, v)"),
         TypeKind::Undefined | TypeKind::NodeArray => unreachable!("rejected by the parser"),
     }
 }
@@ -103,6 +105,11 @@ fn wrap(arg: &Argument, value: &str) -> String {
 /// Statement binding `name` to the converted value of `v`.
 fn convert_arg(arg: &Argument, name: &str) -> String {
     let conversion = convert(&arg.ty.kind);
+    // A dictionary converts `undefined` to its defaults, which is also what
+    // the only default the parser accepts for one (`{}`) means.
+    if matches!(arg.ty.kind, TypeKind::Dictionary(_)) {
+        return format!("let {name}: {} = {conversion}?;\n", arg_type(arg));
+    }
     let value = if arg.ty.nullable {
         format!("if v.is_null_or_undefined() {{ None }} else {{ Some({conversion}?) }}")
     } else if arg.ty.null_to_empty {
@@ -280,4 +287,71 @@ fn emit(out: &mut String, install: &mut String, interface: &str, owner: &str, me
         }
     }
     trait_fns
+}
+
+/// A dictionary's members in WebIDL order: inherited dictionaries' first,
+/// each dictionary's own sorted lexicographically.
+fn dictionary_members<'d>(dictionary: &'d Dictionary, all: &'d [Dictionary]) -> Vec<&'d super::webidl::DictionaryMember> {
+    let mut members = match &dictionary.parent {
+        Some(parent) => dictionary_members(all.iter().find(|d| &d.name == parent).unwrap(), all),
+        None => Vec::new(),
+    };
+    let mut own: Vec<_> = dictionary.members.iter().collect();
+    own.sort_by(|a, b| a.name.cmp(&b.name));
+    members.extend(own);
+    members
+}
+
+/// A struct for the dictionary and the function converting a JS value to it
+/// (<https://webidl.spec.whatwg.org/#js-dictionary>). A member that is not
+/// required and has no default is an `Option`, `None` when absent.
+pub fn dictionary(dictionary: &Dictionary, all: &[Dictionary]) -> String {
+    let name = &dictionary.name;
+    let members = dictionary_members(dictionary, all);
+    let mut fields = String::new();
+    let mut body = String::new();
+    for member in &members {
+        let field = snake_case(&member.name);
+        let arg = Argument {
+            name: member.name.clone(),
+            ty: member.ty.clone(),
+            optional: !member.required,
+            default: member.default.clone(),
+        };
+        writeln!(fields, "    pub(super) {field}: {},", arg_type(&arg)).unwrap();
+        writeln!(
+            body,
+            "let v = match object {{ Some(object) => {{ let key = v8_str(scope, {key:?}); \
+             object.get(scope, key.into()).ok_or(Error::Pending)? }} None => v8::undefined(scope).into() }};",
+            key = member.name
+        )
+        .unwrap();
+        if member.required {
+            writeln!(
+                body,
+                "if v.is_undefined() {{ return Err(Error::Type(\"Failed to read the '{}' property from '{name}': \
+                 Required member is undefined.\".into())); }}",
+                member.name
+            )
+            .unwrap();
+        }
+        body.push_str(&convert_arg(&arg, &format!("member_{}", field.trim_start_matches("r#"))));
+    }
+    let construct: String = members
+        .iter()
+        .map(|m| {
+            let field = snake_case(&m.name);
+            format!("{field}: member_{}, ", field.trim_start_matches("r#"))
+        })
+        .collect();
+    format!(
+        "#[derive(Debug)]\n#[allow(dead_code)]\npub(super) struct {name} {{\n{fields}}}\n\
+         #[allow(non_snake_case, unused_variables)]\n\
+         fn convert_dictionary_{name}(scope: &mut v8::PinScope<'_, '_>, registry: &Rc<NodeRegistry>, \
+         value: v8::Local<v8::Value>) -> Fallible<{name}> {{\n\
+         let object = if value.is_null_or_undefined() {{ None }} else {{ match v8::Local::<v8::Object>::try_from(value) {{\n\
+         Ok(object) => Some(object),\n\
+         Err(_) => return Err(Error::Type(\"Failed to convert value to '{name}'.\".into())) }} }};\n\
+         {body}Ok({name} {{ {construct}}})\n}}\n"
+    )
 }

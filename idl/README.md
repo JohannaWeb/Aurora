@@ -25,6 +25,14 @@ unsupported IDL fails the build instead of producing wrong bindings:
   `Name includes Mixin;`. No partials or namespaces. A mixin gets one
   `<Mixin>Members` trait; each including interface gets its own callbacks,
   brand-checked against that interface.
+- `dictionary Name [: Parent] { ... };` with `required` members and literal
+  defaults. Each becomes a Rust struct (a member that is neither required
+  nor defaulted is an `Option`) and a conversion function that follows
+  WebIDL: `undefined`/`null` give the defaults, other non-objects throw
+  `TypeError`, and members are read once each, inherited ones first, each
+  dictionary's sorted by name. Dictionaries are only allowed as non-null
+  operation arguments; an optional one must default to `{}`. Nested
+  dictionaries are rejected.
 - `const` integer or boolean members, installed on the interface object and
   its prototype (read-only, enumerable, non-configurable).
 - `[readonly] attribute T name;` as accessor properties on the prototype.
@@ -50,8 +58,9 @@ or a native `DOMException`.
 
 Members currently on generated bindings: `Node`'s constants, its tree
 operations (`appendChild`, `insertBefore`, `replaceChild`, `removeChild`,
-`cloneNode`, `hasChildNodes`, `isSameNode`, `contains`) and its navigation
-attributes (`nodeType`, `nodeName`, `isConnected`,
+`cloneNode`, `normalize`, `hasChildNodes`, `isSameNode`, `isEqualNode`,
+`compareDocumentPosition`, `contains`, `getRootNode`) and its attributes
+(`nodeType`, `nodeName`, `nodeValue`, `isConnected`,
 `ownerDocument`, `parentNode`, `parentElement`, `childNodes`, `firstChild`,
 `lastChild`, `previousSibling`, `nextSibling`, `textContent`); `Element.className`;
 the `ParentNode`, `NonDocumentTypeChildNode` and `InnerHTML` mixins; and all

@@ -161,19 +161,6 @@ pub(super) fn create_js_node<'s>(
         set_text_content,
         node_external,
     );
-    // `nodeValue` only on Text/Comment wrappers until Node moves to generated
-    // bindings (P2.3): an own accessor on element wrappers would shadow
-    // application-level properties. `data` is on CharacterData.prototype.
-    if matches!(&*node.borrow(), Node::Text(_) | Node::Comment(_)) {
-        install_accessor(
-            scope,
-            template,
-            "nodeValue",
-            get_text_content,
-            set_text_content,
-            node_external,
-        );
-    }
     install_readonly_accessor(scope, template, "outerHTML", get_outer_html, node_external);
     install_accessor(scope, template, "id", get_id, set_id, node_external);
     install_accessor(
@@ -219,7 +206,6 @@ pub(super) fn create_js_node<'s>(
         get_layout_metric,
         node_external,
     );
-    install_method(scope, template, "getRootNode", get_root_node, node_external);
     install_method(scope, template, "append", append_children, node_external);
     install_method(
         scope,
@@ -250,7 +236,6 @@ pub(super) fn create_js_node<'s>(
         insert_adjacent_text,
         node_external,
     );
-    install_method(scope, template, "normalize", normalize_node, node_external);
     install_method(
         scope,
         template,
@@ -1773,14 +1758,6 @@ fn get_layout_metric(
     retval.set(v8::Number::new(scope, value as f64).into());
 }
 
-fn get_root_node(
-    _scope: &mut v8::PinScope<'_, '_>,
-    args: v8::FunctionCallbackArguments,
-    mut retval: v8::ReturnValue,
-) {
-    retval.set(args.this().into());
-}
-
 /// ParentNode/ChildNode `(Node or DOMString)...` arguments as nodes.
 fn nodes_or_text(
     scope: &mut v8::PinScope<'_, '_>,
@@ -2087,13 +2064,6 @@ fn insert_adjacent_element(
     } else {
         retval.set(v8::null(scope).into());
     }
-}
-
-fn normalize_node(
-    _scope: &mut v8::PinScope<'_, '_>,
-    _args: v8::FunctionCallbackArguments,
-    mut _retval: v8::ReturnValue,
-) {
 }
 
 fn get_elements_by_class_name(
