@@ -4,9 +4,9 @@
 //! argument per WebIDL by the time these run.
 
 use super::bindings::{
-    CharacterDataMembers, DocumentMembers, ElementMembers, Error, Fallible, GetRootNodeOptions,
-    HTMLHyperlinkElementUtilsMembers, InnerHTMLMembers, NodeMembers,
-    NonDocumentTypeChildNodeMembers, ParentNodeMembers,
+    CharacterDataMembers, ChildNodeMembers, DocumentMembers, ElementMembers, Error, Fallible,
+    GetRootNodeOptions, HTMLHyperlinkElementUtilsMembers, InnerHTMLMembers, NodeMembers,
+    NodeOrString, NonDocumentTypeChildNodeMembers, ParentNodeMembers,
 };
 use super::node_create::{
     call_global_hook, child_nodes_of, create_js_node, inner_html_target, interface_for,
@@ -1023,6 +1023,117 @@ impl HTMLHyperlinkElementUtilsMembers for Dom {
             url::quirks::set_hash(url, &value);
             Ok(())
         });
+        Ok(())
+    }
+}
+
+// --- ChildNode ---------------------------------------------------------------
+
+/// <https://dom.spec.whatwg.org/#converting-nodes-into-a-node>: strings
+/// become text nodes; several nodes are gathered into a new fragment.
+fn nodes_into_a_node(registry: &Rc<NodeRegistry>, nodes: Vec<NodeOrString>) -> Fallible<Option<NodePtr>> {
+    let mut nodes: Vec<NodePtr> = nodes
+        .into_iter()
+        .map(|item| match item {
+            NodeOrString::Node(node) => node,
+            NodeOrString::String(text) => Node::text(text),
+        })
+        .collect();
+    if nodes.len() <= 1 {
+        return Ok(nodes.pop());
+    }
+    let fragment = Node::document_fragment(Vec::new());
+    for node in &nodes {
+        if let Some(message) = mutation::hierarchy_error(&fragment, node) {
+            return Err(Error::Dom { name: "HierarchyRequestError", message: message.into() });
+        }
+        mutation::apply_dom_mutation(registry, mutation::DomMutation::AppendChild { parent: &fragment, child: node });
+    }
+    Ok(Some(fragment))
+}
+
+fn given_nodes(nodes: &[NodeOrString]) -> Vec<NodePtr> {
+    nodes
+        .iter()
+        .filter_map(|item| match item {
+            NodeOrString::Node(node) => Some(node.clone()),
+            NodeOrString::String(_) => None,
+        })
+        .collect()
+}
+
+/// The first sibling of `this` in direction `step` (-1 before, 1 after) that
+/// is not one of `excluded`.
+fn viable_sibling(registry: &Rc<NodeRegistry>, this: &NodePtr, step: i32, excluded: &[NodePtr]) -> Option<NodePtr> {
+    let document = document(registry, this);
+    let mut current = sibling_of(registry, &document, this, step, false);
+    while let Some(node) = current {
+        if !excluded.iter().any(|n| Rc::ptr_eq(n, &node)) {
+            return Some(node);
+        }
+        current = sibling_of(registry, &document, &node, step, false);
+    }
+    None
+}
+
+impl ChildNodeMembers for Dom {
+    /// <https://dom.spec.whatwg.org/#dom-childnode-before>
+    fn before(scope: Scope, registry: &Rc<NodeRegistry>, this: &NodePtr, nodes: Vec<NodeOrString>) -> Fallible<()> {
+        let Some(parent) = parent_of(registry, &document(registry, this), this) else { return Ok(()) };
+        let previous = viable_sibling(registry, this, -1, &given_nodes(&nodes));
+        let Some(node) = nodes_into_a_node(registry, nodes)? else { return Ok(()) };
+        let reference = match previous {
+            Some(previous) => sibling_of(registry, &document(registry, this), &previous, 1, false),
+            None => navigation::first_child(&parent, false),
+        };
+        insert(scope, registry, &parent, &node, |parent, node| mutation::DomMutation::InsertBefore {
+            parent,
+            new_child: node,
+            ref_child: reference.as_ref(),
+        })
+    }
+
+    /// <https://dom.spec.whatwg.org/#dom-childnode-after>
+    fn after(scope: Scope, registry: &Rc<NodeRegistry>, this: &NodePtr, nodes: Vec<NodeOrString>) -> Fallible<()> {
+        let Some(parent) = parent_of(registry, &document(registry, this), this) else { return Ok(()) };
+        let next = viable_sibling(registry, this, 1, &given_nodes(&nodes));
+        let Some(node) = nodes_into_a_node(registry, nodes)? else { return Ok(()) };
+        insert(scope, registry, &parent, &node, |parent, node| mutation::DomMutation::InsertBefore {
+            parent,
+            new_child: node,
+            ref_child: next.as_ref(),
+        })
+    }
+
+    /// <https://dom.spec.whatwg.org/#dom-childnode-replacewith>
+    fn replace_with(scope: Scope, registry: &Rc<NodeRegistry>, this: &NodePtr, nodes: Vec<NodeOrString>) -> Fallible<()> {
+        let document = document(registry, this);
+        let Some(parent) = parent_of(registry, &document, this) else { return Ok(()) };
+        let next = viable_sibling(registry, this, 1, &given_nodes(&nodes));
+        let node = nodes_into_a_node(registry, nodes)?;
+        let still_child = parent_of(registry, &document, this).is_some_and(|p| Rc::ptr_eq(&p, &parent));
+        match node {
+            Some(node) if still_child => insert(scope, registry, &parent, &node, |parent, node| {
+                mutation::DomMutation::ReplaceChild { parent, new_child: node, old_child: this }
+            }),
+            Some(node) => insert(scope, registry, &parent, &node, |parent, node| mutation::DomMutation::InsertBefore {
+                parent,
+                new_child: node,
+                ref_child: next.as_ref(),
+            }),
+            None => {
+                mutation::apply_dom_mutation(registry, mutation::DomMutation::RemoveChild { parent: &parent, child: this });
+                registry.mark_layout_dirty(&parent);
+                Ok(())
+            }
+        }
+    }
+
+    /// <https://dom.spec.whatwg.org/#dom-childnode-remove>
+    fn remove(_: Scope, registry: &Rc<NodeRegistry>, this: &NodePtr) -> Fallible<()> {
+        if let Some(parent) = parent_of(registry, &document(registry, this), this) {
+            mutation::apply_dom_mutation(registry, mutation::DomMutation::RemoveChild { parent: &parent, child: this });
+        }
         Ok(())
     }
 }

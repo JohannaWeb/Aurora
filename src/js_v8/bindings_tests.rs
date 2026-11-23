@@ -544,6 +544,46 @@ fn selector_queries_are_generated_and_spec_shaped() {
 }
 
 #[test]
+fn child_node_methods_follow_the_spec() {
+    let mut runtime = runtime();
+    assert_eq!(
+        runtime.eval_to_string(
+            r#"(() => {
+        const names = (p) => Array.from(p.childNodes, n => n.nodeType === 1 ? n.localName : n.data).join(',');
+        const p = document.createElement('div');
+        p.innerHTML = '<a></a><b></b><c></c>';
+        const [a, b, c] = p.children;
+        const own = ['before', 'after', 'replaceWith', 'remove']
+            .filter(n => Object.prototype.hasOwnProperty.call(a, n) || typeof Element.prototype[n] !== 'function');
+        const out = [own.length, Element.prototype.before.length];
+
+        b.before('x', c);
+        out.push(names(p));
+        b.after(a, 'y');
+        out.push(names(p));
+        a.replaceWith('z');
+        out.push(names(p));
+        b.replaceWith();
+        out.push(names(p));
+        c.remove();
+        out.push(names(p));
+
+        const loose = document.createElement('i');
+        loose.before('ignored'); loose.after(b); loose.remove(); loose.replaceWith(c);
+        out.push(b.parentNode === null, c.parentNode === null);
+
+        const text = p.firstChild;
+        text.after(document.createComment('k'));
+        out.push(typeof text.before, names(p));
+        try { b.appendChild(p); p.firstChild.before(p); } catch (e) { out.push(e.name); }
+        return out.join(' / ');
+    })()"#
+        ),
+        Ok("0 / 0 / a,x,c,b / x,c,b,a,y / x,c,b,z,y / x,c,z,y / x,z,y / true / true / function / x,k,z,y / HierarchyRequestError".into())
+    );
+}
+
+#[test]
 fn snake_case_member_names() {
     #[path = "../../codegen/generate.rs"]
     #[allow(dead_code)]

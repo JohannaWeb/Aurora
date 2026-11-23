@@ -50,10 +50,7 @@ pub(super) fn create_js_node<'s>(
 
     // Mutation methods. Node's own (appendChild, insertBefore, removeChild,
     // replaceChild, cloneNode, hasChildNodes) are on Node.prototype.
-    install_method(scope, template, "remove", remove_node, node_external);
     install_method(scope, template, "prepend", prepend_children, node_external);
-    install_method(scope, template, "before", insert_before_self, node_external);
-    install_method(scope, template, "after", insert_after_self, node_external);
 
     // Attribute methods are on Element.prototype (generated).
 
@@ -127,7 +124,6 @@ pub(super) fn create_js_node<'s>(
         replace_children,
         node_external,
     );
-    install_method(scope, template, "replaceWith", replace_with, node_external);
     install_method(
         scope,
         template,
@@ -671,26 +667,6 @@ pub(super) fn track_fragment_children(
         }
         let js_node = create_js_node(scope, child.clone(), registry, document);
         call_global_hook(scope, "__aurora_track_custom_element__", js_node);
-    }
-}
-
-fn remove_node(
-    scope: &mut v8::PinScope<'_, '_>,
-    args: v8::FunctionCallbackArguments,
-    mut _retval: v8::ReturnValue,
-) {
-    let data = args.data();
-    let node_data = node_data_from(data);
-    let _reactions = CeReactionsGuard::new(scope, &node_data.registry);
-
-    if let Some(parent) = find_parent_for_node(node_data) {
-        let _mutation_result = mutation::apply_dom_mutation(
-            &node_data.registry,
-            mutation::DomMutation::RemoveChild {
-                parent: &parent,
-                child: &node_data.node,
-            },
-        );
     }
 }
 
@@ -1388,81 +1364,6 @@ fn prepend_children(
         );
     }
     node_data.registry.mark_layout_dirty(&node_data.node);
-}
-
-fn replace_with(
-    scope: &mut v8::PinScope<'_, '_>,
-    args: v8::FunctionCallbackArguments,
-    mut _retval: v8::ReturnValue,
-) {
-    let node_data = node_data_from(args.data());
-    let _reactions = CeReactionsGuard::new(scope, &node_data.registry);
-    let parent = find_parent_for_node(node_data);
-    if !insert_relative_to_self(scope, args, false) {
-        return;
-    }
-    if let Some(parent) = parent {
-        let _mutation_result = mutation::apply_dom_mutation(
-            &node_data.registry,
-            mutation::DomMutation::RemoveChild {
-                parent: &parent,
-                child: &node_data.node,
-            },
-        );
-        node_data.registry.mark_layout_dirty(&parent);
-    }
-}
-
-fn insert_relative_to_self(
-    scope: &mut v8::PinScope<'_, '_>,
-    args: v8::FunctionCallbackArguments,
-    after: bool,
-) -> bool {
-    let node_data = node_data_from(args.data());
-    let Some(parent) = find_parent_for_node(node_data) else {
-        return true;
-    };
-    let reference = if after {
-        sibling_for_node(node_data, 1, false)
-    } else {
-        Some(node_data.node.clone())
-    };
-    let children = nodes_or_text(scope, &args, node_data);
-    if reject_invalid_insertion(scope, &parent, &children) {
-        return false;
-    }
-    for child in children {
-        let _mutation_result = mutation::apply_dom_mutation(
-            &node_data.registry,
-            mutation::DomMutation::InsertBefore {
-                parent: &parent,
-                new_child: &child,
-                ref_child: reference.as_ref(),
-            },
-        );
-    }
-    node_data.registry.mark_layout_dirty(&parent);
-    true
-}
-
-fn insert_before_self(
-    scope: &mut v8::PinScope<'_, '_>,
-    args: v8::FunctionCallbackArguments,
-    mut _retval: v8::ReturnValue,
-) {
-    let node_data = node_data_from(args.data());
-    let _reactions = CeReactionsGuard::new(scope, &node_data.registry);
-    insert_relative_to_self(scope, args, false);
-}
-
-fn insert_after_self(
-    scope: &mut v8::PinScope<'_, '_>,
-    args: v8::FunctionCallbackArguments,
-    mut _retval: v8::ReturnValue,
-) {
-    let node_data = node_data_from(args.data());
-    let _reactions = CeReactionsGuard::new(scope, &node_data.registry);
-    insert_relative_to_self(scope, args, true);
 }
 
 pub(super) fn parsed_html_nodes(html: &str) -> Vec<NodePtr> {

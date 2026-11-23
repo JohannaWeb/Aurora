@@ -104,6 +104,18 @@ interface Comment : CharacterData {};
 interface CDATASection : Text {};
 interface ProcessingInstruction : CharacterData {};
 
+// <https://dom.spec.whatwg.org/#interface-childnode>. [Unscopable] is left
+// out: the generator installs no @@unscopables yet.
+interface mixin ChildNode {
+  [CEReactions] undefined before((Node or DOMString)... nodes);
+  [CEReactions] undefined after((Node or DOMString)... nodes);
+  [CEReactions] undefined replaceWith((Node or DOMString)... nodes);
+  [CEReactions] undefined remove();
+};
+DocumentType includes ChildNode;
+Element includes ChildNode;
+CharacterData includes ChildNode;
+
 // ShadyDOM copies all of Node's and the mixins' navigation accessors from the
 // prototypes as soon as Node.prototype.firstChild is a getter, so these move
 // together (see idl/README.md).

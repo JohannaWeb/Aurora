@@ -220,8 +220,7 @@
 
     [
         'appendChild', 'insertBefore', 'removeChild',
-        'append', 'prepend', 'before', 'after', 'remove',
-        'replaceChildren', 'replaceWith'
+        'append', 'prepend', 'replaceChildren'
     ].forEach(function(name) {
         installPrototypeForward(globalThis.Node && Node.prototype, name);
     });

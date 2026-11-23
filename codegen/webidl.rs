@@ -84,6 +84,8 @@ pub enum TypeKind {
     /// interfaces exist. Only valid as a non-null read-only attribute's or
     /// operation result's type.
     NodeArray,
+    /// `(Node or DOMString)`, the only union supported so far.
+    NodeOrString,
     /// A dictionary type, only as an operation argument. The parser reads
     /// every other capitalized name as an interface; [`resolve_dictionaries`]
     /// turns the ones naming a dictionary into this.
@@ -96,6 +98,8 @@ pub struct Argument {
     pub ty: Type,
     pub optional: bool,
     pub default: Option<String>,
+    /// `T... name`: takes the remaining arguments. Only the last argument.
+    pub variadic: bool,
 }
 
 fn tokenize(source: &str) -> Result<Vec<String>, String> {
@@ -140,13 +144,23 @@ fn tokenize(source: &str) -> Result<Vec<String>, String> {
                 literal.push('"');
                 tokens.push(literal);
             }
+            '.' if chars.clone().take(2).eq(['.', '.']) => {
+                chars.next();
+                chars.next();
+                tokens.push("...".into());
+            }
             c if c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.') => {
                 let mut word = c.to_string();
-                while chars
-                    .peek()
-                    .is_some_and(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.'))
-                {
-                    word.push(chars.next().unwrap());
+                // `.` continues a word (`1.5`) unless it starts `...`.
+                while let Some(&next) = chars.peek() {
+                    let continues = next.is_ascii_alphanumeric()
+                        || next == '_'
+                        || (next == '.' && !starts_ellipsis(&chars));
+                    if !continues {
+                        break;
+                    }
+                    word.push(next);
+                    chars.next();
                 }
                 tokens.push(word);
             }
@@ -154,6 +168,11 @@ fn tokenize(source: &str) -> Result<Vec<String>, String> {
         }
     }
     Ok(tokens)
+}
+
+/// Whether the next three characters are `...`.
+fn starts_ellipsis(chars: &std::iter::Peekable<std::str::Chars>) -> bool {
+    chars.clone().take(3).eq(['.', '.', '.'])
 }
 
 struct Tokens<'a> {
@@ -444,17 +463,24 @@ fn member(tokens: &mut Tokens) -> Result<Member, String> {
         if !args.is_empty() {
             tokens.expect(",")?;
         }
+        if args.last().is_some_and(|a: &Argument| a.variadic) {
+            return Err("a variadic argument must be the last one".into());
+        }
         let optional = tokens.eat("optional");
         let ty = parse_type(tokens)?;
         if matches!(ty.kind, TypeKind::Undefined | TypeKind::NodeArray) {
             return Err(format!("argument of type {:?}", ty.kind));
         }
+        let variadic = tokens.eat("...");
+        if variadic && (optional || ty.nullable) {
+            return Err("variadic arguments cannot be optional or nullable".into());
+        }
         let arg_name = tokens.identifier()?;
         let default = if optional && tokens.eat("=") { Some(default_literal(tokens)?) } else { None };
-        if !optional && args.iter().any(|a| a.optional) {
+        if !optional && !variadic && args.iter().any(|a| a.optional) {
             return Err(format!("required argument {arg_name} follows an optional one"));
         }
-        args.push(Argument { name: arg_name, ty, optional, default });
+        args.push(Argument { name: arg_name, ty, optional, default, variadic });
     }
     tokens.expect(";")?;
     Ok(Member::Operation { name, ret, args, ce_reactions })
@@ -470,6 +496,20 @@ fn parse_type(tokens: &mut Tokens) -> Result<Type, String> {
             other => return Err(format!("unsupported type extended attribute [{other}]")),
         }
         tokens.expect("]")?;
+    }
+    if tokens.eat("(") {
+        let first = tokens.next();
+        tokens.expect("or")?;
+        let second = tokens.next();
+        tokens.expect(")")?;
+        let kind = match (first, second) {
+            (Some("Node"), Some("DOMString")) | (Some("DOMString"), Some("Node")) => TypeKind::NodeOrString,
+            _ => return Err(format!("unsupported union ({first:?} or {second:?})")),
+        };
+        if null_to_empty {
+            return Err("[LegacyNullToEmptyString] on a union".into());
+        }
+        return Ok(Type { kind, nullable: tokens.eat("?"), null_to_empty });
     }
     let kind = match tokens.next() {
         Some("DOMString" | "USVString") => TypeKind::String,
@@ -703,6 +743,29 @@ mod tests {
     }
 
     #[test]
+    fn parses_variadic_node_or_string_arguments() {
+        let interfaces = parse(
+            "interface A { undefined f(DOMString a, (Node or DOMString)... nodes); \
+             undefined g(long... xs); undefined h(optional double x = 1.5); };",
+        )
+        .unwrap();
+        let Member::Operation { args, .. } = &interfaces[0].members[0] else { panic!() };
+        assert!(args[1].variadic && args[1].ty.kind == TypeKind::NodeOrString);
+        assert!(!args[0].variadic);
+        let Member::Operation { args, .. } = &interfaces[0].members[2] else { panic!() };
+        assert_eq!(args[0].default.as_deref(), Some("1.5"));
+        for source in [
+            "interface A { undefined f(long... xs, long y); };",
+            "interface A { undefined f(optional long... xs); };",
+            "interface A { undefined f(long?... xs); };",
+            "interface A { undefined f((Node or long) x); };",
+            "interface A { undefined f((Node and DOMString) x); };",
+        ] {
+            assert!(parse(source).is_err(), "{source}");
+        }
+    }
+
+    #[test]
     fn parses_stringifier_attributes() {
         let interfaces = parse("interface A { stringifier attribute USVString href; };").unwrap();
         assert!(matches!(&interfaces[0].members[0], Member::Attribute { stringifier: true, .. }));
@@ -728,7 +791,6 @@ mod tests {
             "interface A { undefined f(optional long a, long b); };",
             "interface A { const DOMString X = \"x\"; };",
             "interface A { attribute undefined x; };",
-            "interface A { undefined f(long... rest); };",
             "interface A { attribute [LegacyNullToEmptyString] DOMString? x; };",
             "interface A { attribute [LegacyNullToEmptyString] long x; };",
             "interface A { attribute [Clamp] long x; };",
