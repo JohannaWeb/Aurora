@@ -4,13 +4,14 @@
 //! argument per WebIDL by the time these run.
 
 use super::bindings::{
-    CharacterDataMembers, ElementMembers, Error, Fallible, GetRootNodeOptions, InnerHTMLMembers,
-    NodeMembers, NonDocumentTypeChildNodeMembers, ParentNodeMembers,
+    CharacterDataMembers, ElementMembers, Error, Fallible, GetRootNodeOptions,
+    HTMLHyperlinkElementUtilsMembers, InnerHTMLMembers, NodeMembers,
+    NonDocumentTypeChildNodeMembers, ParentNodeMembers,
 };
 use super::node_create::{
     call_global_hook, child_nodes_of, create_js_node, inner_html_target, is_document_fragment,
     node_name, node_type, parent_of, parsed_html_nodes, reclaim_composed_fragment, sibling_of,
-    track_fragment_children,
+    track_fragment_children, v8_str,
 };
 use super::registry::NodeRegistry;
 use super::tree::{mutation, navigation};
@@ -706,6 +707,159 @@ impl InnerHTMLMembers for Dom {
         let children = parsed_html_nodes(&value);
         mutation::apply_dom_mutation(registry, mutation::DomMutation::ReplaceChildren { node: &target, children });
         registry.mark_layout_dirty(this);
+        Ok(())
+    }
+}
+
+// --- HTMLHyperlinkElementUtils ---------------------------------------------
+// <https://html.spec.whatwg.org/multipage/links.html#htmlhyperlinkelementutils>,
+// with the URL Standard's component getters and setters from `url::quirks`.
+
+/// The document's URL, as JS sees it through `location.href`. `<base href>`
+/// is not applied yet.
+fn document_base_url(scope: Scope) -> Option<url::Url> {
+    let global = scope.get_current_context().global(scope);
+    let key = v8_str(scope, "location");
+    let location = v8::Local::<v8::Object>::try_from(global.get(scope, key.into())?).ok()?;
+    let key = v8_str(scope, "href");
+    let href = location.get(scope, key.into())?.to_rust_string_lossy(scope);
+    url::Url::parse(&href).ok()
+}
+
+/// The element's url: its `href` attribute parsed against the document's
+/// URL, or `None` without the attribute or when parsing fails.
+fn hyperlink_url(scope: Scope, this: &NodePtr) -> Option<url::Url> {
+    let href = attribute(this, "href")?;
+    match document_base_url(scope) {
+        Some(base) => base.join(&href).ok(),
+        None => url::Url::parse(&href).ok(),
+    }
+}
+
+/// Applies `change` to the element's url and, if it succeeded, writes the
+/// result back to `href` ("update href"). Nothing happens without a url.
+fn change_hyperlink_url(
+    scope: Scope,
+    registry: &Rc<NodeRegistry>,
+    this: &NodePtr,
+    change: impl FnOnce(&mut url::Url) -> Result<(), ()>,
+) {
+    let Some(mut url) = hyperlink_url(scope, this) else { return };
+    if change(&mut url).is_ok() {
+        set_attribute(registry, this, "href", url.as_str());
+    }
+}
+
+fn url_part(scope: Scope, this: &NodePtr, part: fn(&url::Url) -> &str) -> Fallible<String> {
+    Ok(hyperlink_url(scope, this).map(|url| part(&url).to_string()).unwrap_or_default())
+}
+
+impl HTMLHyperlinkElementUtilsMembers for Dom {
+    /// The serialized url, or the raw attribute when it does not parse.
+    fn href(scope: Scope, _: &Rc<NodeRegistry>, this: &NodePtr) -> Fallible<String> {
+        Ok(match hyperlink_url(scope, this) {
+            Some(url) => url.into(),
+            None => attribute(this, "href").unwrap_or_default(),
+        })
+    }
+
+    fn set_href(_: Scope, registry: &Rc<NodeRegistry>, this: &NodePtr, value: String) -> Fallible<()> {
+        set_attribute(registry, this, "href", &value);
+        Ok(())
+    }
+
+    fn origin(scope: Scope, _: &Rc<NodeRegistry>, this: &NodePtr) -> Fallible<String> {
+        Ok(hyperlink_url(scope, this).map(|url| url::quirks::origin(&url)).unwrap_or_default())
+    }
+
+    /// `":"` without a url, as the spec says.
+    fn protocol(scope: Scope, _: &Rc<NodeRegistry>, this: &NodePtr) -> Fallible<String> {
+        Ok(hyperlink_url(scope, this).map_or(":".into(), |url| url::quirks::protocol(&url).to_string()))
+    }
+
+    fn set_protocol(scope: Scope, registry: &Rc<NodeRegistry>, this: &NodePtr, value: String) -> Fallible<()> {
+        change_hyperlink_url(scope, registry, this, |url| url::quirks::set_protocol(url, &value));
+        Ok(())
+    }
+
+    fn username(scope: Scope, _: &Rc<NodeRegistry>, this: &NodePtr) -> Fallible<String> {
+        url_part(scope, this, url::quirks::username)
+    }
+
+    fn set_username(scope: Scope, registry: &Rc<NodeRegistry>, this: &NodePtr, value: String) -> Fallible<()> {
+        change_hyperlink_url(scope, registry, this, |url| url::quirks::set_username(url, &value));
+        Ok(())
+    }
+
+    fn password(scope: Scope, _: &Rc<NodeRegistry>, this: &NodePtr) -> Fallible<String> {
+        url_part(scope, this, url::quirks::password)
+    }
+
+    fn set_password(scope: Scope, registry: &Rc<NodeRegistry>, this: &NodePtr, value: String) -> Fallible<()> {
+        change_hyperlink_url(scope, registry, this, |url| url::quirks::set_password(url, &value));
+        Ok(())
+    }
+
+    fn host(scope: Scope, _: &Rc<NodeRegistry>, this: &NodePtr) -> Fallible<String> {
+        url_part(scope, this, url::quirks::host)
+    }
+
+    fn set_host(scope: Scope, registry: &Rc<NodeRegistry>, this: &NodePtr, value: String) -> Fallible<()> {
+        change_hyperlink_url(scope, registry, this, |url| url::quirks::set_host(url, &value));
+        Ok(())
+    }
+
+    fn hostname(scope: Scope, _: &Rc<NodeRegistry>, this: &NodePtr) -> Fallible<String> {
+        url_part(scope, this, url::quirks::hostname)
+    }
+
+    fn set_hostname(scope: Scope, registry: &Rc<NodeRegistry>, this: &NodePtr, value: String) -> Fallible<()> {
+        change_hyperlink_url(scope, registry, this, |url| url::quirks::set_hostname(url, &value));
+        Ok(())
+    }
+
+    fn port(scope: Scope, _: &Rc<NodeRegistry>, this: &NodePtr) -> Fallible<String> {
+        url_part(scope, this, url::quirks::port)
+    }
+
+    fn set_port(scope: Scope, registry: &Rc<NodeRegistry>, this: &NodePtr, value: String) -> Fallible<()> {
+        change_hyperlink_url(scope, registry, this, |url| url::quirks::set_port(url, &value));
+        Ok(())
+    }
+
+    fn pathname(scope: Scope, _: &Rc<NodeRegistry>, this: &NodePtr) -> Fallible<String> {
+        url_part(scope, this, url::quirks::pathname)
+    }
+
+    fn set_pathname(scope: Scope, registry: &Rc<NodeRegistry>, this: &NodePtr, value: String) -> Fallible<()> {
+        change_hyperlink_url(scope, registry, this, |url| {
+            url::quirks::set_pathname(url, &value);
+            Ok(())
+        });
+        Ok(())
+    }
+
+    fn search(scope: Scope, _: &Rc<NodeRegistry>, this: &NodePtr) -> Fallible<String> {
+        url_part(scope, this, url::quirks::search)
+    }
+
+    fn set_search(scope: Scope, registry: &Rc<NodeRegistry>, this: &NodePtr, value: String) -> Fallible<()> {
+        change_hyperlink_url(scope, registry, this, |url| {
+            url::quirks::set_search(url, &value);
+            Ok(())
+        });
+        Ok(())
+    }
+
+    fn hash(scope: Scope, _: &Rc<NodeRegistry>, this: &NodePtr) -> Fallible<String> {
+        url_part(scope, this, url::quirks::hash)
+    }
+
+    fn set_hash(scope: Scope, registry: &Rc<NodeRegistry>, this: &NodePtr, value: String) -> Fallible<()> {
+        change_hyperlink_url(scope, registry, this, |url| {
+            url::quirks::set_hash(url, &value);
+            Ok(())
+        });
         Ok(())
     }
 }

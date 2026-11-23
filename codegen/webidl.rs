@@ -49,7 +49,8 @@ pub struct Includes {
 #[derive(Clone, Debug, PartialEq)]
 pub enum Member {
     Const { name: String, ty: Type, value: String },
-    Attribute { name: String, ty: Type, readonly: bool, ce_reactions: bool },
+    /// `stringifier` also makes `toString()` return the attribute.
+    Attribute { name: String, ty: Type, readonly: bool, ce_reactions: bool, stringifier: bool },
     Operation { name: String, ret: Type, args: Vec<Argument>, ce_reactions: bool },
 }
 
@@ -410,7 +411,11 @@ fn member(tokens: &mut Tokens) -> Result<Member, String> {
         tokens.expect(";")?;
         return Ok(Member::Const { name, ty, value });
     }
+    let stringifier = tokens.eat("stringifier");
     let readonly = tokens.eat("readonly");
+    if stringifier && tokens.peek() != Some("attribute") && !readonly {
+        return Err("only stringifier attributes are supported".into());
+    }
     if readonly || tokens.peek() == Some("attribute") {
         tokens.expect("attribute")?;
         let ty = parse_type(tokens)?;
@@ -420,9 +425,12 @@ fn member(tokens: &mut Tokens) -> Result<Member, String> {
         if ty.kind == TypeKind::NodeArray && (!readonly || ty.nullable) {
             return Err("NodeList/HTMLCollection only as a non-null readonly attribute".into());
         }
+        if stringifier && ty.kind != TypeKind::String {
+            return Err("a stringifier attribute must be a string".into());
+        }
         let name = tokens.identifier()?;
         tokens.expect(";")?;
-        return Ok(Member::Attribute { name, ty, readonly, ce_reactions });
+        return Ok(Member::Attribute { name, ty, readonly, ce_reactions, stringifier });
     }
     let ret = parse_type(tokens)?;
     if ret.kind == TypeKind::NodeArray {
@@ -690,6 +698,18 @@ mod tests {
             "dictionary D { long x }",
         ] {
             assert!(parse_definitions(source).is_err(), "{source}");
+        }
+    }
+
+    #[test]
+    fn parses_stringifier_attributes() {
+        let interfaces = parse("interface A { stringifier attribute USVString href; };").unwrap();
+        assert!(matches!(&interfaces[0].members[0], Member::Attribute { stringifier: true, .. }));
+        for source in [
+            "interface A { stringifier attribute long x; };",
+            "interface A { stringifier DOMString f(); };",
+        ] {
+            assert!(parse(source).is_err(), "{source}");
         }
     }
 
