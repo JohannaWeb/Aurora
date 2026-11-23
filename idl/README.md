@@ -65,7 +65,9 @@ operations (`appendChild`, `insertBefore`, `replaceChild`, `removeChild`,
 (`nodeType`, `nodeName`, `nodeValue`, `isConnected`,
 `ownerDocument`, `parentNode`, `parentElement`, `childNodes`, `firstChild`,
 `lastChild`, `previousSibling`, `nextSibling`, `textContent`); `Element`'s
-`id`, `className` and attribute methods (`get`/`set`/`remove`/`has`/`toggle`
+`namespaceURI`, `prefix`, `localName`, `tagName` (an element is SVG when
+`interface_for` maps its tag to SVGElement, otherwise HTML; SVG names keep
+their case), `id`, `className` and attribute methods (`get`/`set`/`remove`/`has`/`toggle`
 `Attribute`, their `NS` forms, `hasAttributes`; names match exactly and the
 `NS` forms ignore the namespace until Aurora stores one); the
 `HTMLHyperlinkElementUtils` mixin on `<a>` and `<area>` (`href`, `origin`,

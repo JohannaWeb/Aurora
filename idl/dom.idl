@@ -60,6 +60,11 @@ interface DocumentType : Node {};
 interface DocumentFragment : Node {};
 interface ShadowRoot : DocumentFragment {};
 interface Element : Node {
+  readonly attribute DOMString? namespaceURI;
+  readonly attribute DOMString? prefix;
+  readonly attribute DOMString localName;
+  readonly attribute DOMString tagName;
+
   [CEReactions] attribute DOMString id;
   [CEReactions] attribute DOMString className;
 

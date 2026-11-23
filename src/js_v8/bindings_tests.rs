@@ -479,6 +479,32 @@ fn anchors_expose_url_members_resolved_against_the_document() {
 }
 
 #[test]
+fn element_identity_is_on_the_prototype() {
+    let mut runtime = runtime();
+    assert_eq!(
+        runtime.eval_to_string(
+            r#"(() => {
+        const div = document.createElement('div');
+        const custom = document.createElement('x-thing');
+        const host = document.createElement('div');
+        host.innerHTML = '<svg><clipPath></clipPath></svg>';
+        const svg = host.firstChild, clip = svg.firstChild;
+        const own = ['tagName', 'localName', 'namespaceURI', 'prefix']
+            .filter(n => Object.prototype.hasOwnProperty.call(div, n));
+        const html = 'http://www.w3.org/1999/xhtml', svgNs = 'http://www.w3.org/2000/svg';
+        return [own.length,
+            div.tagName, div.localName, div.namespaceURI === html, div.prefix,
+            custom.tagName, custom.localName,
+            svg.tagName, svg.localName, svg.namespaceURI === svgNs, svg.nodeName,
+            clip.localName, clip.tagName === clip.nodeName,
+            document.body.tagName, 'tagName' in document.createTextNode('t')].join('|');
+    })()"#
+        ),
+        Ok("0|DIV|div|true||X-THING|x-thing|svg|svg|true|svg|clipPath|true|BODY|false".into())
+    );
+}
+
+#[test]
 fn snake_case_member_names() {
     #[path = "../../codegen/generate.rs"]
     #[allow(dead_code)]
