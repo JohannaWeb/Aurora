@@ -237,7 +237,7 @@ fn emit(out: &mut String, install: &mut String, interface: &str, owner: &str, me
                 )
                 .unwrap();
             }
-            Member::Attribute { name: attr, ty, readonly, ce_reactions } => {
+            Member::Attribute { name: attr, ty, readonly, ce_reactions, stringifier } => {
                 let getter = format!("{prefix}_get_{}", snake_case(attr).trim_start_matches("r#"));
                 let rust_name = snake_case(attr);
                 writeln!(trait_fns, "fn {rust_name}({receiver}) -> Fallible<{}>;", rust_type(ty))
@@ -263,6 +263,15 @@ fn emit(out: &mut String, install: &mut String, interface: &str, owner: &str, me
                      v8::PropertyAttribute::NONE);"
                 )
                 .unwrap();
+                if *stringifier {
+                    writeln!(
+                        install,
+                        "let function = accessor(scope, {getter}, \"toString\", 0);\n\
+                         proto.set_with_attr(v8_str(scope, \"toString\").into(), function.into(), \
+                         v8::PropertyAttribute::NONE);"
+                    )
+                    .unwrap();
+                }
             }
             Member::Operation { name: op, ret, args, ce_reactions } => {
                 let rust_name = snake_case(op);

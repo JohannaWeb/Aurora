@@ -43,6 +43,8 @@ unsupported IDL fails the build instead of producing wrong bindings:
   a return type, and `T?`. `NodeList` and `HTMLCollection` are allowed only
   as non-null read-only attribute types and return a fresh array, as the
   hand-written accessors did, until those interfaces exist.
+- `stringifier attribute DOMString name;` (string types only): the attribute
+  plus a `toString()` that returns it.
 - Extended attributes: `[CEReactions]` and `[NewObject]` (no generated
   effect) on members, and `[LegacyNullToEmptyString]` on non-nullable
   string types.
@@ -65,7 +67,11 @@ operations (`appendChild`, `insertBefore`, `replaceChild`, `removeChild`,
 `lastChild`, `previousSibling`, `nextSibling`, `textContent`); `Element`'s
 `id`, `className` and attribute methods (`get`/`set`/`remove`/`has`/`toggle`
 `Attribute`, their `NS` forms, `hasAttributes`; names match exactly and the
-`NS` forms ignore the namespace until Aurora stores one);
+`NS` forms ignore the namespace until Aurora stores one); the
+`HTMLHyperlinkElementUtils` mixin on `<a>` and `<area>` (`href`, `origin`,
+`protocol`, `username`, `password`, `host`, `hostname`, `port`, `pathname`,
+`search`, `hash`, via `url::quirks`, resolved against `location.href`;
+`<base href>` is not applied yet);
 the `ParentNode`, `NonDocumentTypeChildNode` and `InnerHTML` mixins; and all
 of `CharacterData` (`data`, `length`,
 `substringData`, `appendData`, `insertData`, `deleteData`, `replaceData`).

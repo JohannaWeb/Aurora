@@ -447,6 +447,38 @@ fn element_attributes_are_generated_and_toggle_attribute_works() {
 }
 
 #[test]
+fn anchors_expose_url_members_resolved_against_the_document() {
+    let mut runtime = runtime();
+    assert_eq!(
+        runtime.eval_to_string(
+            r#"(() => {
+        __aurora_set_location__('https://www.youtube.com/watch?v=abc');
+        const a = document.createElement('a');
+        const none = [a.href, a.protocol, a.pathname, a.host, a.origin];
+        a.setAttribute('href', '/results?search_query=x#top');
+        const parts = [a.href, a.protocol, a.host, a.hostname, a.port, a.pathname, a.search,
+            a.hash, a.origin, String(a), a.toString() === a.href];
+        a.pathname = 'feed/trending';
+        a.search = 'gl=US';
+        a.hash = '';
+        a.port = '8443';
+        const written = [a.getAttribute('href'), a.host];
+        a.href = 'mailto:someone@example.com';
+        const opaque = [a.protocol, a.pathname, a.host];
+        a.href = 'http://[bad';
+        const broken = [a.href, a.pathname, a.protocol];
+        const area = document.createElement('area');
+        area.href = 'https://example.com:81/p';
+        return [none.join('|'), parts.join('|'), written.join('|'), opaque.join('|'), broken.join('|'),
+            area.port, Object.prototype.hasOwnProperty.call(a, 'href'),
+            'pathname' in document.createElement('div')].join(' / ');
+    })()"#
+        ),
+        Ok("|:||| / https://www.youtube.com/results?search_query=x#top|https:|www.youtube.com|www.youtube.com||/results|?search_query=x|#top|https://www.youtube.com|https://www.youtube.com/results?search_query=x#top|true / https://www.youtube.com:8443/feed/trending?gl=US|www.youtube.com:8443 / mailto:|someone@example.com| / http://[bad||: / 81 / false / false".into())
+    );
+}
+
+#[test]
 fn snake_case_member_names() {
     #[path = "../../codegen/generate.rs"]
     #[allow(dead_code)]

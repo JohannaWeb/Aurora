@@ -320,8 +320,13 @@ pub(super) fn create_js_node<'s>(
                     v8_str(scope, "http://www.w3.org/2000/svg").into(),
                 );
             }
-            // Initial attribute snapshot for wrapper props.
+            // Initial attribute snapshot for wrapper props. `<a>` and `<area>`
+            // get `href` from HTMLHyperlinkElementUtils on their prototype.
+            let hyperlink = matches!(el.tag_name.to_ascii_lowercase().as_str(), "a" | "area");
             for attr in ["href", "src", "type", "name", "value"] {
+                if hyperlink && attr == "href" {
+                    continue;
+                }
                 let val = el.attributes.get(attr).cloned().unwrap_or_default();
                 obj.set(
                     scope,
