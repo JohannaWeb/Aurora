@@ -1061,6 +1061,14 @@ impl BlitzDocument {
         updated
     }
 
+    /// Shows `value` in a text input's rendering without touching the DOM's
+    /// `value` attribute (an input's current value is separate from it). Blitz
+    /// refreshes a text input's editor text whenever its `value` attribute is
+    /// set, so this writes only the render tree's copy.
+    pub fn show_text_input_value(&mut self, node: &NodePtr, value: &str) -> bool {
+        self.sync_set_attribute(node, "value", value)
+    }
+
     pub fn sync_remove_attribute(&mut self, node: &NodePtr, name: &str) -> bool {
         let op = MirrorOp::for_node("sync_remove_attribute", node);
         let Some(node_id) = self.blitz_node_id_for_dom(node) else {

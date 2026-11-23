@@ -78,15 +78,7 @@ impl winit::application::ApplicationHandler for AuroraApp {
                     self.schedule_next_frame(event_loop);
                 }
             }
-            WindowEvent::KeyboardInput {
-                event:
-                    KeyEvent {
-                        logical_key,
-                        state: ElementState::Pressed,
-                        ..
-                    },
-                ..
-            } => self.handle_key(event_loop, logical_key),
+            WindowEvent::KeyboardInput { event, .. } => self.handle_keyboard(event_loop, event),
             WindowEvent::MouseWheel { delta, .. } => {
                 let scroll_amount = match delta {
                     winit::event::MouseScrollDelta::LineDelta(_, dy) => dy * 30.0,
@@ -141,29 +133,55 @@ impl AuroraApp {
         self.request_redraw();
     }
 
-    fn handle_key(&mut self, event_loop: &winit::event_loop::ActiveEventLoop, key: Key) {
-        let ctrl = self.modifiers.control_key();
-        // A focused address bar captures typing before the page shortcuts do.
-        // Ctrl-chords deliberately fall through so tab management keeps working.
-        if self.url_edit.is_some() && self.handle_url_edit_key(&key) {
-            self.request_redraw();
+    /// Keys go to the address bar while it is focused, then to browser
+    /// shortcuts, then to the page. A key the page did not cancel, and that
+    /// did not go to a focused text field, falls back to the browser's own
+    /// default (scrolling, Escape).
+    fn handle_keyboard(&mut self, event_loop: &winit::event_loop::ActiveEventLoop, event: KeyEvent) {
+        let released = event.state == ElementState::Released;
+        if !released {
+            // A focused address bar captures typing before the page does.
+            // Ctrl-chords deliberately fall through so tab management keeps working.
+            if self.url_edit.is_some() && self.handle_url_edit_key(&event.logical_key) {
+                self.request_redraw();
+                return;
+            }
+            if self.handle_browser_shortcut(event_loop, &event.logical_key) {
+                return;
+            }
+        } else if self.url_edit.is_some() {
             return;
         }
+        let input = key_input(&event, self.modifiers);
+        let outcome = match self.input_mut().runtime.as_mut() {
+            Some(runtime) => runtime.dispatch_key(&input),
+            None => crate::js_engine::KeyOutcome::default(),
+        };
+        self.request_redraw();
+        if released || outcome.default_prevented || outcome.editable_target {
+            return;
+        }
+        self.handle_page_default_key(event_loop, event.logical_key);
+    }
+
+    /// Browser-level shortcuts. Returns true when the key was one.
+    fn handle_browser_shortcut(&mut self, event_loop: &winit::event_loop::ActiveEventLoop, key: &Key) -> bool {
+        let ctrl = self.modifiers.control_key();
         match key {
             // Focus the address bar, following the usual browser binding.
-            Key::Character(ref c) if ctrl && c.eq_ignore_ascii_case("l") => {
+            Key::Character(c) if ctrl && c.eq_ignore_ascii_case("l") => {
                 self.url_edit = Some(String::new());
                 self.request_redraw();
             }
             // Tab management, following the usual browser bindings.
-            Key::Character(ref c) if ctrl && c.eq_ignore_ascii_case("t") => {
+            Key::Character(c) if ctrl && c.eq_ignore_ascii_case("t") => {
                 self.open_new_tab();
                 self.request_redraw();
             }
-            Key::Character(ref c) if ctrl && c.eq_ignore_ascii_case("w") => {
+            Key::Character(c) if ctrl && c.eq_ignore_ascii_case("w") => {
                 if !self.close_tab(self.active) {
                     event_loop.exit();
-                    return;
+                    return true;
                 }
                 self.request_redraw();
             }
@@ -171,6 +189,14 @@ impl AuroraApp {
                 self.cycle_tab(self.modifiers.shift_key());
                 self.request_redraw();
             }
+            _ => return false,
+        }
+        true
+    }
+
+    /// The browser's default for a key the page left alone.
+    fn handle_page_default_key(&mut self, event_loop: &winit::event_loop::ActiveEventLoop, key: Key) {
+        match key {
             Key::Named(NamedKey::Escape) => event_loop.exit(),
             Key::Named(NamedKey::ArrowDown) => {
                 self.scroll_by(30.0);
@@ -365,6 +391,64 @@ impl AuroraApp {
 
     fn has_active_media(&self) -> bool {
         self.input().media.has_active_media()
+    }
+}
+
+/// The window's key event in DOM terms (`key`, `code`, legacy `keyCode`).
+fn key_input(event: &KeyEvent, modifiers: winit::keyboard::ModifiersState) -> crate::js_engine::KeyInput {
+    use winit::keyboard::PhysicalKey;
+    let key = match &event.logical_key {
+        Key::Character(c) => c.to_string(),
+        Key::Named(NamedKey::Space) => " ".to_string(),
+        Key::Named(named) => format!("{named:?}"),
+        Key::Dead(_) => "Dead".to_string(),
+        Key::Unidentified(_) => "Unidentified".to_string(),
+    };
+    let code = match event.physical_key {
+        PhysicalKey::Code(code) => format!("{code:?}"),
+        PhysicalKey::Unidentified(_) => String::new(),
+    };
+    crate::js_engine::KeyInput {
+        key_code: legacy_key_code(&event.logical_key),
+        key,
+        code,
+        text: event.text.as_ref().map(|t| t.to_string()),
+        shift: modifiers.shift_key(),
+        ctrl: modifiers.control_key(),
+        alt: modifiers.alt_key(),
+        meta: modifiers.super_key(),
+        released: event.state == ElementState::Released,
+    }
+}
+
+/// `keyCode` as browsers report it for the common keys; 0 otherwise.
+fn legacy_key_code(key: &Key) -> u32 {
+    match key {
+        Key::Character(c) => match c.chars().next().map(|c| c.to_ascii_uppercase()) {
+            Some(ch @ ('A'..='Z' | '0'..='9')) if c.chars().count() == 1 => ch as u32,
+            _ => 0,
+        },
+        Key::Named(named) => match named {
+            NamedKey::Backspace => 8,
+            NamedKey::Tab => 9,
+            NamedKey::Enter => 13,
+            NamedKey::Shift => 16,
+            NamedKey::Control => 17,
+            NamedKey::Alt => 18,
+            NamedKey::Escape => 27,
+            NamedKey::Space => 32,
+            NamedKey::PageUp => 33,
+            NamedKey::PageDown => 34,
+            NamedKey::End => 35,
+            NamedKey::Home => 36,
+            NamedKey::ArrowLeft => 37,
+            NamedKey::ArrowUp => 38,
+            NamedKey::ArrowRight => 39,
+            NamedKey::ArrowDown => 40,
+            NamedKey::Delete => 46,
+            _ => 0,
+        },
+        _ => 0,
     }
 }
 

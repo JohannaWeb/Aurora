@@ -84,7 +84,13 @@ and attribute methods (`get`/`set`/`remove`/`has`/`toggle`
 `HTMLHyperlinkElementUtils` mixin on `<a>` and `<area>` (`href`, `origin`,
 `protocol`, `username`, `password`, `host`, `hostname`, `port`, `pathname`,
 `search`, `hash`, via `url::quirks`, resolved against `location.href`;
-`<base href>` is not applied yet);
+`<base href>` is not applied yet); `HTMLOrSVGElement`'s `tabIndex`,
+`focus()` and `blur()` with `Document.activeElement` (one focused element per
+document, trusted focus/blur/focusin/focusout events, no sequential
+navigation yet; a click focuses the nearest focusable element);
+`HTMLInputElement`'s `value` and `defaultValue` (the value is separate from
+the `value` attribute once set or typed into, and is not sanitized per type
+yet);
 the `ParentNode`, `NonDocumentTypeChildNode` and `InnerHTML` mixins; and all
 of `CharacterData` (`data`, `length`,
 `substringData`, `appendData`, `insertData`, `deleteData`, `replaceData`).

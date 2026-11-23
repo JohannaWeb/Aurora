@@ -5,8 +5,9 @@
 
 use super::bindings::{
     CharacterDataMembers, ChildNodeMembers, DocumentMembers, ElementMembers, Error, Fallible,
-    GetRootNodeOptions, HTMLHyperlinkElementUtilsMembers, InnerHTMLMembers, NodeMembers,
-    NodeOrString, NonDocumentTypeChildNodeMembers, ParentNodeMembers,
+    FocusOptions, GetRootNodeOptions, HTMLHyperlinkElementUtilsMembers, HTMLInputElementMembers,
+    HTMLOrSVGElementMembers, InnerHTMLMembers, NodeMembers, NodeOrString,
+    NonDocumentTypeChildNodeMembers, ParentNodeMembers,
 };
 use super::node_create::{
     call_global_hook, child_nodes_of, create_js_node, inner_html_target, interface_for,
@@ -797,6 +798,17 @@ fn elements_by_class_name(root: &NodePtr, names: &str) -> Vec<NodePtr> {
 }
 
 impl DocumentMembers for Dom {
+    /// <https://html.spec.whatwg.org/multipage/interaction.html#dom-documentorshadowroot-activeelement>:
+    /// the focused element while it is connected, else the body (or the
+    /// document element).
+    fn active_element(_: Scope, registry: &Rc<NodeRegistry>, this: &NodePtr) -> Fallible<Option<NodePtr>> {
+        let focused = registry.focused.borrow().clone();
+        if let Some(focused) = focused.filter(|f| mutation::is_connected_to(this, f)) {
+            return Ok(Some(focused));
+        }
+        Ok(elements_by_tag_name(this, "body").into_iter().next().or_else(|| element_children(this).next()))
+    }
+
     /// <https://dom.spec.whatwg.org/#dom-document-getelementsbytagname>,
     /// as a fresh array until HTMLCollection exists.
     fn get_elements_by_tag_name(_: Scope, _: &Rc<NodeRegistry>, this: &NodePtr, name: String) -> Fallible<Vec<NodePtr>> {
@@ -1176,6 +1188,217 @@ impl ChildNodeMembers for Dom {
         if let Some(parent) = parent_of(registry, &document(registry, this), this) {
             mutation::apply_dom_mutation(registry, mutation::DomMutation::RemoveChild { parent: &parent, child: this });
         }
+        Ok(())
+    }
+}
+
+// --- Focus -------------------------------------------------------------------
+// <https://html.spec.whatwg.org/multipage/interaction.html#focus>, simplified:
+// one focused element per document, no sequential navigation yet.
+
+/// Elements focusable without a tabindex attribute.
+fn focusable_by_default(el: &crate::dom::ElementNode) -> bool {
+    let disabled = el.attributes.contains_key("disabled");
+    match el.tag_name.to_ascii_lowercase().as_str() {
+        "input" => !disabled && !el.attributes.get("type").is_some_and(|t| t.eq_ignore_ascii_case("hidden")),
+        "select" | "textarea" | "button" => !disabled,
+        "a" | "area" => el.attributes.contains_key("href"),
+        "iframe" | "summary" => true,
+        _ => el.attributes.get("contenteditable").is_some_and(|v| !v.eq_ignore_ascii_case("false")),
+    }
+}
+
+fn parsed_tab_index(el: &crate::dom::ElementNode) -> Option<i32> {
+    el.attributes.get("tabindex").and_then(|v| v.trim().parse::<i32>().ok())
+}
+
+/// Whether focusing `node` would succeed: an element that is focusable by
+/// default or has a valid tabindex.
+pub(super) fn is_focusable(node: &NodePtr) -> bool {
+    match &*node.borrow() {
+        Node::Element(el) if el.tag_name != "#document-fragment" => {
+            parsed_tab_index(el).is_some() || focusable_by_default(el)
+        }
+        _ => false,
+    }
+}
+
+/// Fires a trusted FocusEvent at `target` through its JS EventTarget.
+fn fire_focus_event(scope: Scope, registry: &Rc<NodeRegistry>, target: &NodePtr, event_type: &str, bubbles: bool, related: Option<&NodePtr>) {
+    let document = document(registry, target);
+    let wrapper = create_js_node(scope, target.clone(), registry, &document);
+    let global = scope.get_current_context().global(scope);
+    let key = v8_str(scope, "FocusEvent");
+    let Some(constructor) = global.get(scope, key.into()).and_then(|v| v8::Local::<v8::Function>::try_from(v).ok()) else {
+        return;
+    };
+    let init = v8::Object::new(scope);
+    let related: v8::Local<v8::Value> = match related {
+        Some(node) => create_js_node(scope, node.clone(), registry, &document).into(),
+        None => v8::null(scope).into(),
+    };
+    for (name, value) in [
+        ("bubbles", v8::Boolean::new(scope, bubbles).into()),
+        ("composed", v8::Boolean::new(scope, true).into()),
+        ("relatedTarget", related),
+    ] {
+        let key = v8_str(scope, name);
+        init.set(scope, key.into(), value);
+    }
+    let event_name = v8_str(scope, event_type);
+    let Some(event) = constructor.new_instance(scope, &[event_name.into(), init.into()]) else { return };
+    let key = v8_str(scope, "isTrusted");
+    let trusted = v8::Boolean::new(scope, true);
+    event.set(scope, key.into(), trusted.into());
+    let key = v8_str(scope, "dispatchEvent");
+    if let Some(dispatch) = wrapper.get(scope, key.into()).and_then(|v| v8::Local::<v8::Function>::try_from(v).ok()) {
+        let _ = dispatch.call(scope, wrapper.into(), &[event.into()]);
+    }
+}
+
+/// Moves focus to `new` (or nowhere), firing blur/focusout on the old element
+/// and focus/focusin on the new one.
+pub(super) fn set_focus(scope: Scope, registry: &Rc<NodeRegistry>, new: Option<NodePtr>) {
+    let old = registry.focused.borrow().clone();
+    if match (&old, &new) {
+        (Some(a), Some(b)) => Rc::ptr_eq(a, b),
+        (None, None) => true,
+        _ => false,
+    } {
+        return;
+    }
+    *registry.focused.borrow_mut() = new.clone();
+    if let Some(old) = &old {
+        fire_focus_event(scope, registry, old, "blur", false, new.as_ref());
+        fire_focus_event(scope, registry, old, "focusout", true, new.as_ref());
+    }
+    if let Some(new) = &new {
+        fire_focus_event(scope, registry, new, "focus", false, old.as_ref());
+        fire_focus_event(scope, registry, new, "focusin", true, old.as_ref());
+    }
+}
+
+/// Focus after a click: the nearest focusable inclusive ancestor of `target`
+/// (crossing shadow roots to their hosts), or nothing.
+pub(super) fn focus_from_click(scope: Scope, registry: &Rc<NodeRegistry>, target: &NodePtr) {
+    use crate::dom::ShadowTreeBackend;
+    let document = document(registry, target);
+    let mut current = Some(target.clone());
+    while let Some(node) = current {
+        if is_focusable(&node) {
+            return set_focus(scope, registry, Some(node));
+        }
+        current = parent_of(registry, &document, &node)
+            .or_else(|| crate::dom::SyntheticShadowTreeBackend.host_for_shadow_root(&node));
+    }
+    set_focus(scope, registry, None);
+}
+
+impl HTMLOrSVGElementMembers for Dom {
+    /// <https://html.spec.whatwg.org/multipage/interaction.html#dom-tabindex>:
+    /// the attribute's value, else 0 for elements focusable by default, -1
+    /// otherwise.
+    fn tab_index(_: Scope, _: &Rc<NodeRegistry>, this: &NodePtr) -> Fallible<i32> {
+        Ok(match &*this.borrow() {
+            Node::Element(el) => parsed_tab_index(el).unwrap_or(if focusable_by_default(el) { 0 } else { -1 }),
+            _ => -1,
+        })
+    }
+
+    fn set_tab_index(_: Scope, registry: &Rc<NodeRegistry>, this: &NodePtr, value: i32) -> Fallible<()> {
+        set_attribute(registry, this, "tabindex", &value.to_string());
+        Ok(())
+    }
+
+    /// <https://html.spec.whatwg.org/multipage/interaction.html#dom-focus>:
+    /// a no-op unless the element is connected and focusable.
+    fn focus(scope: Scope, registry: &Rc<NodeRegistry>, this: &NodePtr, _options: FocusOptions) -> Fallible<()> {
+        if is_focusable(this) && mutation::is_connected_to(&document(registry, this), this) {
+            set_focus(scope, registry, Some(this.clone()));
+        }
+        Ok(())
+    }
+
+    /// <https://html.spec.whatwg.org/multipage/interaction.html#dom-blur>
+    fn blur(scope: Scope, registry: &Rc<NodeRegistry>, this: &NodePtr) -> Fallible<()> {
+        let focused = registry.focused.borrow().clone();
+        if focused.is_some_and(|f| Rc::ptr_eq(&f, this)) {
+            set_focus(scope, registry, None);
+        }
+        Ok(())
+    }
+}
+
+// --- Text input --------------------------------------------------------------
+// <https://html.spec.whatwg.org/multipage/input.html#concept-fe-value>: an
+// input's value starts as its `value` attribute and becomes independent once
+// set or edited (the dirty value flag). Values are not sanitized per type yet.
+
+/// `<input>` types whose value is edited as text.
+pub(super) fn is_text_control(node: &NodePtr) -> bool {
+    match &*node.borrow() {
+        Node::Element(el) if el.tag_name.eq_ignore_ascii_case("input") => {
+            let kind = el.attributes.get("type").map(|t| t.to_ascii_lowercase()).unwrap_or_default();
+            matches!(kind.as_str(), "" | "text" | "search" | "email" | "url" | "tel" | "password" | "number")
+        }
+        _ => false,
+    }
+}
+
+pub(super) fn input_value(registry: &NodeRegistry, node: &NodePtr) -> String {
+    let id = registry.register(node.clone());
+    if let Some(value) = registry.input_values.borrow().get(&id) {
+        return value.clone();
+    }
+    attribute(node, "value").unwrap_or_default()
+}
+
+/// Sets the input's value (marking it dirty) and shows it in the rendering.
+pub(super) fn set_input_value(registry: &NodeRegistry, node: &NodePtr, value: String) {
+    let id = registry.register(node.clone());
+    if let Some(render) = registry.render_document() {
+        render.borrow_mut().show_text_input_value(node, &value);
+    }
+    registry.input_values.borrow_mut().insert(id, value);
+    registry.mark_layout_dirty(node);
+}
+
+/// One editing operation from the keyboard on a focused text control:
+/// `insertText` appends `data`, `deleteContentBackward` drops the last
+/// character. Returns whether the value changed. There is no caret yet, so
+/// edits happen at the end.
+pub(super) fn edit_text_input(registry: &NodeRegistry, node: &NodePtr, operation: &str, data: &str) -> bool {
+    if !is_text_control(node) {
+        return false;
+    }
+    let mut value = input_value(registry, node);
+    match operation {
+        "insertText" if !data.is_empty() => value.push_str(data),
+        "deleteContentBackward" if value.pop().is_some() => {}
+        _ => return false,
+    }
+    set_input_value(registry, node, value);
+    true
+}
+
+impl HTMLInputElementMembers for Dom {
+    /// <https://html.spec.whatwg.org/multipage/input.html#dom-input-defaultvalue>
+    fn default_value(_: Scope, _: &Rc<NodeRegistry>, this: &NodePtr) -> Fallible<String> {
+        Ok(attribute(this, "value").unwrap_or_default())
+    }
+
+    fn set_default_value(_: Scope, registry: &Rc<NodeRegistry>, this: &NodePtr, value: String) -> Fallible<()> {
+        set_attribute(registry, this, "value", &value);
+        Ok(())
+    }
+
+    /// <https://html.spec.whatwg.org/multipage/input.html#dom-input-value>
+    fn value(_: Scope, registry: &Rc<NodeRegistry>, this: &NodePtr) -> Fallible<String> {
+        Ok(input_value(registry, this))
+    }
+
+    fn set_value(_: Scope, registry: &Rc<NodeRegistry>, this: &NodePtr, value: String) -> Fallible<()> {
+        set_input_value(registry, this, value);
         Ok(())
     }
 }

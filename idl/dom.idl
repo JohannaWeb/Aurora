@@ -56,6 +56,9 @@ interface Node : EventTarget {
   [CEReactions] Node removeChild(Node child);
 };
 interface Document : Node {
+  // DocumentOrShadowRoot's, on Document only for now.
+  readonly attribute Element? activeElement;
+
   HTMLCollection getElementsByTagName(DOMString qualifiedName);
   HTMLCollection getElementsByClassName(DOMString classNames);
 };

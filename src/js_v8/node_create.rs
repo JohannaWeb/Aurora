@@ -238,8 +238,10 @@ pub(super) fn create_js_node<'s>(
             // Initial attribute snapshot for wrapper props. `<a>` and `<area>`
             // get `href` from HTMLHyperlinkElementUtils on their prototype.
             let hyperlink = matches!(el.tag_name.to_ascii_lowercase().as_str(), "a" | "area");
+            // `<input>` gets `value` from HTMLInputElement.prototype.
+            let input = el.tag_name.eq_ignore_ascii_case("input");
             for attr in ["href", "src", "type", "name", "value"] {
-                if hyperlink && attr == "href" {
+                if (hyperlink && attr == "href") || (input && attr == "value") {
                     continue;
                 }
                 let val = el.attributes.get(attr).cloned().unwrap_or_default();
@@ -283,11 +285,6 @@ pub(super) fn create_js_node<'s>(
                     v8::Number::new(scope, 0.0).into(),
                 );
             }
-            obj.set(
-                scope,
-                v8_str(scope, "tabIndex").into(),
-                v8::Integer::new(scope, 0).into(),
-            );
             is_custom_element = el.tag_name.contains('-');
         }
         if el.tag_name.eq_ignore_ascii_case("template") {

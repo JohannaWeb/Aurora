@@ -36,6 +36,43 @@ pub(super) fn install(scope: &mut v8::PinScope<'_, '_>, registry: &Rc<NodeRegist
     // data, so it lives exactly as long as the context.
     scope.get_current_context().set_slot(registry.clone());
     install_interfaces(scope, registry);
+    let focus_from_click = v8::FunctionTemplate::new(scope, focus_from_click);
+    let focus_from_click = focus_from_click.get_function(scope).expect("focus hook");
+    let global = scope.get_current_context().global(scope);
+    let key = v8_str(scope, "__aurora_focus_from_click__");
+    global.define_own_property(scope, key.into(), focus_from_click.into(), v8::PropertyAttribute::DONT_ENUM);
+    let edit = v8::FunctionTemplate::new(scope, edit_text_input);
+    let edit = edit.get_function(scope).expect("edit hook");
+    let key = v8_str(scope, "__aurora_edit_text_input__");
+    global.define_own_property(scope, key.into(), edit.into(), v8::PropertyAttribute::DONT_ENUM);
+}
+
+/// `__aurora_edit_text_input__(element, operation, data)`: a keyboard edit
+/// of a focused text control (v8_post.js `__aurora_dispatch_key__`).
+/// `operation` "check" only reports whether the element is a text control.
+fn edit_text_input(scope: &mut v8::PinScope<'_, '_>, args: v8::FunctionCallbackArguments, mut rv: v8::ReturnValue) {
+    let Some(registry) = scope.get_current_context().get_slot::<NodeRegistry>() else { return };
+    let Some(target) = node_from_js(scope, args.get(0), &registry) else {
+        rv.set(v8::Boolean::new(scope, false).into());
+        return;
+    };
+    let operation = args.get(1).to_rust_string_lossy(scope);
+    let data = args.get(2).to_rust_string_lossy(scope);
+    let result = if operation == "check" {
+        super::dom_impl::is_text_control(&target)
+    } else {
+        super::dom_impl::edit_text_input(&registry, &target, &operation, &data)
+    };
+    rv.set(v8::Boolean::new(scope, result).into());
+}
+
+/// `__aurora_focus_from_click__(element)`: the focus part of a click's
+/// mousedown default action (v8_post.js `__aurora_dispatch_click__`).
+fn focus_from_click(scope: &mut v8::PinScope<'_, '_>, args: v8::FunctionCallbackArguments, _: v8::ReturnValue) {
+    let Some(registry) = scope.get_current_context().get_slot::<NodeRegistry>() else { return };
+    if let Some(target) = node_from_js(scope, args.get(0), &registry) {
+        super::dom_impl::focus_from_click(scope, &registry, &target);
+    }
 }
 
 fn define_interface<'s>(

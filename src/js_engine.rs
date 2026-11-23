@@ -63,6 +63,34 @@ pub(crate) fn create_runtime(
 ///
 /// All methods take `&mut self` so the trait is object-safe and can be stored as
 /// `Box<dyn JsRuntime>` without any generic parameters leaking into callers.
+/// A key event from the window, in DOM terms.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct KeyInput {
+    /// DOM `key`: the character produced, or a named key ("Enter").
+    pub(crate) key: String,
+    /// DOM `code`: the physical key ("KeyA").
+    pub(crate) code: String,
+    /// Legacy `keyCode`/`which`.
+    pub(crate) key_code: u32,
+    /// Text the key inserts, if any.
+    pub(crate) text: Option<String>,
+    pub(crate) shift: bool,
+    pub(crate) ctrl: bool,
+    pub(crate) alt: bool,
+    pub(crate) meta: bool,
+    /// Key release (`keyup`) rather than press.
+    pub(crate) released: bool,
+}
+
+/// What a key event did on the page.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct KeyOutcome {
+    /// The page cancelled the key's default action.
+    pub(crate) default_prevented: bool,
+    /// The key went to a focused text control, which owns it.
+    pub(crate) editable_target: bool,
+}
+
 pub(crate) trait JsRuntime {
     fn execute(&mut self, script: &str) -> Result<(), String>;
     fn set_current_script(&mut self, script: Option<&NodePtr>);
@@ -121,6 +149,13 @@ pub(crate) trait JsRuntime {
     /// ran (so the caller redraws).
     fn dispatch_click(&mut self, node: &NodePtr, _client_x: f32, _client_y: f32) -> bool {
         self.dispatch_event(node, "click")
+    }
+
+    /// A key press or release, delivered to the focused element (or body):
+    /// keydown/keypress/keyup, and for a focused text control the edit and
+    /// its `input` event.
+    fn dispatch_key(&mut self, _key: &KeyInput) -> KeyOutcome {
+        KeyOutcome::default()
     }
     fn fire_dom_content_loaded(&mut self);
     fn fire_load(&mut self);

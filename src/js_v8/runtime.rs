@@ -2483,6 +2483,42 @@ impl crate::js_engine::JsRuntime for V8Runtime {
         self.call_ui_hook("__aurora_dispatch_click__", node, &[client_x as f64, client_y as f64])
     }
 
+    fn dispatch_key(&mut self, key: &crate::js_engine::KeyInput) -> crate::js_engine::KeyOutcome {
+        let _entered = self.entered();
+        v8::scope_with_context!(let scope, &mut self.isolate, &self.context);
+        v8::tc_scope!(let scope, scope);
+        let global = scope.get_current_context().global(scope);
+        let name = v8_str(scope, "__aurora_dispatch_key__");
+        let Some(hook) = global
+            .get(scope, name.into())
+            .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok())
+        else {
+            return crate::js_engine::KeyOutcome::default();
+        };
+        let modifiers = (key.shift as u32) | (key.ctrl as u32) << 1 | (key.alt as u32) << 2 | (key.meta as u32) << 3;
+        let text: v8::Local<v8::Value> = match &key.text {
+            Some(text) => v8_str(scope, text).into(),
+            None => v8::null(scope).into(),
+        };
+        let args: [v8::Local<v8::Value>; 6] = [
+            v8_str(scope, &key.key).into(),
+            v8_str(scope, &key.code).into(),
+            v8::Number::new(scope, key.key_code as f64).into(),
+            text,
+            v8::Number::new(scope, modifiers as f64).into(),
+            v8::Boolean::new(scope, key.released).into(),
+        ];
+        let flags = match hook.call(scope, global.into(), &args) {
+            Some(result) => result.uint32_value(scope).unwrap_or(0),
+            None => {
+                log::warn!(target: "aurora::js", "__aurora_dispatch_key__: {}", exception_message(scope, "threw"));
+                0
+            }
+        };
+        scope.perform_microtask_checkpoint();
+        crate::js_engine::KeyOutcome { default_prevented: flags & 1 != 0, editable_target: flags & 2 != 0 }
+    }
+
     fn fire_dom_content_loaded(&mut self) {
         self.run_js_quiet("document.readyState = 'interactive';");
         self.fire_lifecycle_event("DOMContentLoaded");

@@ -1,4 +1,5 @@
 interface HTMLElement : Element {};
+HTMLElement includes HTMLOrSVGElement;
 interface HTMLUnknownElement : HTMLElement {};
 interface HTMLHtmlElement : HTMLElement {};
 interface HTMLHeadElement : HTMLElement {};
@@ -47,7 +48,10 @@ interface HTMLTableRowElement : HTMLElement {};
 interface HTMLTableCellElement : HTMLElement {};
 interface HTMLFormElement : HTMLElement {};
 interface HTMLLabelElement : HTMLElement {};
-interface HTMLInputElement : HTMLElement {};
+interface HTMLInputElement : HTMLElement {
+  [CEReactions] attribute DOMString defaultValue;
+  [CEReactions] attribute [LegacyNullToEmptyString] DOMString value;
+};
 interface HTMLButtonElement : HTMLElement {};
 interface HTMLSelectElement : HTMLElement {};
 interface HTMLDataListElement : HTMLElement {};
@@ -79,4 +83,16 @@ interface mixin HTMLHyperlinkElementUtils {
   [CEReactions] attribute USVString pathname;
   [CEReactions] attribute USVString search;
   [CEReactions] attribute USVString hash;
+};
+
+// https://html.spec.whatwg.org/multipage/dom.html#htmlorsvgelement
+interface mixin HTMLOrSVGElement {
+  [CEReactions] attribute long tabIndex;
+  undefined focus(optional FocusOptions options = {});
+  undefined blur();
+};
+
+// https://html.spec.whatwg.org/multipage/interaction.html#focusoptions
+dictionary FocusOptions {
+  boolean preventScroll = false;
 };

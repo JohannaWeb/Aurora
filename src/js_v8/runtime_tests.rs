@@ -2213,7 +2213,8 @@ fn v8_exposes_common_element_metric_and_attribute_probes() {
             ].join('|')
             "#
         ),
-        Ok("true|true|0|0|0|0|function".to_string())
+        // tabIndex is -1: a div is not focusable without a tabindex attribute.
+        Ok("true|true|-1|0|0|0|function".to_string())
     );
 }
 
@@ -3691,5 +3692,144 @@ fn v8_window_clicks_dispatch_the_pointer_and_mouse_sequence() {
             "document:click:inner:true:true:1,2",
         ]
         .join(" ")
+    );
+}
+
+#[test]
+fn v8_clicks_and_focus_calls_move_focus_with_events() {
+    let dom = Parser::new(
+        "<html><body><label id='label'>Search <input id='search'></label><p id='para'>text</p>\
+         <div id='box' tabindex='2'><span id='inner'>in</span></div><button id='off' disabled>x</button></body></html>",
+    )
+    .parse_document();
+    let find = |id: &str| super::selectors::query::find_by_id(&dom, id).unwrap();
+    let (search, para, inner) = (find("search"), find("para"), find("inner"));
+    let mut runtime = V8Runtime::new(dom.clone());
+    runtime
+        .eval_to_string(
+            r#"(() => {
+            globalThis.seen = [];
+            for (const type of ['focus', 'blur', 'focusin', 'focusout']) {
+                document.addEventListener(type, (e) => seen.push(type + ':' + e.target.id
+                    + '<' + (e.relatedTarget ? e.relatedTarget.id : '-') + ':' + e.isTrusted), true);
+            }
+            return 'ok';
+        })()"#,
+        )
+        .unwrap();
+
+    let active = |runtime: &mut V8Runtime| runtime.eval_to_string("document.activeElement.id || document.activeElement.localName").unwrap();
+    assert_eq!(active(&mut runtime), "body");
+    runtime.dispatch_click(&search, 5.0, 5.0);
+    assert_eq!(active(&mut runtime), "search");
+    runtime.dispatch_click(&inner, 5.0, 5.0);
+    assert_eq!(active(&mut runtime), "box");
+    runtime.dispatch_click(&para, 5.0, 5.0);
+    assert_eq!(active(&mut runtime), "body");
+
+    assert_eq!(
+        runtime.eval_to_string(
+            r#"(() => {
+            const out = [seen.join(' ')];
+            const off = document.getElementById('off'), para = document.getElementById('para');
+            const loose = document.createElement('input');
+            off.focus(); para.focus(); loose.focus();
+            out.push(document.activeElement.localName);
+            document.getElementById('search').focus();
+            out.push(document.activeElement.id);
+            document.getElementById('search').blur();
+            out.push(document.activeElement.localName);
+            out.push([document.getElementById('search').tabIndex, para.tabIndex,
+                document.getElementById('box').tabIndex, off.tabIndex].join(','));
+            para.tabIndex = 0; para.focus();
+            out.push(document.activeElement.id, para.getAttribute('tabindex'),
+                Object.prototype.hasOwnProperty.call(para, 'focus'));
+            return out.join(' | ');
+        })()"#
+        ),
+        Ok([
+            "focus:search<-:true focusin:search<-:true \
+             blur:search<box:true focusout:search<box:true focus:box<search:true focusin:box<search:true \
+             blur:box<-:true focusout:box<-:true",
+            "body",
+            "search",
+            "body",
+            "0,-1,2,-1",
+            "para",
+            "0",
+            "false",
+        ]
+        .join(" | "))
+    );
+}
+
+#[test]
+fn v8_typing_into_a_focused_input_edits_its_value() {
+    use crate::js_engine::KeyInput;
+    let dom = Parser::new(
+        "<html><body><input id='search' value='initial'><p id='para'>p</p></body></html>",
+    )
+    .parse_document();
+    let find = |id: &str| super::selectors::query::find_by_id(&dom, id).unwrap();
+    let (search, para) = (find("search"), find("para"));
+    let mut runtime = V8Runtime::new(dom.clone());
+    runtime
+        .eval_to_string(
+            r#"(() => {
+            globalThis.seen = [];
+            const input = document.getElementById('search');
+            input.value = '';
+            for (const type of ['keydown', 'keypress', 'keyup', 'input']) {
+                document.addEventListener(type, (e) => seen.push(type + ':' + (e.key || e.inputType)
+                    + ':' + e.target.localName + ':' + e.isTrusted));
+            }
+            input.addEventListener('keydown', (e) => { if (e.key === 'x') e.preventDefault(); });
+            return 'ok';
+        })()"#,
+        )
+        .unwrap();
+    let press = |key: &str, text: Option<&str>| KeyInput {
+        key: key.into(),
+        code: format!("Key{}", key.to_uppercase()),
+        key_code: key.chars().next().map_or(0, |c| c.to_ascii_uppercase() as u32),
+        text: text.map(Into::into),
+        ..KeyInput::default()
+    };
+
+    let unfocused = runtime.dispatch_key(&press("q", Some("q")));
+    assert!(!unfocused.editable_target && !unfocused.default_prevented);
+    runtime.dispatch_click(&search, 1.0, 1.0);
+    for (key, text) in [("h", Some("h")), ("i", Some("i")), ("x", Some("x"))] {
+        runtime.dispatch_key(&press(key, text));
+    }
+    let backspace = runtime.dispatch_key(&KeyInput { key: "Backspace".into(), key_code: 8, ..KeyInput::default() });
+    let enter = runtime.dispatch_key(&KeyInput { key: "Enter".into(), key_code: 13, text: Some("\r".into()), ..KeyInput::default() });
+    let release = runtime.dispatch_key(&KeyInput { key: "Enter".into(), released: true, ..KeyInput::default() });
+    assert!(backspace.editable_target && enter.editable_target && release.editable_target);
+    runtime.dispatch_click(&para, 1.0, 1.0);
+
+    assert_eq!(
+        runtime.eval_to_string(
+            r#"(() => {
+            const input = document.getElementById('search');
+            const out = [input.value, input.getAttribute('value'), input.defaultValue,
+                Object.prototype.hasOwnProperty.call(input, 'value')];
+            input.defaultValue = 'changed';
+            out.push(input.value, input.getAttribute('value'));
+            return out.join('|') + ' / ' + seen.join(' ');
+        })()"#
+        ),
+        Ok(format!(
+            "h|initial|initial|false|h|changed / {}",
+            [
+                "keydown:q:body:true keypress:q:body:true",
+                "keydown:h:input:true keypress:h:input:true input:insertText:input:true",
+                "keydown:i:input:true keypress:i:input:true input:insertText:input:true",
+                "keydown:x:input:true",
+                "keydown:Backspace:input:true input:deleteContentBackward:input:true",
+                "keydown:Enter:input:true keypress:Enter:input:true keyup:Enter:input:true",
+            ]
+            .join(" ")
+        ))
     );
 }
