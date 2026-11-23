@@ -329,9 +329,12 @@ impl AuroraApp {
                 let layout = self.input().layout.borrow();
                 layout.hit_test(content_x, content_y)
             });
+        // Viewport (client) coordinates: the page area, before scrolling.
+        let client_x = self.mouse_x as f32;
+        let client_y = (self.mouse_y - super::BROWSER_CHROME_HEIGHT as f64) as f32;
         if let Some(node) = hit_node {
             if let Some(runtime) = self.input_mut().runtime.as_mut() {
-                if runtime.dispatch_event(&node, "click") {
+                if runtime.dispatch_click(&node, client_x, client_y) {
                     self.request_redraw();
                 }
             }

@@ -35,7 +35,7 @@ pub(crate) struct V8Runtime {
     context: v8::Global<v8::Context>,
     window: Rc<RefCell<WindowCapture>>,
     _network_tasks: Rc<RefCell<NetworkTasks>>,
-    registry: Rc<NodeRegistry>,
+    pub(super) registry: Rc<NodeRegistry>,
     document: NodePtr,
 }
 
@@ -1147,6 +1147,34 @@ impl V8Runtime {
         v8::scope_with_context!(let scope, &mut self.isolate, &self.context);
         v8::tc_scope!(let scope, scope);
         let _ = compile_and_run(scope, source);
+    }
+
+    /// Calls the `v8_post.js` UI-event hook `name` with `node`'s wrapper and
+    /// `numbers`, then runs microtasks, as after any task that ran script.
+    /// Returns whether the hook existed and ran.
+    fn call_ui_hook(&mut self, name: &str, node: &NodePtr, numbers: &[f64]) -> bool {
+        let _entered = self.entered();
+        v8::scope_with_context!(let scope, &mut self.isolate, &self.context);
+        v8::tc_scope!(let scope, scope);
+        let global = scope.get_current_context().global(scope);
+        let key = v8_str(scope, name);
+        let Some(hook) = global
+            .get(scope, key.into())
+            .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok())
+        else {
+            return false;
+        };
+        let wrapper = create_js_node(scope, node.clone(), &self.registry, &self.document);
+        let mut args: Vec<v8::Local<v8::Value>> = vec![wrapper.into()];
+        for n in numbers {
+            args.push(v8::Number::new(scope, *n).into());
+        }
+        let ran = hook.call(scope, global.into(), &args).is_some();
+        if !ran {
+            log::warn!(target: "aurora::js", "{name}: {}", exception_message(scope, "threw"));
+        }
+        scope.perform_microtask_checkpoint();
+        true
     }
 
     fn fire_lifecycle_event(&mut self, event_type: &str) {
@@ -2449,6 +2477,10 @@ impl crate::js_engine::JsRuntime for V8Runtime {
     fn dispatch_event(&mut self, _node: &NodePtr, _event_type: &str) -> bool {
         // TODO: Full event dispatch
         false
+    }
+
+    fn dispatch_click(&mut self, node: &NodePtr, client_x: f32, client_y: f32) -> bool {
+        self.call_ui_hook("__aurora_dispatch_click__", node, &[client_x as f64, client_y as f64])
     }
 
     fn fire_dom_content_loaded(&mut self) {

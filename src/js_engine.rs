@@ -115,6 +115,13 @@ pub(crate) trait JsRuntime {
     }
 
     fn dispatch_event(&mut self, node: &NodePtr, event_type: &str) -> bool;
+
+    /// A primary-button click on `node` at viewport coordinates: the pointer
+    /// and mouse down/up events, then `click`. Returns whether page script
+    /// ran (so the caller redraws).
+    fn dispatch_click(&mut self, node: &NodePtr, _client_x: f32, _client_y: f32) -> bool {
+        self.dispatch_event(node, "click")
+    }
     fn fire_dom_content_loaded(&mut self);
     fn fire_load(&mut self);
 
