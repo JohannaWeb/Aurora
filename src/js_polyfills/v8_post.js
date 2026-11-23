@@ -318,7 +318,11 @@
         }
         var Pointer = globalThis.PointerEvent || globalThis.MouseEvent;
         fire(Pointer, 'pointerdown', 1);
-        fire(MouseEvent, 'mousedown', 1);
+        // mousedown's default action moves focus to the clicked element (or
+        // its nearest focusable ancestor), or clears it.
+        if (fire(MouseEvent, 'mousedown', 1) && typeof globalThis.__aurora_focus_from_click__ === 'function') {
+            globalThis.__aurora_focus_from_click__(target);
+        }
         fire(Pointer, 'pointerup', 0);
         fire(MouseEvent, 'mouseup', 0);
         return fire(MouseEvent, 'click', 0);
@@ -448,8 +452,6 @@
         el.scrollIntoView = function() {};
         el.scrollTo = function() {};
         el.scrollBy = function() {};
-        el.focus = function() {};
-        el.blur = function() {};
         el.click = function() {};
         el.releasePointerCapture = function() {};
         el.setPointerCapture = function() {};
@@ -646,7 +648,6 @@
     if (typeof document.elementFromPoint !== 'function') {
         document.elementFromPoint = function() { return null; };
     }
-    document.activeElement = document.body || null;
     document.scrollingElement = document.documentElement || null;
     document.location = globalThis.location;
 

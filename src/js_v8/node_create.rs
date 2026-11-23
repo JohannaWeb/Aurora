@@ -283,11 +283,6 @@ pub(super) fn create_js_node<'s>(
                     v8::Number::new(scope, 0.0).into(),
                 );
             }
-            obj.set(
-                scope,
-                v8_str(scope, "tabIndex").into(),
-                v8::Integer::new(scope, 0).into(),
-            );
             is_custom_element = el.tag_name.contains('-');
         }
         if el.tag_name.eq_ignore_ascii_case("template") {

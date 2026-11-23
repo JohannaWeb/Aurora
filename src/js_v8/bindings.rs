@@ -36,6 +36,20 @@ pub(super) fn install(scope: &mut v8::PinScope<'_, '_>, registry: &Rc<NodeRegist
     // data, so it lives exactly as long as the context.
     scope.get_current_context().set_slot(registry.clone());
     install_interfaces(scope, registry);
+    let focus_from_click = v8::FunctionTemplate::new(scope, focus_from_click);
+    let focus_from_click = focus_from_click.get_function(scope).expect("focus hook");
+    let global = scope.get_current_context().global(scope);
+    let key = v8_str(scope, "__aurora_focus_from_click__");
+    global.define_own_property(scope, key.into(), focus_from_click.into(), v8::PropertyAttribute::DONT_ENUM);
+}
+
+/// `__aurora_focus_from_click__(element)`: the focus part of a click's
+/// mousedown default action (v8_post.js `__aurora_dispatch_click__`).
+fn focus_from_click(scope: &mut v8::PinScope<'_, '_>, args: v8::FunctionCallbackArguments, _: v8::ReturnValue) {
+    let Some(registry) = scope.get_current_context().get_slot::<NodeRegistry>() else { return };
+    if let Some(target) = node_from_js(scope, args.get(0), &registry) {
+        super::dom_impl::focus_from_click(scope, &registry, &target);
+    }
 }
 
 fn define_interface<'s>(

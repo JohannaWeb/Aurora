@@ -2213,7 +2213,8 @@ fn v8_exposes_common_element_metric_and_attribute_probes() {
             ].join('|')
             "#
         ),
-        Ok("true|true|0|0|0|0|function".to_string())
+        // tabIndex is -1: a div is not focusable without a tabindex attribute.
+        Ok("true|true|-1|0|0|0|function".to_string())
     );
 }
 
@@ -3691,5 +3692,73 @@ fn v8_window_clicks_dispatch_the_pointer_and_mouse_sequence() {
             "document:click:inner:true:true:1,2",
         ]
         .join(" ")
+    );
+}
+
+#[test]
+fn v8_clicks_and_focus_calls_move_focus_with_events() {
+    let dom = Parser::new(
+        "<html><body><label id='label'>Search <input id='search'></label><p id='para'>text</p>\
+         <div id='box' tabindex='2'><span id='inner'>in</span></div><button id='off' disabled>x</button></body></html>",
+    )
+    .parse_document();
+    let find = |id: &str| super::selectors::query::find_by_id(&dom, id).unwrap();
+    let (search, para, inner) = (find("search"), find("para"), find("inner"));
+    let mut runtime = V8Runtime::new(dom.clone());
+    runtime
+        .eval_to_string(
+            r#"(() => {
+            globalThis.seen = [];
+            for (const type of ['focus', 'blur', 'focusin', 'focusout']) {
+                document.addEventListener(type, (e) => seen.push(type + ':' + e.target.id
+                    + '<' + (e.relatedTarget ? e.relatedTarget.id : '-') + ':' + e.isTrusted), true);
+            }
+            return 'ok';
+        })()"#,
+        )
+        .unwrap();
+
+    let active = |runtime: &mut V8Runtime| runtime.eval_to_string("document.activeElement.id || document.activeElement.localName").unwrap();
+    assert_eq!(active(&mut runtime), "body");
+    runtime.dispatch_click(&search, 5.0, 5.0);
+    assert_eq!(active(&mut runtime), "search");
+    runtime.dispatch_click(&inner, 5.0, 5.0);
+    assert_eq!(active(&mut runtime), "box");
+    runtime.dispatch_click(&para, 5.0, 5.0);
+    assert_eq!(active(&mut runtime), "body");
+
+    assert_eq!(
+        runtime.eval_to_string(
+            r#"(() => {
+            const out = [seen.join(' ')];
+            const off = document.getElementById('off'), para = document.getElementById('para');
+            const loose = document.createElement('input');
+            off.focus(); para.focus(); loose.focus();
+            out.push(document.activeElement.localName);
+            document.getElementById('search').focus();
+            out.push(document.activeElement.id);
+            document.getElementById('search').blur();
+            out.push(document.activeElement.localName);
+            out.push([document.getElementById('search').tabIndex, para.tabIndex,
+                document.getElementById('box').tabIndex, off.tabIndex].join(','));
+            para.tabIndex = 0; para.focus();
+            out.push(document.activeElement.id, para.getAttribute('tabindex'),
+                Object.prototype.hasOwnProperty.call(para, 'focus'));
+            return out.join(' | ');
+        })()"#
+        ),
+        Ok([
+            "focus:search<-:true focusin:search<-:true \
+             blur:search<box:true focusout:search<box:true focus:box<search:true focusin:box<search:true \
+             blur:box<-:true focusout:box<-:true",
+            "body",
+            "search",
+            "body",
+            "0,-1,2,-1",
+            "para",
+            "0",
+            "false",
+        ]
+        .join(" | "))
     );
 }

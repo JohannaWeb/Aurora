@@ -35,6 +35,8 @@ pub(super) struct NodeRegistry {
     /// Native mirror of the JS `customElements` registry (Phase 1 of the native
     /// custom-element-reaction plan). Populated from `customElements.define`.
     pub(super) ce_registry: super::custom_elements::CeRegistry,
+    /// The document's focused element (`document.activeElement`), if any.
+    pub(super) focused: RefCell<Option<NodePtr>>,
     /// When set, the native insertion path enqueues custom-element lifecycle
     /// reactions (connected/disconnected/attributeChanged) and the JS shim's
     /// upgrade path defers connectedCallback to the native trampoline. Default
@@ -65,6 +67,7 @@ impl NodeRegistry {
             mo_next: RefCell::new(1),
             snapshot_rebuild_reason: RefCell::new(None),
             ce_registry: super::custom_elements::CeRegistry::default(),
+            focused: RefCell::new(None),
             native_ce_reactions: std::cell::Cell::new(native_ce_reactions_default(
                 std::env::var("AURORA_NATIVE_CE_REACTIONS").ok().as_deref(),
             )),
