@@ -289,6 +289,41 @@
         } catch (e) {}
     });
 
+    // A trusted primary-button click from the window (V8Runtime::dispatch_click):
+    // pointer and mouse down/up, then click, at the element that was hit. A
+    // hit on a text node targets its parent element. Returns whether click's
+    // default action is still allowed.
+    globalThis.__aurora_dispatch_click__ = function(node, clientX, clientY) {
+        var target = node;
+        while (target && target.nodeType !== 1) target = target.parentNode;
+        if (!target || typeof target.dispatchEvent !== 'function') return true;
+        var scrollX = window.scrollX || 0, scrollY = window.scrollY || 0;
+        function fire(Ctor, type, buttons) {
+            var event = new Ctor(type, {
+                bubbles: true, cancelable: true, composed: true, view: window,
+                detail: 1, clientX: clientX, clientY: clientY, button: 0
+            });
+            event.isTrusted = true;
+            event.buttons = buttons;
+            event.screenX = clientX; event.screenY = clientY;
+            event.pageX = clientX + scrollX; event.pageY = clientY + scrollY;
+            event.x = clientX; event.y = clientY;
+            event.offsetX = 0; event.offsetY = 0;
+            event.altKey = false; event.ctrlKey = false; event.metaKey = false; event.shiftKey = false;
+            if (Ctor === globalThis.PointerEvent) {
+                event.pointerId = 1; event.pointerType = 'mouse'; event.isPrimary = true;
+                event.width = 1; event.height = 1; event.pressure = buttons ? 0.5 : 0;
+            }
+            return target.dispatchEvent(event);
+        }
+        var Pointer = globalThis.PointerEvent || globalThis.MouseEvent;
+        fire(Pointer, 'pointerdown', 1);
+        fire(MouseEvent, 'mousedown', 1);
+        fire(Pointer, 'pointerup', 0);
+        fire(MouseEvent, 'mouseup', 0);
+        return fire(MouseEvent, 'click', 0);
+    };
+
     // Element decoration — called from the native bridge for every element
     // wrapper. Installs per-element JS APIs that are simpler here than native.
     globalThis.__aurora_decorate_element__ = function(el) {

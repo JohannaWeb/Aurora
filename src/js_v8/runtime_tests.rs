@@ -3635,3 +3635,61 @@ fn v8_fragment_self_append_is_tolerated_for_shadow_adoption() {
         Ok("1|true".into())
     );
 }
+
+#[test]
+fn v8_window_clicks_dispatch_the_pointer_and_mouse_sequence() {
+    let dom = Parser::new(
+        "<html><body><div id='outer'><button id='button'>Press</button></div><p id='host'></p></body></html>",
+    )
+    .parse_document();
+    let find = |id: &str| super::selectors::query::find_by_id(&dom, id).unwrap();
+    let (button, host) = (find("button"), find("host"));
+    let label = match &*button.borrow() {
+        crate::dom::Node::Element(el) => el.children[0].clone(),
+        _ => unreachable!("button is an element"),
+    };
+    let mut runtime = V8Runtime::new(dom.clone());
+    runtime
+        .eval_to_string(
+            r#"(() => {
+            globalThis.seen = [];
+            const log = (where) => (e) => seen.push(where + ':' + e.type + ':' + e.target.id
+                + ':' + e.isTrusted + ':' + e.bubbles + ':' + e.clientX + ',' + e.clientY);
+            for (const type of ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click']) {
+                document.getElementById('button').addEventListener(type, log('button'));
+            }
+            document.addEventListener('click', log('document'));
+            const root = document.getElementById('host').attachShadow({ mode: 'open' });
+            root.innerHTML = '<i id="inner">x</i>';
+            root.firstChild.addEventListener('click', (e) => { seen.push('inner:click'); e.preventDefault(); });
+            document.getElementById('host').addEventListener('click', () => seen.push('host:click'));
+            return 'ok';
+        })()"#,
+        )
+        .unwrap();
+
+    assert!(runtime.dispatch_click(&label, 12.0, 34.0));
+    let shadow_child = runtime
+        .eval_to_string("document.getElementById('host').shadowRoot.firstChild.__aurora_node_id")
+        .unwrap();
+    let inner = runtime.registry.lookup(shadow_child.parse().unwrap()).unwrap();
+    assert!(runtime.dispatch_click(&inner, 1.0, 2.0));
+
+    assert_eq!(
+        runtime.eval_to_string("seen.join(' ')").unwrap(),
+        [
+            "button:pointerdown:button:true:true:12,34",
+            "button:mousedown:button:true:true:12,34",
+            "button:pointerup:button:true:true:12,34",
+            "button:mouseup:button:true:true:12,34",
+            "button:click:button:true:true:12,34",
+            "document:click:button:true:true:12,34",
+            "inner:click",
+            "host:click",
+            // Spec: retargeted to `host` outside the shadow tree. The JS
+            // EventTarget does not retarget yet (prs.md P2.7).
+            "document:click:inner:true:true:1,2",
+        ]
+        .join(" ")
+    );
+}
