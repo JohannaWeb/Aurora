@@ -152,6 +152,81 @@ impl NodeMembers for Dom {
         }
     }
 
+    /// <https://dom.spec.whatwg.org/#dom-node-nodevalue>: the data of text
+    /// and comment nodes, null for every other node.
+    fn node_value(_: Scope, _: &Rc<NodeRegistry>, this: &NodePtr) -> Fallible<Option<String>> {
+        Ok(match &*this.borrow() {
+            Node::Text(text) | Node::Comment(text) => Some(text.content.clone()),
+            _ => None,
+        })
+    }
+
+    /// Setting it replaces a text or comment node's data (null as `""`) and
+    /// does nothing on other nodes.
+    fn set_node_value(
+        _: Scope,
+        registry: &Rc<NodeRegistry>,
+        this: &NodePtr,
+        value: Option<String>,
+    ) -> Fallible<()> {
+        if matches!(&*this.borrow(), Node::Text(_) | Node::Comment(_)) {
+            let text = value.unwrap_or_default();
+            mutation::apply_dom_mutation(registry, mutation::DomMutation::SetTextContent { node: this, text });
+            registry.mark_layout_dirty(this);
+        }
+        Ok(())
+    }
+
+    /// <https://dom.spec.whatwg.org/#dom-node-isequalnode>
+    fn is_equal_node(_: Scope, _: &Rc<NodeRegistry>, this: &NodePtr, other: Option<NodePtr>) -> Fallible<bool> {
+        Ok(other.is_some_and(|other| nodes_equal(this, &other)))
+    }
+
+    /// <https://dom.spec.whatwg.org/#dom-node-comparedocumentposition>.
+    /// Aurora has no Attr nodes, so the attribute steps never apply.
+    fn compare_document_position(
+        _: Scope,
+        registry: &Rc<NodeRegistry>,
+        this: &NodePtr,
+        other: NodePtr,
+    ) -> Fallible<u16> {
+        const DISCONNECTED: u16 = 0x01;
+        const PRECEDING: u16 = 0x02;
+        const FOLLOWING: u16 = 0x04;
+        const CONTAINS: u16 = 0x08;
+        const CONTAINED_BY: u16 = 0x10;
+        const IMPLEMENTATION_SPECIFIC: u16 = 0x20;
+        if Rc::ptr_eq(this, &other) {
+            return Ok(0);
+        }
+        let document = document(registry, this);
+        let this_chain = ancestors_from_root(registry, &document, this);
+        let other_chain = ancestors_from_root(registry, &document, &other);
+        if !Rc::ptr_eq(&this_chain[0], &other_chain[0]) {
+            // Different trees: disconnected, ordered consistently by address.
+            let order = if Rc::as_ptr(&other) < Rc::as_ptr(this) { PRECEDING } else { FOLLOWING };
+            return Ok(DISCONNECTED | IMPLEMENTATION_SPECIFIC | order);
+        }
+        let shared = this_chain
+            .iter()
+            .zip(&other_chain)
+            .take_while(|(a, b)| Rc::ptr_eq(a, b))
+            .count();
+        if shared == other_chain.len() {
+            return Ok(CONTAINS | PRECEDING); // `other` is an ancestor
+        }
+        if shared == this_chain.len() {
+            return Ok(CONTAINED_BY | FOLLOWING); // `other` is a descendant
+        }
+        // Siblings under the deepest common ancestor decide tree order.
+        let siblings = child_nodes_of(&this_chain[shared - 1]);
+        let index = |node: &NodePtr| siblings.iter().position(|n| Rc::ptr_eq(n, node));
+        Ok(match (index(&this_chain[shared]), index(&other_chain[shared])) {
+            (Some(mine), Some(theirs)) if theirs < mine => PRECEDING,
+            _ => FOLLOWING,
+        })
+    }
+
     /// <https://dom.spec.whatwg.org/#dom-node-issamenode>
     fn is_same_node(_: Scope, _: &Rc<NodeRegistry>, this: &NodePtr, other: Option<NodePtr>) -> Fallible<bool> {
         Ok(other.is_some_and(|other| Rc::ptr_eq(this, &other)))
@@ -231,6 +306,37 @@ fn insert<'n>(
     }
     registry.mark_layout_dirty(parent);
     Ok(())
+}
+
+/// `node` and its ancestors, root first.
+fn ancestors_from_root(registry: &NodeRegistry, document: &NodePtr, node: &NodePtr) -> Vec<NodePtr> {
+    let mut chain = vec![node.clone()];
+    while let Some(parent) = parent_of(registry, document, chain.last().unwrap()) {
+        chain.push(parent);
+    }
+    chain.reverse();
+    chain
+}
+
+/// DOM's "equals" (<https://dom.spec.whatwg.org/#concept-node-equals>).
+/// Elements compare by tag name and attribute set (Aurora keeps no separate
+/// namespace or prefix), character data by data, and every node by its
+/// children in order. Template contents and shadow roots are not children.
+fn nodes_equal(a: &NodePtr, b: &NodePtr) -> bool {
+    if Rc::ptr_eq(a, b) {
+        return true;
+    }
+    let same = match (&*a.borrow(), &*b.borrow()) {
+        (Node::Element(x), Node::Element(y)) => x.tag_name == y.tag_name && x.attributes == y.attributes,
+        (Node::Text(x), Node::Text(y)) | (Node::Comment(x), Node::Comment(y)) => x.content == y.content,
+        (Node::Document { .. }, Node::Document { .. }) => true,
+        _ => false,
+    };
+    if !same {
+        return false;
+    }
+    let (left, right) = (child_nodes_of(a), child_nodes_of(b));
+    left.len() == right.len() && left.iter().zip(&right).all(|(x, y)| nodes_equal(x, y))
 }
 
 /// The node's data as UTF-16 code units, the unit CharacterData offsets count.

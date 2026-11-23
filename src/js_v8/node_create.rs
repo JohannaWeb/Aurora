@@ -161,19 +161,6 @@ pub(super) fn create_js_node<'s>(
         set_text_content,
         node_external,
     );
-    // `nodeValue` only on Text/Comment wrappers until Node moves to generated
-    // bindings (P2.3): an own accessor on element wrappers would shadow
-    // application-level properties. `data` is on CharacterData.prototype.
-    if matches!(&*node.borrow(), Node::Text(_) | Node::Comment(_)) {
-        install_accessor(
-            scope,
-            template,
-            "nodeValue",
-            get_text_content,
-            set_text_content,
-            node_external,
-        );
-    }
     install_readonly_accessor(scope, template, "outerHTML", get_outer_html, node_external);
     install_accessor(scope, template, "id", get_id, set_id, node_external);
     install_accessor(

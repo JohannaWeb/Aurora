@@ -58,8 +58,9 @@ or a native `DOMException`.
 
 Members currently on generated bindings: `Node`'s constants, its tree
 operations (`appendChild`, `insertBefore`, `replaceChild`, `removeChild`,
-`cloneNode`, `hasChildNodes`, `isSameNode`, `contains`, `getRootNode`) and its navigation
-attributes (`nodeType`, `nodeName`, `isConnected`,
+`cloneNode`, `hasChildNodes`, `isSameNode`, `isEqualNode`,
+`compareDocumentPosition`, `contains`, `getRootNode`) and its attributes
+(`nodeType`, `nodeName`, `nodeValue`, `isConnected`,
 `ownerDocument`, `parentNode`, `parentElement`, `childNodes`, `firstChild`,
 `lastChild`, `previousSibling`, `nextSibling`, `textContent`); `Element.className`;
 the `ParentNode`, `NonDocumentTypeChildNode` and `InnerHTML` mixins; and all
