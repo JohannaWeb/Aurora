@@ -219,7 +219,7 @@
     }
 
     [
-        'appendChild', 'insertBefore', 'removeChild', 'getRootNode',
+        'appendChild', 'insertBefore', 'removeChild',
         'append', 'prepend', 'before', 'after', 'remove',
         'replaceChildren', 'replaceWith'
     ].forEach(function(name) {

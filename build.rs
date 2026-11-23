@@ -12,14 +12,15 @@ fn main() {
         .filter(|p| p.extension().is_some_and(|e| e == "idl"))
         .collect::<Vec<_>>();
     paths.sort();
-    let (mut definitions, mut includes) = (Vec::new(), Vec::new());
+    let (mut definitions, mut includes, mut dictionaries) = (Vec::new(), Vec::new(), Vec::new());
     for path in paths {
-        let (found, found_includes) =
-            webidl::parse_definitions(&std::fs::read_to_string(&path).unwrap())
-                .unwrap_or_else(|e| panic!("{}: {e}", path.display()));
-        definitions.extend(found);
-        includes.extend(found_includes);
+        let found = webidl::parse_definitions(&std::fs::read_to_string(&path).unwrap())
+            .unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+        definitions.extend(found.interfaces);
+        includes.extend(found.includes);
+        dictionaries.extend(found.dictionaries);
     }
+    webidl::resolve_dictionaries(&mut definitions, &mut dictionaries).expect("invalid dictionaries");
     let mixins: Vec<_> = definitions.iter().filter(|d| d.mixin).cloned().collect();
     let interfaces = webidl::resolve_mixins(definitions, &includes).expect("invalid includes");
     let interfaces = webidl::inheritance_order(interfaces).expect("invalid interface inheritance");
@@ -28,6 +29,9 @@ fn main() {
         fn install_interfaces(scope: &mut v8::PinScope<'_, '_>, registry: &NodeRegistry) {\n",
     );
     let mut members: String = mixins.iter().map(generate::mixin_trait).collect();
+    for dictionary in &dictionaries {
+        members.push_str(&generate::dictionary(dictionary, &dictionaries));
+    }
     for (index, interface) in interfaces.iter().enumerate() {
         let parent = interface.parent.as_ref().map_or("None".into(), |parent| {
             let index = interfaces.iter().position(|i| &i.name == parent).unwrap();

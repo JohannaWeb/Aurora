@@ -280,6 +280,40 @@ fn node_mutations_are_generated_prototype_operations() {
 }
 
 #[test]
+fn get_root_node_converts_its_options_dictionary() {
+    let mut runtime = runtime();
+    assert_eq!(
+        runtime.eval_to_string(
+            r#"(() => {
+        const host = document.createElement('div');
+        document.body.appendChild(host);
+        const root = host.attachShadow({ mode: 'open' });
+        const inner = document.createElement('span');
+        root.appendChild(inner);
+        const loose = document.createElement('p');
+        const child = loose.appendChild(document.createElement('b'));
+        let getterCalls = 0;
+        const options = { get composed() { getterCalls++; return 1; } };
+        const out = [
+            document.body.getRootNode() === document,
+            inner.getRootNode() === root,
+            inner.getRootNode({}) === root,
+            inner.getRootNode(null) === root,
+            inner.getRootNode({ composed: true }) === document,
+            inner.getRootNode(options) === document && getterCalls === 1,
+            child.getRootNode() === loose,
+            Object.prototype.hasOwnProperty.call(host, 'getRootNode'),
+            Node.prototype.getRootNode.length,
+        ];
+        try { inner.getRootNode(5); } catch (e) { out.push(e instanceof TypeError); }
+        return out.join();
+    })()"#
+        ),
+        Ok("true,true,true,true,true,true,true,false,0,true".into())
+    );
+}
+
+#[test]
 fn snake_case_member_names() {
     #[path = "../../codegen/generate.rs"]
     #[allow(dead_code)]

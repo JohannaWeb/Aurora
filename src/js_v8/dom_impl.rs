@@ -4,7 +4,7 @@
 //! argument per WebIDL by the time these run.
 
 use super::bindings::{
-    CharacterDataMembers, ElementMembers, Error, Fallible, InnerHTMLMembers,
+    CharacterDataMembers, ElementMembers, Error, Fallible, GetRootNodeOptions, InnerHTMLMembers,
     NodeMembers, NonDocumentTypeChildNodeMembers, ParentNodeMembers,
 };
 use super::node_create::{
@@ -127,6 +127,29 @@ impl NodeMembers for Dom {
     /// <https://dom.spec.whatwg.org/#dom-node-haschildnodes>
     fn has_child_nodes(_: Scope, _: &Rc<NodeRegistry>, this: &NodePtr) -> Fallible<bool> {
         Ok(!child_nodes_of(this).is_empty())
+    }
+
+    /// <https://dom.spec.whatwg.org/#dom-node-getrootnode>: the root of the
+    /// node's tree, or with `composed`, of its shadow-including tree (a
+    /// shadow root's host continues the walk).
+    fn get_root_node(
+        _: Scope,
+        registry: &Rc<NodeRegistry>,
+        this: &NodePtr,
+        options: GetRootNodeOptions,
+    ) -> Fallible<NodePtr> {
+        use crate::dom::ShadowTreeBackend;
+        let document = document(registry, this);
+        let mut root = this.clone();
+        loop {
+            while let Some(parent) = parent_of(registry, &document, &root) {
+                root = parent;
+            }
+            match crate::dom::SyntheticShadowTreeBackend.host_for_shadow_root(&root) {
+                Some(host) if options.composed => root = host,
+                _ => return Ok(root),
+            }
+        }
     }
 
     /// <https://dom.spec.whatwg.org/#dom-node-issamenode>

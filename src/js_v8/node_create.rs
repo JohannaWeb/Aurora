@@ -219,7 +219,6 @@ pub(super) fn create_js_node<'s>(
         get_layout_metric,
         node_external,
     );
-    install_method(scope, template, "getRootNode", get_root_node, node_external);
     install_method(scope, template, "append", append_children, node_external);
     install_method(
         scope,
@@ -1771,14 +1770,6 @@ fn get_layout_metric(
         None => 0.0,
     };
     retval.set(v8::Number::new(scope, value as f64).into());
-}
-
-fn get_root_node(
-    _scope: &mut v8::PinScope<'_, '_>,
-    args: v8::FunctionCallbackArguments,
-    mut retval: v8::ReturnValue,
-) {
-    retval.set(args.this().into());
 }
 
 /// ParentNode/ChildNode `(Node or DOMString)...` arguments as nodes.
