@@ -95,7 +95,8 @@ def run_capture(binary: Path, capture: Path, timeout: int) -> dict:
         seconds = time.monotonic() - started
 
     result = {}
-    for line in output.splitlines():
+    # "\n" only; see parse_report in wpt.py.
+    for line in output.split("\n"):
         if line.startswith("[scorecard] "):
             try:
                 probe = json.loads(line[len("[scorecard] ") :])
