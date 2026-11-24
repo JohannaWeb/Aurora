@@ -798,6 +798,11 @@ impl BlitzDocument {
         }
     }
 
+    /// The viewport layout runs against, in CSS pixels.
+    pub fn viewport_css_size(&self) -> (f32, f32) {
+        self.inner.viewport().logical_size()
+    }
+
     pub fn document_height(&self) -> f32 {
         let root = self.inner.root_element();
         document_bottom(root).max(root.final_layout().size.height)

@@ -391,6 +391,13 @@ impl NodeRegistry {
         render_document.borrow().dom_node_layout_metrics(node)
     }
 
+    /// The viewport size in CSS pixels, without a render document `None`.
+    pub(super) fn viewport_size(&self) -> Option<(f32, f32)> {
+        let render_document = self.render_document.borrow().as_ref().cloned()?;
+        let size = render_document.borrow().viewport_css_size();
+        Some(size)
+    }
+
     pub(super) fn sync_shadow_root_to_render_document(
         &self,
         host: &NodePtr,

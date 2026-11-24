@@ -159,3 +159,17 @@ fn replacing_nested_children_keeps_render_mappings_valid() {
         render_doc.borrow().validate_mirror_integrity().unwrap_or_else(|err| panic!("{script}: {err:?}"));
     }
 }
+
+#[test]
+fn root_element_client_size_is_the_viewport() {
+    let dom = Parser::new("<html><body><p style='height:5000px'>tall</p></body></html>").parse_document();
+    crate::dom::reparent_subtree(&dom);
+    let render_doc = Rc::new(RefCell::new(
+        BlitzDocument::try_from_dom(&dom, None, &test_identity(), 800, 600).unwrap(),
+    ));
+    let mut runtime = V8Runtime::with_render_document(dom, Some(render_doc.clone()));
+    let size = "[document.documentElement.clientWidth, document.documentElement.clientHeight].join('x')";
+    assert_eq!(runtime.eval_to_string(size), Ok("800x600".into()));
+    render_doc.borrow_mut().set_viewport(1000, 700);
+    assert_eq!(runtime.eval_to_string(size), Ok("1000x700".into()));
+}
