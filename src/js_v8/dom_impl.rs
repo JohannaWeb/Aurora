@@ -5,7 +5,7 @@
 
 use super::bindings::{
     CharacterDataMembers, ChildNodeMembers, DocumentMembers, ElementMembers, Error, Fallible,
-    FocusOptions, GetRootNodeOptions, HTMLHyperlinkElementUtilsMembers, HTMLInputElementMembers,
+    FocusOptions, GetRootNodeOptions, HTMLHyperlinkElementUtilsMembers, HTMLImageElementMembers, HTMLInputElementMembers,
     HTMLOrSVGElementMembers, InnerHTMLMembers, NodeMembers, NodeOrString,
     NonDocumentTypeChildNodeMembers, ParentNodeMembers,
 };
@@ -1399,6 +1399,54 @@ impl HTMLInputElementMembers for Dom {
 
     fn set_value(_: Scope, registry: &Rc<NodeRegistry>, this: &NodePtr, value: String) -> Fallible<()> {
         set_input_value(registry, this, value);
+        Ok(())
+    }
+}
+
+// --- HTMLImageElement ------------------------------------------------------
+
+impl HTMLImageElementMembers for Dom {
+    fn alt(_: Scope, _: &Rc<NodeRegistry>, this: &NodePtr) -> Fallible<String> {
+        Ok(attribute(this, "alt").unwrap_or_default())
+    }
+
+    fn set_alt(_: Scope, registry: &Rc<NodeRegistry>, this: &NodePtr, value: String) -> Fallible<()> {
+        set_attribute(registry, this, "alt", &value);
+        Ok(())
+    }
+
+    /// Reflects `src` as a URL: resolved against the document's URL, or the
+    /// raw attribute when it does not parse.
+    fn src(scope: Scope, _: &Rc<NodeRegistry>, this: &NodePtr) -> Fallible<String> {
+        let Some(src) = attribute(this, "src") else { return Ok(String::new()) };
+        let resolved = match document_base_url(scope) {
+            Some(base) => base.join(&src).ok(),
+            None => url::Url::parse(&src).ok(),
+        };
+        Ok(resolved.map_or(src, String::from))
+    }
+
+    /// Setting the attribute is what makes the renderer load the image.
+    fn set_src(_: Scope, registry: &Rc<NodeRegistry>, this: &NodePtr, value: String) -> Fallible<()> {
+        set_attribute(registry, this, "src", &value);
+        Ok(())
+    }
+
+    fn srcset(_: Scope, _: &Rc<NodeRegistry>, this: &NodePtr) -> Fallible<String> {
+        Ok(attribute(this, "srcset").unwrap_or_default())
+    }
+
+    fn set_srcset(_: Scope, registry: &Rc<NodeRegistry>, this: &NodePtr, value: String) -> Fallible<()> {
+        set_attribute(registry, this, "srcset", &value);
+        Ok(())
+    }
+
+    fn sizes(_: Scope, _: &Rc<NodeRegistry>, this: &NodePtr) -> Fallible<String> {
+        Ok(attribute(this, "sizes").unwrap_or_default())
+    }
+
+    fn set_sizes(_: Scope, registry: &Rc<NodeRegistry>, this: &NodePtr, value: String) -> Fallible<()> {
+        set_attribute(registry, this, "sizes", &value);
         Ok(())
     }
 }

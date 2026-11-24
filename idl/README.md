@@ -88,7 +88,8 @@ and attribute methods (`get`/`set`/`remove`/`has`/`toggle`
 `focus()` and `blur()` with `Document.activeElement` (one focused element per
 document, trusted focus/blur/focusin/focusout events, no sequential
 navigation yet; a click focuses the nearest focusable element);
-`HTMLInputElement`'s `value` and `defaultValue` (the value is separate from
+`HTMLImageElement`'s `alt`, `src`, `srcset` and `sizes` (reflected; no
+`srcset` selection yet); `HTMLInputElement`'s `value` and `defaultValue` (the value is separate from
 the `value` attribute once set or typed into, and is not sanitized per type
 yet);
 the `ParentNode`, `NonDocumentTypeChildNode` and `InnerHTML` mixins; and all

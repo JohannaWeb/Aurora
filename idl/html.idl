@@ -29,7 +29,14 @@ interface HTMLBRElement : HTMLElement {};
 interface HTMLModElement : HTMLElement {};
 interface HTMLPictureElement : HTMLElement {};
 interface HTMLSourceElement : HTMLElement {};
-interface HTMLImageElement : HTMLElement {};
+// https://html.spec.whatwg.org/multipage/embedded-content.html#htmlimageelement
+// (the reflected attributes only)
+interface HTMLImageElement : HTMLElement {
+  [CEReactions] attribute DOMString alt;
+  [CEReactions] attribute USVString src;
+  [CEReactions] attribute USVString srcset;
+  [CEReactions] attribute DOMString sizes;
+};
 interface HTMLIFrameElement : HTMLElement {};
 interface HTMLEmbedElement : HTMLElement {};
 interface HTMLObjectElement : HTMLElement {};

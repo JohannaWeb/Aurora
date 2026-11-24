@@ -3956,3 +3956,38 @@ fn v8_enter_and_submit_buttons_submit_forms_and_location_navigates() {
         Ok("https://www.youtube.com/#top | search:true:- spa:true:- buttons:true:go".into())
     );
 }
+
+#[test]
+fn v8_image_attributes_reflect() {
+    let mut runtime = V8Runtime::new(blank_dom());
+    assert_eq!(
+        runtime.eval_to_string(
+            r#"(() => {
+            __aurora_set_location__('https://www.youtube.com/results');
+            const img = document.createElement('img');
+            const out = [img.src, img.alt, 'src' in HTMLImageElement.prototype, Object.hasOwn(img, 'src')];
+            img.src = '//i.ytimg.com/vi/x/hq720.jpg';
+            out.push(img.getAttribute('src'), img.src);
+            img.setAttribute('src', 'logo.png');
+            out.push(img.src);
+            img.removeAttribute('src');
+            out.push(img.src);
+            img.srcset = 'a.png 1x'; img.sizes = '100vw'; img.alt = 'A';
+            out.push(img.outerHTML);
+            return out.join(' | ');
+        })()"#
+        ),
+        Ok([
+            "",
+            "",
+            "true",
+            "false",
+            "//i.ytimg.com/vi/x/hq720.jpg",
+            "https://i.ytimg.com/vi/x/hq720.jpg",
+            "https://www.youtube.com/logo.png",
+            "",
+            "<img alt=\"A\" sizes=\"100vw\" srcset=\"a.png 1x\">",
+        ]
+        .join(" | "))
+    );
+}
