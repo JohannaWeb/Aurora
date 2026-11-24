@@ -603,6 +603,21 @@ impl V8Runtime {
                     .into(),
             );
 
+            // [width, height, scrollX, scrollY] of the viewport in CSS pixels.
+            let view_fn = v8::FunctionTemplate::builder(viewport_view)
+                .data(registry_data.into())
+                .build(scope)
+                .get_function(scope)
+                .expect("function template yields a function outside of a pending exception");
+            global.set(scope, v8_str(scope, "__aurora_view__").into(), view_fn.into());
+
+            let observe_fn = v8::FunctionTemplate::builder(observe_intersections)
+                .data(registry_data.into())
+                .build(scope)
+                .get_function(scope)
+                .expect("function template yields a function outside of a pending exception");
+            global.set(scope, v8_str(scope, "__aurora_observe_intersections__").into(), observe_fn.into());
+
             // Viewport stubs
             global.set(
                 scope,
@@ -1177,6 +1192,39 @@ impl V8Runtime {
         true
     }
 
+    /// Rechecks IntersectionObserver targets if layout ran, the viewport
+    /// scrolled or one was added since the last check. Like the rest of a
+    /// rendering update, this waits for render-blocking stylesheets and works
+    /// on up-to-date layout. Returns whether it laid out or notified any.
+    fn update_intersections(&mut self) -> bool {
+        if !self.registry.observes_intersections.get() || self.registry.is_render_blocked() {
+            return false;
+        }
+        // Counts as work: the caller has to repaint for it.
+        let laid_out = crate::js_engine::JsRuntime::perform_style_and_layout(self);
+        let Some(generation) = self.registry.layout_generation() else {
+            return laid_out;
+        };
+        let state = Some((generation, self.registry.scroll.get()));
+        if self.registry.intersections_checked.replace(state) == state {
+            return laid_out;
+        }
+        let _entered = self.entered();
+        v8::scope_with_context!(let scope, &mut self.isolate, &self.context);
+        v8::tc_scope!(let scope, scope);
+        let global = scope.get_current_context().global(scope);
+        let key = v8_str(scope, "__aurora_update_intersections__");
+        let Some(hook) = global
+            .get(scope, key.into())
+            .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok())
+        else {
+            return laid_out;
+        };
+        let notified = hook.call(scope, global.into(), &[]).is_some_and(|value| value.is_true());
+        scope.perform_microtask_checkpoint();
+        laid_out | notified
+    }
+
     /// Fires `load` or `error` at images whose load finished.
     fn deliver_image_events(&mut self) -> bool {
         let finished = super::image_load::take_finished(&self.registry);
@@ -1381,6 +1429,34 @@ fn add_event_listener(
 /// listeners (registered under id 0). Without this these were no-op polyfill
 /// stubs, so YouTube's document-level listeners (`yt-navigate-finish`, etc.)
 /// never ran and the app never navigated past its shell.
+fn observe_intersections(
+    _scope: &mut v8::PinScope<'_, '_>,
+    args: v8::FunctionCallbackArguments,
+    _retval: v8::ReturnValue,
+) {
+    let external = v8::Local::<v8::External>::try_from(args.data())
+        .expect("callback data is always the External we installed");
+    let registry = unsafe { &*(external.value() as *const Rc<NodeRegistry>) };
+    registry.observes_intersections.set(true);
+    registry.intersections_checked.set(None);
+}
+
+fn viewport_view(
+    scope: &mut v8::PinScope<'_, '_>,
+    args: v8::FunctionCallbackArguments,
+    mut retval: v8::ReturnValue,
+) {
+    let external = v8::Local::<v8::External>::try_from(args.data())
+        .expect("callback data is always the External we installed");
+    let registry = unsafe { &*(external.value() as *const Rc<NodeRegistry>) };
+    let Some((width, height)) = registry.viewport_size() else {
+        return;
+    };
+    let (x, y) = registry.scroll.get();
+    let values = [f64::from(width), f64::from(height), x, y].map(|n| v8::Number::new(scope, n).into());
+    retval.set(v8::Array::new_with_elements(scope, &values).into());
+}
+
 fn dispatch_event_global(
     scope: &mut v8::PinScope<'_, '_>,
     args: v8::FunctionCallbackArguments,
@@ -2401,10 +2477,10 @@ impl crate::js_engine::JsRuntime for V8Runtime {
     }
 
     fn tick(&mut self, now: Instant) -> bool {
-        let images = self.deliver_image_events();
+        let delivered = self.deliver_image_events() | self.update_intersections();
         let ready = self.ready_timers(now);
         if ready.is_empty() {
-            return images;
+            return delivered;
         }
 
         {
@@ -2436,6 +2512,10 @@ impl crate::js_engine::JsRuntime for V8Runtime {
         }
 
         true
+    }
+
+    fn set_scroll_position(&mut self, x: f64, y: f64) {
+        self.registry.scroll.set((x, y));
     }
 
     fn has_pending_images(&self) -> bool {

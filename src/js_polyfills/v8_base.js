@@ -147,36 +147,169 @@
     CSSStyleSheet.prototype.deleteRule = function(index) {};
 
     // MutationObserver is implemented natively (see js_v8/mutation_observer.rs);
-    // don't override it here. IntersectionObserver and ResizeObserver are
-    // optimistic stubs that fire once to unblock content waiting for visibility/size.
-    globalThis.IntersectionObserver = function IntersectionObserver(cb) {
-        this._cb = cb;
-    };
-    IntersectionObserver.prototype.observe = function(el) {
-        if (typeof this._cb === 'function') {
-            var self = this;
-            queueMicrotask(function() {
-                if (typeof self._cb === 'function') {
-                    try {
-                        self._cb([{
-                            target: el,
-                            isIntersecting: true,
-                            intersectionRatio: 1.0,
-                            boundingClientRect: (typeof el.getBoundingClientRect === 'function')
-                                ? el.getBoundingClientRect()
-                                : { top: 0, left: 0, width: 1440, height: 1024, bottom: 1024, right: 1440, x: 0, y: 0 },
-                            intersectionRect: { top: 0, left: 0, width: 1440, height: 1024, bottom: 1024, right: 1440, x: 0, y: 0 },
-                            rootBounds: { top: 0, left: 0, width: 1440, height: 1024, bottom: 1024, right: 1440, x: 0, y: 0 }
-                        }], self);
-                    } catch (e) {}
-                }
-            });
+    // don't override it here. ResizeObserver is an optimistic stub that fires
+    // once to unblock content waiting for its size.
+    // https://w3c.github.io/IntersectionObserver/ against real layout. Not
+    // done: clipping by scrolling/overflow ancestors between target and root.
+    (function() {
+        // Observers with targets, in creation order.
+        var active = [];
+
+        function rect(left, top, right, bottom) {
+            return { x: left, y: top, left: left, top: top, right: right, bottom: bottom,
+                     width: right - left, height: bottom - top };
         }
-    };
-    IntersectionObserver.prototype.unobserve = function() {};
-    IntersectionObserver.prototype.disconnect = function() { this._cb = null; };
-    IntersectionObserver.prototype.takeRecords = function() { return []; };
-    globalThis.IntersectionObserverEntry = function IntersectionObserverEntry() {};
+        function view() {
+            var v = typeof globalThis.__aurora_view__ === 'function' ? globalThis.__aurora_view__() : null;
+            return v || [globalThis.innerWidth || 0, globalThis.innerHeight || 0, 0, 0];
+        }
+        function parseMargin(text) {
+            var parts = String(text == null || text === '' ? '0px' : text).trim().split(/\s+/).map(function(part) {
+                var m = /^(-?\d*\.?\d+)(px|%)?$/.exec(part);
+                if (!m || (!m[2] && parseFloat(m[1]) !== 0) || part === '') {
+                    throw new SyntaxError("rootMargin must be specified in pixels or percent.");
+                }
+                return { value: parseFloat(m[1]), percent: m[2] === '%' };
+            });
+            if (parts.length > 4) throw new SyntaxError("Extra text found at the end of rootMargin.");
+            parts[1] = parts[1] || parts[0];
+            parts[2] = parts[2] || parts[0];
+            parts[3] = parts[3] || parts[1];
+            return parts;
+        }
+        function parseThresholds(threshold) {
+            var list = threshold == null ? [0] : (Array.isArray(threshold) ? threshold.slice() : [threshold]);
+            if (!list.length) list = [0];
+            return list.map(Number).map(function(t) {
+                if (!isFinite(t)) throw new TypeError('threshold must be a finite number');
+                if (t < 0 || t > 1) throw new RangeError('threshold must be between 0 and 1');
+                return t;
+            }).sort(function(a, b) { return a - b; });
+        }
+
+        function IntersectionObserverEntry(init) {
+            Object.defineProperty(this, '__init__', { value: init });
+        }
+        ['time', 'rootBounds', 'boundingClientRect', 'intersectionRect', 'isIntersecting',
+         'intersectionRatio', 'target'].forEach(function(name) {
+            Object.defineProperty(IntersectionObserverEntry.prototype, name, {
+                get: function() { return this.__init__[name]; }, enumerable: true, configurable: true
+            });
+        });
+        globalThis.IntersectionObserverEntry = IntersectionObserverEntry;
+
+        function IntersectionObserver(callback, options) {
+            if (typeof callback !== 'function') throw new TypeError('callback must be a function');
+            options = options || {};
+            var root = options.root || null;
+            var state = { callback: callback, root: root, margin: parseMargin(options.rootMargin),
+                          thresholds: parseThresholds(options.threshold), targets: [], queue: [], observer: this };
+            Object.defineProperty(this, '__state__', { value: state });
+        }
+        function getter(name, get) {
+            Object.defineProperty(IntersectionObserver.prototype, name, { get: get, enumerable: true, configurable: true });
+        }
+        getter('root', function() { return this.__state__.root; });
+        getter('thresholds', function() { return this.__state__.thresholds.slice(); });
+        getter('rootMargin', function() {
+            return this.__state__.margin.map(function(m) { return m.value + (m.percent ? '%' : 'px'); }).join(' ');
+        });
+        IntersectionObserver.prototype.observe = function(target) {
+            if (!target || target.nodeType !== 1) throw new TypeError('target must be an Element');
+            var state = this.__state__;
+            if (state.targets.some(function(t) { return t.element === target; })) return;
+            state.targets.push({ element: target, index: -1, intersecting: false });
+            if (active.indexOf(state) < 0) active.push(state);
+            // Ask for a check after the next layout.
+            if (globalThis.__aurora_observe_intersections__) globalThis.__aurora_observe_intersections__();
+        };
+        function deactivate(state) {
+            var at = active.indexOf(state);
+            if (at >= 0 && !state.targets.length) active.splice(at, 1);
+        }
+        IntersectionObserver.prototype.unobserve = function(target) {
+            var state = this.__state__;
+            state.targets = state.targets.filter(function(t) { return t.element !== target; });
+            deactivate(state);
+        };
+        IntersectionObserver.prototype.disconnect = function() {
+            this.__state__.targets = [];
+            deactivate(this.__state__);
+        };
+        IntersectionObserver.prototype.takeRecords = function() {
+            var queue = this.__state__.queue;
+            this.__state__.queue = [];
+            return queue;
+        };
+        globalThis.IntersectionObserver = IntersectionObserver;
+
+        // Layout geometry is document-relative; the viewport sits at the
+        // scroll position in it.
+        function rootRect(state, v) {
+            var root = state.root && state.root.nodeType === 1
+                ? state.root.getBoundingClientRect() : rect(v[2], v[3], v[2] + v[0], v[3] + v[1]);
+            var width = root.right - root.left, height = root.bottom - root.top;
+            var px = state.margin.map(function(m, side) {
+                return m.percent ? m.value * (side % 2 ? width : height) / 100 : m.value;
+            });
+            return rect(root.left - px[3], root.top - px[0], root.right + px[1], root.bottom + px[2]);
+        }
+        function toViewport(r, v) { return rect(r.left - v[2], r.top - v[3], r.right - v[2], r.bottom - v[3]); }
+        function contained(state, element) {
+            if (!element.isConnected) return false;
+            var root = state.root;
+            return !root || root.nodeType !== 1 || (root !== element && root.contains(element));
+        }
+
+        function update() {
+            if (!active.length) return false;
+            var v = view(), notify = [];
+            var time = globalThis.performance ? performance.now() : Date.now();
+            active.slice().forEach(function(state) {
+                var bounds = rootRect(state, v);
+                state.targets.forEach(function(entry) {
+                    var el = entry.element, box = rect(0, 0, 0, 0), hit = rect(0, 0, 0, 0), intersecting = false;
+                    var rendered = el.__aurora_metric__ && el.__aurora_metric__('rendered');
+                    if (rendered && contained(state, el)) {
+                        var b = el.getBoundingClientRect();
+                        box = rect(b.left, b.top, b.right, b.bottom);
+                        var left = Math.max(box.left, bounds.left), top = Math.max(box.top, bounds.top);
+                        var right = Math.min(box.right, bounds.right), bottom = Math.min(box.bottom, bounds.bottom);
+                        // Touching edges count, so a zero-size target can intersect.
+                        intersecting = left <= right && top <= bottom;
+                        if (intersecting) hit = rect(left, top, right, bottom);
+                    }
+                    var area = box.width * box.height;
+                    var ratio = area ? Math.min(1, hit.width * hit.height / area) : (intersecting ? 1 : 0);
+                    var index = 0;
+                    if (intersecting) {
+                        while (index < state.thresholds.length && state.thresholds[index] <= ratio) index++;
+                    }
+                    if (index === entry.index && intersecting === entry.intersecting) return;
+                    entry.index = index;
+                    entry.intersecting = intersecting;
+                    state.queue.push(new IntersectionObserverEntry({
+                        time: time, rootBounds: toViewport(bounds, v),
+                        boundingClientRect: rendered ? toViewport(box, v) : box,
+                        intersectionRect: intersecting ? toViewport(hit, v) : hit,
+                        // Below the lowest threshold is not reported as intersecting.
+                        isIntersecting: intersecting && index > 0,
+                        intersectionRatio: ratio, target: el
+                    }));
+                });
+                if (state.queue.length) notify.push(state);
+            });
+            notify.forEach(function(state) {
+                var records = state.observer.takeRecords();
+                if (!records.length) return;
+                try { state.callback.call(state.observer, records, state.observer); }
+                catch (e) { console.error('IntersectionObserver callback: ' + (e && e.stack || e)); }
+            });
+            return notify.length > 0;
+        }
+        // Called by the runtime after a layout, a scroll or observe().
+        globalThis.__aurora_update_intersections__ = update;
+    })();
 
     globalThis.ResizeObserver = function ResizeObserver(cb) {
         this._cb = cb;

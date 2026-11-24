@@ -1265,6 +1265,11 @@ fn get_layout_metric(
             return;
         }
     }
+    if name == "rendered" {
+        let rendered = node_data.registry.is_rendered(&node_data.node);
+        retval.set(v8::Integer::new(scope, rendered.into()).into());
+        return;
+    }
     let value = match node_data.registry.layout_metrics(&node_data.node) {
         Some(m) => match name.as_str() {
             "offsetWidth" | "clientWidth" | "scrollWidth" => m.width,

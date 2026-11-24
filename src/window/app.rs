@@ -153,11 +153,13 @@ impl AuroraApp {
 
     pub(super) fn run_frame_tasks(&mut self) -> bool {
         let now = crate::clock::now();
+        let scroll_y = self.tab().scroll_y;
         let input = self.input_mut();
         let mut needs_reflow = input.needs_reflow;
         let mut runtime_dirtied_blitz = false;
 
         if let Some(runtime) = input.runtime.as_mut() {
+            runtime.set_scroll_position(0.0, scroll_y);
             let runtime_needs_reflow = runtime.tick(now)
                 | runtime.drain_animation_frame_callbacks(now)
                 | runtime.deliver_mutation_records()

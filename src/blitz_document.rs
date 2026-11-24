@@ -257,6 +257,8 @@ pub struct BlitzDocument {
     inner: BaseDocument,
     identity: Identity,
     base_url: Option<url::Url>,
+    /// Counts successful layouts, so others can tell when geometry may have changed.
+    layout_generation: u64,
     healthy: bool,
     consecutive_panics: u32,
     next_mirror_op_id: u64,
@@ -295,6 +297,7 @@ impl BlitzDocument {
                 inner,
                 identity: identity.clone(),
                 base_url: base_url.and_then(|url| url::Url::parse(url).ok()),
+                layout_generation: 0,
                 healthy: true,
                 consecutive_panics: 0,
                 next_mirror_op_id: 1,
@@ -334,6 +337,7 @@ impl BlitzDocument {
                 inner,
                 identity: identity.clone(),
                 base_url: base_url.and_then(|url| url::Url::parse(url).ok()),
+                layout_generation: 0,
                 healthy: true,
                 consecutive_panics: 0,
                 next_mirror_op_id: 1,
@@ -861,6 +865,27 @@ impl BlitzDocument {
             }
             node_id = self.inner.get_node(node_id)?.parent?;
         }
+    }
+
+    pub fn layout_generation(&self) -> u64 {
+        self.layout_generation
+    }
+
+    /// Whether `node` is in the render tree and neither it nor an ancestor is
+    /// `display: none`.
+    pub fn is_rendered(&self, node: &NodePtr) -> bool {
+        let mut current = self.blitz_node_id_for_dom(node);
+        if current.is_none() {
+            return false;
+        }
+        while let Some(id) = current {
+            let Some(blitz_node) = self.inner.get_node(id) else { return false };
+            if blitz_node.is_element() && blitz_node.primary_styles().is_none_or(|style| style.clone_display().is_none()) {
+                return false;
+            }
+            current = blitz_node.parent;
+        }
+        true
     }
 
     /// The viewport layout runs against, in CSS pixels.
@@ -1567,6 +1592,7 @@ impl BlitzDocument {
             .is_some()
         };
         if resolved {
+            self.layout_generation += 1;
             self.healthy = true;
             self.consecutive_panics = 0;
         } else {

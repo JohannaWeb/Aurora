@@ -214,3 +214,55 @@ fn image_loads_fire_load_and_error() {
         Ok("broken error true 0 | empty true | ok load true 3x2 | ok onload | set false".into())
     );
 }
+
+#[test]
+fn intersection_observer_follows_layout_and_scrolling() {
+    let dom = Parser::new(
+        "<html><body style='margin:0'><div id='top' style='height:100px'></div>\
+         <div style='height:2000px'></div><div id='low' style='height:200px'></div>\
+         <div id='gone' style='display:none'></div></body></html>",
+    )
+    .parse_document();
+    crate::dom::reparent_subtree(&dom);
+    let render_doc = Rc::new(RefCell::new(
+        BlitzDocument::try_from_dom(&dom, None, &test_identity(), 800, 600).unwrap(),
+    ));
+    let mut runtime = V8Runtime::with_render_document(dom, Some(render_doc));
+    runtime
+        .execute(
+            r#"
+        var log = [];
+        var observer = new IntersectionObserver(function(entries, self) {
+            entries.forEach(function(e) {
+                log.push(e.target.id + ' ' + e.isIntersecting + ' ' + e.intersectionRatio + ' @' + e.boundingClientRect.top
+                    + (self === observer ? '' : ' wrong observer'));
+            });
+        }, { threshold: [0, 0.5] });
+        ['top', 'low', 'gone'].forEach(function(id) { observer.observe(document.getElementById(id)); });
+        function takeLog() { return log.splice(0).join(', '); }
+    "#,
+        )
+        .unwrap();
+    let settle = |runtime: &mut V8Runtime, scroll_y: f64| {
+        runtime.set_scroll_position(0.0, scroll_y);
+        runtime.tick(crate::clock::now());
+        runtime.drain_animation_frame_callbacks(crate::clock::now());
+        runtime.eval_to_string("takeLog()").unwrap()
+    };
+    assert_eq!(
+        settle(&mut runtime, 0.0),
+        "top true 1 @0, low false 0 @2100, gone false 0 @0",
+        "every target is reported once initially"
+    );
+    assert_eq!(settle(&mut runtime, 0.0), "");
+    assert_eq!(settle(&mut runtime, 1650.0), "top false 0 @-1650, low true 0.75 @450");
+    assert_eq!(settle(&mut runtime, 1700.0), "", "0.75 and 1 are past the same thresholds");
+    runtime.execute("observer.unobserve(document.getElementById('low'))").unwrap();
+    assert_eq!(settle(&mut runtime, 0.0), "top true 1 @0");
+    assert_eq!(
+        runtime.eval_to_string(
+            "['intersectionRatio' in IntersectionObserverEntry.prototype, observer.rootMargin, observer.thresholds.join()].join('|')"
+        ),
+        Ok("true|0px 0px 0px 0px|0,0.5".into())
+    );
+}
