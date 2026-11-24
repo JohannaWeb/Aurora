@@ -1,4 +1,6 @@
 # Aurora
+Youtube results page:
+<img width="1435" height="1059" alt="image" src="https://github.com/user-attachments/assets/92e69ad6-aac5-4578-83b4-22107d39e1e1" />
 Visual parity with chrome in some pages:
 <img width="3072" height="740" alt="image" src="https://github.com/user-attachments/assets/6e4096c5-0499-4613-8009-b222cebc37cf" />
 Youtube consent:
