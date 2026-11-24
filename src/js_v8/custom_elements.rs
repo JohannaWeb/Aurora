@@ -192,6 +192,12 @@ enum Reaction {
         /// itself. See `has_pending_connected_reaction`.
         native_connect: bool,
     },
+    /// `disconnectedCallback`, if the definition has one. Running it also
+    /// clears the JS shim's once-per-connection guard (`__ce_connected__`),
+    /// so the element's next connection runs `connectedCallback` again.
+    Disconnected {
+        callback: Option<v8::Global<v8::Function>>,
+    },
     /// `connectedCallback` for an element whose definition captured no
     /// prototype callback at define time. YouTube's controller-extraction
     /// pattern registers thin shell classes with an empty prototype; the
@@ -551,6 +557,17 @@ impl CeRegistry {
         self.enqueue_element_id(node_id);
     }
 
+    /// Enqueue a disconnect reaction for `node_id` (see
+    /// [`Reaction::Disconnected`]).
+    pub(crate) fn enqueue_disconnected(&self, node_id: u32, callback: Option<v8::Global<v8::Function>>) {
+        self.reaction_queues
+            .borrow_mut()
+            .entry(node_id)
+            .or_default()
+            .push_back(Reaction::Disconnected { callback });
+        self.enqueue_element_id(node_id);
+    }
+
     /// Enqueue a dynamically-resolved `connectedCallback` reaction for
     /// `node_id` (see [`Reaction::DynamicConnected`]). Used when the element's
     /// tag has a native definition but that definition captured no
@@ -869,6 +886,15 @@ fn invoke_reaction(
             let arg_locals: Vec<v8::Local<v8::Value>> =
                 args.iter().map(|a| v8::Local::new(scope, a)).collect();
             let _ = cb.call(scope, recv.into(), &arg_locals);
+        }
+        Reaction::Disconnected { callback } => {
+            let key = v8::String::new(scope, "__ce_connected__").expect("failed to create V8 string");
+            let not_connected = v8::Boolean::new(scope, false);
+            let _ = recv.set(scope, key.into(), not_connected.into());
+            if let Some(callback) = callback {
+                let cb = v8::Local::new(scope, callback);
+                let _ = cb.call(scope, recv.into(), &[]);
+            }
         }
         Reaction::DynamicConnected => {
             // No controller to drive → the element is a classic
