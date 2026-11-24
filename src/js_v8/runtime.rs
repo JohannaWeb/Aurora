@@ -2483,6 +2483,10 @@ impl crate::js_engine::JsRuntime for V8Runtime {
         self.call_ui_hook("__aurora_dispatch_click__", node, &[client_x as f64, client_y as f64])
     }
 
+    fn take_pending_navigation(&mut self) -> Option<String> {
+        self.registry.pending_navigation.borrow_mut().take()
+    }
+
     fn dispatch_key(&mut self, key: &crate::js_engine::KeyInput) -> crate::js_engine::KeyOutcome {
         let _entered = self.entered();
         v8::scope_with_context!(let scope, &mut self.isolate, &self.context);

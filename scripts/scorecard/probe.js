@@ -15,6 +15,12 @@
     var zeroSizeItems = 0;
     var videoIds = {};
 
+    function isShadyRoot(root) {
+        try {
+            return !!(window.ShadyDOM && typeof ShadyDOM.isShadyRoot === 'function' && ShadyDOM.isShadyRoot(root));
+        } catch (e) { return false; }
+    }
+
     function videoIdOf(node) {
         try {
             var data = node.data || (node.__data && node.__data.data);
@@ -54,6 +60,9 @@
         }
         var shadow = null;
         try { shadow = node.shadowRoot || node.__shady_shadowRoot || null; } catch (e) {}
+        // A root ShadyDOM manages itself is logical: ShadyDOM already renders
+        // its content as the host's physical children, walked below.
+        if (shadow && isShadyRoot(shadow)) shadow = null;
         if (shadow && shadow !== node) {
             shadowRoots++;
             walk(shadow, inScript);

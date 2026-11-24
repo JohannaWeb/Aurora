@@ -3890,3 +3890,69 @@ fn v8_moving_a_custom_element_disconnects_then_reconnects_it() {
         .join(" "))
     );
 }
+
+#[test]
+fn v8_enter_and_submit_buttons_submit_forms_and_location_navigates() {
+    use crate::js_engine::KeyInput;
+    let dom = Parser::new(
+        "<html><body>\
+         <form id='search' action='/results'><input id='query' name='search_query'><input type='hidden' name='sp' value='x'></form>\
+         <form id='spa' action='/results'><input id='spa-query' name='q'></form>\
+         <form id='buttons' action='https://example.com/go?old=1#frag'><input name='a' value='1'>\
+           <input type='checkbox' name='c' checked><input type='checkbox' name='d'>\
+           <button id='go' name='btn' value='yes'>Go</button></form>\
+         </body></html>",
+    )
+    .parse_document();
+    let find = |id: &str| super::selectors::query::find_by_id(&dom, id).unwrap();
+    let (query, spa_query, go) = (find("query"), find("spa-query"), find("go"));
+    let mut runtime = V8Runtime::new(dom.clone());
+    runtime
+        .eval_to_string(
+            r#"(() => {
+            __aurora_set_location__('https://www.youtube.com/');
+            globalThis.seen = [];
+            document.addEventListener('submit', (e) => seen.push(e.target.id + ':' + e.isTrusted
+                + ':' + (e.submitter ? e.submitter.id : '-')));
+            document.getElementById('spa').addEventListener('submit', (e) => e.preventDefault());
+            return 'ok';
+        })()"#,
+        )
+        .unwrap();
+    let type_text = |runtime: &mut V8Runtime, text: &str| {
+        for ch in text.chars() {
+            let s = ch.to_string();
+            runtime.dispatch_key(&KeyInput { key: s.clone(), text: Some(s), ..KeyInput::default() });
+        }
+        runtime.dispatch_key(&KeyInput { key: "Enter".into(), key_code: 13, text: Some("\r".into()), ..KeyInput::default() });
+    };
+
+    runtime.dispatch_click(&query, 1.0, 1.0);
+    type_text(&mut runtime, "lofi beats");
+    assert_eq!(
+        runtime.take_pending_navigation().as_deref(),
+        Some("https://www.youtube.com/results?search_query=lofi+beats&sp=x")
+    );
+
+    runtime.dispatch_click(&spa_query, 1.0, 1.0);
+    type_text(&mut runtime, "cats");
+    assert_eq!(runtime.take_pending_navigation(), None);
+
+    runtime.dispatch_click(&go, 1.0, 1.0);
+    assert_eq!(
+        runtime.take_pending_navigation().as_deref(),
+        Some("https://example.com/go?a=1&c=on&btn=yes")
+    );
+
+    runtime.eval_to_string("location.assign('/feed/trending'); ''").unwrap();
+    assert_eq!(runtime.take_pending_navigation().as_deref(), Some("https://www.youtube.com/feed/trending"));
+    runtime.eval_to_string("location.href = '#top'; ''").unwrap();
+    assert_eq!(runtime.take_pending_navigation(), None);
+    runtime.eval_to_string("location.href = 'https://example.org/'; location.reload(); ''").unwrap();
+    assert_eq!(runtime.take_pending_navigation().as_deref(), Some("https://www.youtube.com/#top"));
+
+    assert_eq!(
+        runtime.eval_to_string("[location.href, seen.join(' ')].join(' | ')"),
+        Ok("https://www.youtube.com/#top | search:true:- spa:true:- buttons:true:go".into())
+    );
+}
