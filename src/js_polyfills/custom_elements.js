@@ -1741,34 +1741,6 @@
                 }
             }
 
-            function resolveSignalValue(value) {
-                for (var depth = 0; depth < 4 && typeof value === 'function'; depth++) {
-                    try {
-                        value = value();
-                    } catch (e) {
-                        return undefined;
-                    }
-                }
-                return typeof value === 'function' ? undefined : value;
-            }
-
-            function sanitizePropBag(bag) {
-                if (!bag || typeof bag !== 'object') return bag;
-                var keys = Object.keys(bag);
-                for (var i = 0; i < keys.length; i++) {
-                    var key = keys[i];
-                    var value = bag[key];
-                    if (typeof value === 'function') {
-                        value = resolveSignalValue(value);
-                        bag[key] = value;
-                    }
-                    if (value && typeof value === 'object' && !Array.isArray(value)) {
-                        sanitizePropBag(value);
-                    }
-                }
-                return bag;
-            }
-
             function normalizeAttributedStringProps(el) {
                 if (!el || el.localName !== 'yt-attributed-string') return;
                 // Only before the component sets up its props. Afterwards
@@ -1810,29 +1782,6 @@
                     }
                     if (raw) raw[prop] = value;
                 }
-            }
-
-            function installSetUpPropsHook(ctor, name) {
-                if (!ctor || !ctor.prototype || ctor.prototype.__aurora_setUpProps_hooked__) return;
-                var original = ctor.prototype.setUpProps;
-                if (typeof original !== 'function') return;
-                try {
-                    Object.defineProperty(ctor.prototype, '__aurora_setUpProps_hooked__', {
-                        value: true,
-                        configurable: true
-                    });
-                } catch (e) {
-                    ctor.prototype.__aurora_setUpProps_hooked__ = true;
-                }
-                ctor.prototype.setUpProps = function() {
-                    // See installInstanceSetUpPropsHook: never flatten the
-                    // component's signal getters once props are set up.
-                    if (!this.componentProps) {
-                        sanitizePropBag(this.rawProps);
-                        sanitizePropBag(this.slotProps);
-                    }
-                    return original.apply(this, arguments);
-                };
             }
 
             function invokeBeforeRegister(ctor, name) {
@@ -1927,36 +1876,6 @@
                     ' connectedType=' + typeof el.connectedCallback + ' ' + ceContent(el));
                 maybeCallCreated(el, name);
                 readyUpgraded(el, name);
-            }
-
-            function installInstanceSetUpPropsHook(el) {
-                if (!el || el.localName !== 'yt-attributed-string' || el.__aurora_setUpProps_instance_hooked__) return;
-                var original = el.setUpProps;
-                if (typeof original !== 'function') return;
-                try {
-                    Object.defineProperty(el, '__aurora_setUpProps_instance_hooked__', {
-                        value: true,
-                        configurable: true
-                    });
-                } catch (e) {
-                    el.__aurora_setUpProps_instance_hooked__ = true;
-                }
-                el.setUpProps = function() {
-                    // YouTube's setUpProps throws "Function props must be
-                    // configured as STATIC, not SIGNAL." if a SIGNAL prop's raw
-                    // value is a Function, so resolve stray functions in the
-                    // incoming bags first. Only before the first set-up: after
-                    // it, `rawProps` *is* `componentProps` and holds the
-                    // component's own signal getters, which must stay functions
-                    // (flattening them — as an earlier rawProps Proxy did — makes
-                    // the host render apply `style: undefined` to `host.style`
-                    // and throw, aborting yt-formatted-string text).
-                    if (!this.componentProps) {
-                        sanitizePropBag(this.rawProps);
-                        sanitizePropBag(this.slotProps);
-                    }
-                    return original.apply(this, arguments);
-                };
             }
 
             // ── installRichGridFallback removed ──
@@ -2364,7 +2283,6 @@
                         if (nativeReactionPending) return;
                         installPolymerIdMapHooks(el);
                         rebuildPolymerIdMap(el);
-                        installInstanceSetUpPropsHook(el);
                         normalizeAttributedStringProps(el);
                         if (shouldSuppressLifecycle(name)) {
                             if (shouldTraceName(name)) trace('suppress lifecycle ' + name);
@@ -2573,7 +2491,6 @@
                 if (name.indexOf('-') >= 0) {
                     installTemplateAccessor(name, ctor);
                 }
-                installSetUpPropsHook(ctor, name);
                 probeCustomElementState(name, null, ctor);
                 flushPending(name);
             },
