@@ -91,6 +91,8 @@ impl winit::application::ApplicationHandler for AuroraApp {
     }
 
     fn about_to_wait(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
+        // Timers and network callbacks can navigate too (location, forms).
+        self.follow_pending_navigation();
         let runtime_dirty = self
             .input()
             .runtime
@@ -158,6 +160,9 @@ impl AuroraApp {
             None => crate::js_engine::KeyOutcome::default(),
         };
         self.request_redraw();
+        if self.follow_pending_navigation() {
+            return;
+        }
         if released || outcome.default_prevented || outcome.editable_target {
             return;
         }
@@ -364,7 +369,19 @@ impl AuroraApp {
                     self.request_redraw();
                 }
             }
+            self.follow_pending_navigation();
         }
+    }
+
+    /// Performs a navigation the page requested (location, form submission),
+    /// if there is one. Returns whether it navigated.
+    fn follow_pending_navigation(&mut self) -> bool {
+        let url = self.input_mut().runtime.as_mut().and_then(|runtime| runtime.take_pending_navigation());
+        let Some(url) = url else { return false };
+        self.input_mut().navigate_to(&url);
+        self.tab_mut().scroll_y = 0.0;
+        self.request_redraw();
+        true
     }
 
     fn request_redraw(&self) {

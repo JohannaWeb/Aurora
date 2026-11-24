@@ -325,7 +325,12 @@
         }
         fire(Pointer, 'pointerup', 0);
         fire(MouseEvent, 'mouseup', 0);
-        return fire(MouseEvent, 'click', 0);
+        var allowed = fire(MouseEvent, 'click', 0);
+        // Activation behaviour (submit buttons submit their form).
+        if (allowed && typeof globalThis.__aurora_activate__ === 'function') {
+            globalThis.__aurora_activate__(target);
+        }
+        return allowed;
     };
 
     // A trusted key event from the window (V8Runtime::dispatch_key), sent to
@@ -370,6 +375,10 @@
             var printable = text !== '\r' && text !== '\n' && text !== '\t' && text !== '\b';
             if (allowed && editable && printable && edit(target, 'insertText', text)) {
                 fireInput('insertText', text);
+            }
+            // Enter in a text field submits its form (implicit submission).
+            if (allowed && editable && key === 'Enter' && typeof globalThis.__aurora_implicit_submit__ === 'function') {
+                globalThis.__aurora_implicit_submit__(target);
             }
         } else if (allowed && editable && key === 'Backspace') {
             if (edit(target, 'deleteContentBackward', '')) fireInput('deleteContentBackward', null);
@@ -846,7 +855,21 @@
     globalThis.__aurora_set_location__ = function(href) {
         var u = new URL(href);
         var loc = globalThis.location;
-        loc.href = u.href;
+        var current = u.href;
+        // Assigning `href` navigates, except when only the fragment changes.
+        Object.defineProperty(loc, 'href', {
+            get: function() { return current; },
+            set: function(value) {
+                var next;
+                try { next = new URL(String(value), current); } catch (e) { return; }
+                var stripHash = function(s) { var i = s.indexOf('#'); return i < 0 ? s : s.slice(0, i); };
+                if (stripHash(next.href) === stripHash(current) && next.hash) {
+                    current = next.href; loc.hash = next.hash; return;
+                }
+                globalThis.__aurora_navigate__(next.href);
+            },
+            configurable: true, enumerable: true
+        });
         loc.protocol = u.protocol;
         loc.host = u.host;
         loc.hostname = u.hostname;
@@ -856,9 +879,9 @@
         loc.hash = u.hash;
         loc.origin = u.origin;
         loc.ancestorOrigins = [];
-        loc.assign = function() {};
-        loc.replace = function() {};
-        loc.reload = function() {};
+        loc.assign = function(url) { loc.href = url; };
+        loc.replace = function(url) { loc.href = url; };
+        loc.reload = function() { globalThis.__aurora_navigate__(current); };
         loc.toString = function() { return loc.href; };
         document.URL = u.href;
         document.documentURI = u.href;

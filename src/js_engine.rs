@@ -157,6 +157,12 @@ pub(crate) trait JsRuntime {
     fn dispatch_key(&mut self, _key: &KeyInput) -> KeyOutcome {
         KeyOutcome::default()
     }
+
+    /// A navigation page script requested (location, form submission) since
+    /// the last call, for the window to perform.
+    fn take_pending_navigation(&mut self) -> Option<String> {
+        None
+    }
     fn fire_dom_content_loaded(&mut self);
     fn fire_load(&mut self);
 

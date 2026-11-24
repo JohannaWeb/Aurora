@@ -934,7 +934,7 @@ impl InnerHTMLMembers for Dom {
 
 /// The document's URL, as JS sees it through `location.href`. `<base href>`
 /// is not applied yet.
-fn document_base_url(scope: Scope) -> Option<url::Url> {
+pub(super) fn document_base_url(scope: Scope) -> Option<url::Url> {
     let global = scope.get_current_context().global(scope);
     let key = v8_str(scope, "location");
     let location = v8::Local::<v8::Object>::try_from(global.get(scope, key.into())?).ok()?;
@@ -1400,5 +1400,182 @@ impl HTMLInputElementMembers for Dom {
     fn set_value(_: Scope, registry: &Rc<NodeRegistry>, this: &NodePtr, value: String) -> Fallible<()> {
         set_input_value(registry, this, value);
         Ok(())
+    }
+}
+
+// --- Navigation and form submission -----------------------------------------
+
+/// Asks the window to navigate to `url`, resolved against the document's URL.
+/// Returns whether it was a valid URL.
+pub(super) fn request_navigation(scope: Scope, registry: &NodeRegistry, url: &str) -> bool {
+    let resolved = match document_base_url(scope) {
+        Some(base) => base.join(url).ok(),
+        None => url::Url::parse(url).ok(),
+    };
+    match resolved {
+        Some(resolved) => {
+            *registry.pending_navigation.borrow_mut() = Some(resolved.into());
+            true
+        }
+        None => false,
+    }
+}
+
+fn local_name(node: &NodePtr) -> String {
+    match &*node.borrow() {
+        Node::Element(el) => el.tag_name.to_ascii_lowercase(),
+        _ => String::new(),
+    }
+}
+
+/// The form an element belongs to: its nearest `<form>` ancestor (the `form`
+/// content attribute is not supported yet).
+fn form_owner(registry: &NodeRegistry, node: &NodePtr) -> Option<NodePtr> {
+    let document = document(registry, node);
+    let mut current = parent_of(registry, &document, node);
+    while let Some(candidate) = current {
+        if local_name(&candidate) == "form" {
+            return Some(candidate);
+        }
+        current = parent_of(registry, &document, &candidate);
+    }
+    None
+}
+
+fn is_submit_button(node: &NodePtr) -> bool {
+    let kind = attribute(node, "type").map(|t| t.to_ascii_lowercase());
+    match local_name(node).as_str() {
+        "button" => matches!(kind.as_deref(), None | Some("submit") | Some("")),
+        "input" => matches!(kind.as_deref(), Some("submit") | Some("image")),
+        _ => false,
+    }
+}
+
+/// <https://html.spec.whatwg.org/multipage/form-control-infrastructure.html#constructing-the-form-data-set>,
+/// for the controls Aurora has: named, enabled inputs (text-like, hidden,
+/// checked checkboxes and radios), textareas, selects (the first selected
+/// option, else the first option) and the submitter.
+fn form_entries(registry: &NodeRegistry, form: &NodePtr, submitter: Option<&NodePtr>) -> Vec<(String, String)> {
+    let mut controls = Vec::new();
+    descendant_elements(form, &mut controls);
+    let mut entries = Vec::new();
+    for control in controls {
+        let Some(name) = attribute(&control, "name").filter(|n| !n.is_empty()) else { continue };
+        if attribute(&control, "disabled").is_some() {
+            continue;
+        }
+        let kind = attribute(&control, "type").unwrap_or_default().to_ascii_lowercase();
+        let value = match local_name(&control).as_str() {
+            "input" => match kind.as_str() {
+                "submit" | "image" | "button" | "reset" | "file" => {
+                    if submitter.is_some_and(|s| Rc::ptr_eq(s, &control)) {
+                        Some(attribute(&control, "value").unwrap_or_default())
+                    } else {
+                        None
+                    }
+                }
+                "checkbox" | "radio" => attribute(&control, "checked")
+                    .map(|_| attribute(&control, "value").unwrap_or_else(|| "on".into())),
+                _ => Some(input_value(registry, &control)),
+            },
+            "textarea" => Some(mutation::collect_text(&control)),
+            "select" => {
+                let mut options = Vec::new();
+                descendant_elements(&control, &mut options);
+                options.retain(|o| local_name(o) == "option");
+                options
+                    .iter()
+                    .find(|o| attribute(o, "selected").is_some())
+                    .or(options.first())
+                    .map(|o| attribute(o, "value").unwrap_or_else(|| mutation::collect_text(o)))
+            }
+            "button" if submitter.is_some_and(|s| Rc::ptr_eq(s, &control)) => {
+                Some(attribute(&control, "value").unwrap_or_default())
+            }
+            _ => None,
+        };
+        if let Some(value) = value {
+            entries.push((name, value));
+        }
+    }
+    entries
+}
+
+/// <https://html.spec.whatwg.org/multipage/form-control-infrastructure.html#concept-form-submit>,
+/// simplified: fires a trusted `submit` at the form and, if it was not
+/// cancelled, navigates a GET form to its action with the fields as the
+/// query. POST forms are not supported yet.
+pub(super) fn submit_form(scope: Scope, registry: &Rc<NodeRegistry>, form: &NodePtr, submitter: Option<&NodePtr>) {
+    let document = document(registry, form);
+    let wrapper = create_js_node(scope, form.clone(), registry, &document);
+    let global = scope.get_current_context().global(scope);
+    let key = v8_str(scope, "SubmitEvent");
+    let constructor = global
+        .get(scope, key.into())
+        .and_then(|v| v8::Local::<v8::Function>::try_from(v).ok());
+    if let Some(constructor) = constructor {
+        let init = v8::Object::new(scope);
+        for (name, value) in [("bubbles", true), ("cancelable", true)] {
+            let key = v8_str(scope, name);
+            let value = v8::Boolean::new(scope, value);
+            init.set(scope, key.into(), value.into());
+        }
+        let submitter_value: v8::Local<v8::Value> = match submitter {
+            Some(node) => create_js_node(scope, node.clone(), registry, &document).into(),
+            None => v8::null(scope).into(),
+        };
+        let event_type = v8_str(scope, "submit");
+        if let Some(event) = constructor.new_instance(scope, &[event_type.into(), init.into()]) {
+            for (name, value) in [("isTrusted", v8::Boolean::new(scope, true).into()), ("submitter", submitter_value)] {
+                let key = v8_str(scope, name);
+                event.set(scope, key.into(), value);
+            }
+            let key = v8_str(scope, "dispatchEvent");
+            let dispatch = wrapper.get(scope, key.into()).and_then(|v| v8::Local::<v8::Function>::try_from(v).ok());
+            let allowed = dispatch
+                .and_then(|dispatch| dispatch.call(scope, wrapper.into(), &[event.into()]))
+                .is_some_and(|result| result.boolean_value(scope));
+            if !allowed {
+                return;
+            }
+        }
+    }
+    let method = attribute(form, "method").unwrap_or_default().to_ascii_lowercase();
+    if method == "post" || method == "dialog" {
+        log::warn!(target: "aurora::forms", "{method} form submission is not supported yet");
+        return;
+    }
+    let action = attribute(form, "action").filter(|a| !a.trim().is_empty());
+    let base = document_base_url(scope);
+    let target = match (&action, &base) {
+        (Some(action), Some(base)) => base.join(action.trim()).ok(),
+        (Some(action), None) => url::Url::parse(action.trim()).ok(),
+        (None, base) => base.clone(),
+    };
+    let Some(mut target) = target else { return };
+    let query = url::form_urlencoded::Serializer::new(String::new())
+        .extend_pairs(form_entries(registry, form, submitter))
+        .finish();
+    target.set_query(Some(&query));
+    target.set_fragment(None);
+    *registry.pending_navigation.borrow_mut() = Some(target.into());
+}
+
+/// <https://html.spec.whatwg.org/multipage/form-control-infrastructure.html#implicit-submission>:
+/// Enter in a text field submits its form.
+pub(super) fn implicit_submission(scope: Scope, registry: &Rc<NodeRegistry>, field: &NodePtr) {
+    let Some(form) = form_owner(registry, field) else { return };
+    let mut controls = Vec::new();
+    descendant_elements(&form, &mut controls);
+    let default_button = controls.into_iter().find(is_submit_button);
+    submit_form(scope, registry, &form, default_button.as_ref());
+}
+
+/// A submit button's activation behaviour, after its click was not cancelled.
+pub(super) fn activate(scope: Scope, registry: &Rc<NodeRegistry>, target: &NodePtr) {
+    if is_submit_button(target) && attribute(target, "disabled").is_none() {
+        if let Some(form) = form_owner(registry, target) {
+            submit_form(scope, registry, &form, Some(target));
+        }
     }
 }
