@@ -2227,7 +2227,7 @@
                 wireEventHandlers(el);
             }
 
-            function connectUpgraded(el, name, connect) {
+            function connectUpgraded(el, name, connect, retrying) {
                 ceLog('connect-enter', el, 'connect=' + connect +
                     ' isConnected=' + (function() { try { return isActuallyConnected(el); } catch (e) { return 'threw'; } })() +
                     ' retry=' + (el.__ce_connect_retry__ || 0) + ' failed=' + !!el.__ce_connect_failed__);
@@ -2235,7 +2235,10 @@
                 try {
                     if (el.__ce_connect_failed__) return;
                     var connectedNow = isActuallyConnected(el);
-                    if (!connectedNow && composeDetachedStamp(el)) {
+                    // Not on the first attempt: the fragment may be a template
+                    // clone its creator is still filling, and emptying it then
+                    // breaks the creator and misplaces the nodes.
+                    if (!connectedNow && retrying && composeDetachedStamp(el)) {
                         connectedNow = isActuallyConnected(el);
                     }
                     if (!connectedNow) {
@@ -2246,14 +2249,14 @@
                             setTimeout(function() {
                                 try {
                                     el.__ce_connect_retry__ = 0;
-                                    connectUpgraded(el, name, true);
+                                    connectUpgraded(el, name, true, true);
                                 } catch (e) {}
                             }, 0);
                         } else if (el.__ce_connect_retry__ < 5) {
                             el.__ce_connect_retry__++;
                             setTimeout(function() {
                                 try {
-                                    connectUpgraded(el, name, true);
+                                    connectUpgraded(el, name, true, true);
                                 } catch (e) {}
                             }, el.__ce_connect_retry__ < 3 ? 0 : 50);
                         }
