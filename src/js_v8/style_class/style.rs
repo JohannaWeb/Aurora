@@ -1,6 +1,7 @@
 use crate::css::parse_style_text;
 use crate::dom::{Node, NodePtr};
-use crate::js_v8::node_create::{NodeData, external_data, v8_str};
+use crate::js_v8::node_create::{NodeData, v8_str};
+use crate::js_v8::templates::{self, NativeTag, TemplateKind};
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::rc::Rc;
@@ -22,49 +23,38 @@ pub(crate) fn build_style_object<'s>(
         }
     }
 
-    let style_data = Box::into_raw(Box::new(StyleData {
+    // Never freed, like the wrapper's `NodeData`.
+    let style_data: *const StyleData = Box::into_raw(Box::new(StyleData {
         node: node_data.node.clone(),
         registry: node_data.registry.clone(),
         style: style.clone(),
-    })) as *mut _;
-    let style_external = v8::External::new(scope, style_data);
+    }));
 
-    let template = v8::ObjectTemplate::new(scope);
+    let template = templates::cached(scope, &node_data.registry, TemplateKind::Style, |scope, template| {
+        install_method(scope, template, "getPropertyValue", get_property_value);
+        install_method(scope, template, "setProperty", set_property);
+        install_method(scope, template, "removeProperty", remove_property);
+        install_method(scope, template, "item", item);
+        install_accessor(scope, template, "cssText", get_css_text, set_css_text);
+        for (js_name, css_name) in STYLE_PROPERTIES {
+            install_style_property_accessor(scope, template, js_name, css_name);
+        }
+    });
+    templates::instantiate(scope, template, NativeTag::Style, style_data)
+}
 
-    install_method(
-        scope,
-        template,
-        "getPropertyValue",
-        get_property_value,
-        style_external,
-    );
-    install_method(scope, template, "setProperty", set_property, style_external);
-    install_method(
-        scope,
-        template,
-        "removeProperty",
-        remove_property,
-        style_external,
-    );
-    install_method(scope, template, "item", item, style_external);
+fn this_style<'a>(
+    scope: &mut v8::PinScope<'_, '_>,
+    args: &v8::FunctionCallbackArguments,
+) -> Option<&'a StyleData> {
+    templates::receiver(scope, args.this(), NativeTag::Style)
+}
 
-    install_accessor(
-        scope,
-        template,
-        "cssText",
-        get_css_text,
-        set_css_text,
-        style_external,
-    );
-
-    // Style properties
-    for (js_name, css_name) in STYLE_PROPERTIES {
-        install_style_property_accessor(scope, template, js_name, css_name, style_external);
-    }
-
-    template
-        .new_instance(scope)
-        .expect("object template instantiation failed")
+fn holder_style<'a>(
+    scope: &mut v8::PinScope<'_, '_>,
+    args: &v8::PropertyCallbackArguments,
+) -> Option<&'a StyleData> {
+    templates::receiver(scope, args.holder(), NativeTag::Style)
 }
 
 fn install_method<'s>(
@@ -72,11 +62,8 @@ fn install_method<'s>(
     template: v8::Local<v8::ObjectTemplate>,
     name: &str,
     callback: impl v8::MapFnTo<v8::FunctionCallback>,
-    data: v8::Local<'s, v8::External>,
 ) {
-    let t = v8::FunctionTemplate::builder(callback)
-        .data(data.into())
-        .build(scope);
+    let t = v8::FunctionTemplate::builder(callback).build(scope);
     let name_str = v8_str(scope, name);
     template.set(name_str.into(), t.into());
 }
@@ -87,14 +74,11 @@ fn install_accessor<'s>(
     name: &str,
     getter: impl v8::MapFnTo<v8::AccessorNameGetterCallback>,
     setter: impl v8::MapFnTo<v8::AccessorNameSetterCallback>,
-    data: v8::Local<'s, v8::External>,
 ) {
     let name_str = v8_str(scope, name);
     template.set_accessor_with_configuration(
         name_str.into(),
-        v8::AccessorConfiguration::new(getter)
-            .setter(setter)
-            .data(data.into()),
+        v8::AccessorConfiguration::new(getter).setter(setter),
     );
 }
 
@@ -104,7 +88,9 @@ fn get_property_value(
     mut retval: v8::ReturnValue,
 ) {
     let k = args.get(0).to_rust_string_lossy(scope);
-    let style_data: &StyleData = external_data(args.data());
+    let Some(style_data) = this_style(scope, &args) else {
+        return;
+    };
 
     let style = style_data.style.borrow();
     let val = style.get(&k).cloned().unwrap_or_default();
@@ -119,7 +105,9 @@ fn set_property(
 ) {
     let k = args.get(0).to_rust_string_lossy(scope);
     let v = args.get(1).to_rust_string_lossy(scope);
-    let style_data: &StyleData = external_data(args.data());
+    let Some(style_data) = this_style(scope, &args) else {
+        return;
+    };
 
     {
         let mut style = style_data.style.borrow_mut();
@@ -139,7 +127,9 @@ fn remove_property(
     mut _retval: v8::ReturnValue,
 ) {
     let k = args.get(0).to_rust_string_lossy(scope);
-    let style_data: &StyleData = external_data(args.data());
+    let Some(style_data) = this_style(scope, &args) else {
+        return;
+    };
 
     {
         let mut style = style_data.style.borrow_mut();
@@ -155,7 +145,9 @@ fn item(
     mut retval: v8::ReturnValue,
 ) {
     let idx = args.get(0).uint32_value(scope).unwrap_or(0) as usize;
-    let style_data: &StyleData = external_data(args.data());
+    let Some(style_data) = this_style(scope, &args) else {
+        return;
+    };
 
     let style = style_data.style.borrow();
     if let Some(k) = style.keys().nth(idx) {
@@ -173,7 +165,9 @@ fn get_css_text(
     args: v8::PropertyCallbackArguments,
     mut retval: v8::ReturnValue,
 ) {
-    let style_data: &StyleData = external_data(args.data());
+    let Some(style_data) = holder_style(scope, &args) else {
+        return;
+    };
 
     let style = style_data.style.borrow();
     let css = serialize_style(&style);
@@ -188,7 +182,9 @@ fn set_css_text(
     args: v8::PropertyCallbackArguments,
     _retval: v8::ReturnValue<()>,
 ) {
-    let style_data: &StyleData = external_data(args.data());
+    let Some(style_data) = holder_style(scope, &args) else {
+        return;
+    };
 
     let css = value.to_rust_string_lossy(scope);
     {
@@ -253,7 +249,6 @@ fn install_style_property_accessor<'s>(
     template: v8::Local<v8::ObjectTemplate>,
     js_name: &str,
     _css_name: &'static str,
-    data: v8::Local<'s, v8::External>,
 ) {
     // V8 accessors don't easily support capturing extra data like the property name
     // without another level of indirection or using a single callback that checks the name.
@@ -267,9 +262,7 @@ fn install_style_property_accessor<'s>(
 
     template.set_accessor_with_configuration(
         v8_str(scope, js_name).into(),
-        v8::AccessorConfiguration::new(style_property_getter)
-            .setter(style_property_setter)
-            .data(data.into()),
+        v8::AccessorConfiguration::new(style_property_getter).setter(style_property_setter),
     );
 }
 
@@ -279,7 +272,9 @@ fn style_property_getter(
     args: v8::PropertyCallbackArguments,
     mut retval: v8::ReturnValue,
 ) {
-    let style_data: &StyleData = external_data(args.data());
+    let Some(style_data) = holder_style(scope, &args) else {
+        return;
+    };
 
     let js_name = name.to_rust_string_lossy(scope);
     if let Some(css_name) = js_to_css_name(&js_name) {
@@ -297,7 +292,9 @@ fn style_property_setter(
     args: v8::PropertyCallbackArguments,
     _retval: v8::ReturnValue<()>,
 ) {
-    let style_data: &StyleData = external_data(args.data());
+    let Some(style_data) = holder_style(scope, &args) else {
+        return;
+    };
 
     let js_name = name.to_rust_string_lossy(scope);
     if let Some(css_name) = js_to_css_name(&js_name) {

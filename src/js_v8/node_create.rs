@@ -2,6 +2,7 @@ use super::custom_elements::CeReactionsGuard;
 use super::form_associated;
 use super::registry::NodeRegistry;
 use super::selectors::query;
+use super::templates::{self, NativeTag, TemplateKind};
 use super::style_class::{classlist, style};
 use super::tree::mutation;
 use crate::dom::{Node, NodePtr, ShadowTreeBackend};
@@ -26,172 +27,33 @@ pub(super) fn create_js_node<'s>(
         return existing;
     }
 
-    let template = v8::ObjectTemplate::new(scope);
-
     let blitz_node_id = registry.blitz_node_id(&node);
-    if let Some(blitz_id) = blitz_node_id {
-        template.set(
-            v8_str(scope, "__aurora_blitz_node_id").into(),
-            v8::BigInt::new_from_u64(scope, blitz_id.as_u64()).into(),
-        );
-    }
-
-    let node_data = Box::into_raw(Box::new(NodeData {
+    // Never freed: wrappers live as long as the registry that maps them.
+    let node_data: *const NodeData = Box::into_raw(Box::new(NodeData {
         node: node.clone(),
         blitz_node_id,
         registry: registry.clone(),
         document: document.clone(),
-    })) as *mut _;
-    let node_external = v8::External::new(scope, node_data);
+    }));
 
-    // --- Methods ---
-
-    // Selector queries are on the ParentNode/Element/Document prototypes.
-
-    // Mutation methods. Node's own (appendChild, insertBefore, removeChild,
-    // replaceChild, cloneNode, hasChildNodes) are on Node.prototype.
-
-    // Attribute methods are on Element.prototype (generated).
-
-    // --- Accessors ---
-
-    // Only registered engine shadow roots get the native own `host` accessor.
-    // Installing it on every DocumentFragment shadows ShadyDOM's prototype
-    // getter/constructor assignment and erases the logical host relationship it
-    // is trying to expose.
-    if crate::dom::SyntheticShadowTreeBackend.is_shadow_root(&node) {
-        install_readonly_accessor(scope, template, "host", get_shadow_host, node_external);
+    let kind = if crate::dom::SyntheticShadowTreeBackend.is_shadow_root(&node) {
+        TemplateKind::ShadowRoot
+    } else if matches!(&*node.borrow(), Node::Element(el) if el.tag_name.eq_ignore_ascii_case("slot")) {
+        TemplateKind::Slot
+    } else {
+        TemplateKind::Element
+    };
+    let template = templates::cached(scope, registry, kind, |scope, template| {
+        build_wrapper_template(scope, template, kind)
+    });
+    let obj = templates::instantiate(scope, template, NativeTag::Node, node_data);
+    if let Some(blitz_id) = blitz_node_id {
+        obj.set(
+            scope,
+            v8_str(scope, "__aurora_blitz_node_id").into(),
+            v8::BigInt::new_from_u64(scope, blitz_id.as_u64()).into(),
+        );
     }
-
-    install_accessor(
-        scope,
-        template,
-        "innerText",
-        get_text_content,
-        set_text_content,
-        node_external,
-    );
-    install_readonly_accessor(scope, template, "outerHTML", get_outer_html, node_external);
-    install_accessor(
-        scope,
-        template,
-        "hidden",
-        get_hidden,
-        set_hidden,
-        node_external,
-    );
-
-    // classList
-    install_readonly_accessor(scope, template, "classList", get_classlist, node_external);
-    install_readonly_accessor(scope, template, "attributes", get_attributes, node_external);
-
-
-    // Events: addEventListener/removeEventListener/dispatchEvent come from the
-    // JS `EventTarget` prototype (installed below via the prototype chain), so
-    // node listeners share one model with `window`/`document` and bubbling works.
-
-    // Geometry and misc
-    install_method(
-        scope,
-        template,
-        "getBoundingClientRect",
-        get_bounding_client_rect,
-        node_external,
-    );
-    install_method(
-        scope,
-        template,
-        "getClientRects",
-        get_client_rects,
-        node_external,
-    );
-    // Native bridge to Blitz/Stylo layout (Phase 8.2). v8_post.js's metric
-    // getters call this so `offsetWidth`/`clientWidth`/etc. report the real
-    // rendered box size, falling back to their heuristic only when unlaid out.
-    install_method(
-        scope,
-        template,
-        "__aurora_metric__",
-        get_layout_metric,
-        node_external,
-    );
-    install_method(
-        scope,
-        template,
-        "insertAdjacentHTML",
-        insert_adjacent_html,
-        node_external,
-    );
-    install_method(
-        scope,
-        template,
-        "insertAdjacentElement",
-        insert_adjacent_element,
-        node_external,
-    );
-    install_method(
-        scope,
-        template,
-        "insertAdjacentText",
-        insert_adjacent_text,
-        node_external,
-    );
-
-    // Shadow DOM — attachShadow creates a distinct ShadowRoot fragment. Blitz
-    // currently paints it through a native shadow container while JS keeps the
-    // root separate from the host's light children.
-    install_method(
-        scope,
-        template,
-        "attachShadow",
-        attach_shadow,
-        node_external,
-    );
-    install_method(
-        scope,
-        template,
-        "__shady_attachShadow",
-        attach_shadow,
-        node_external,
-    );
-    install_method(
-        scope,
-        template,
-        "attachInternals",
-        attach_internals,
-        node_external,
-    );
-    install_method(scope, template, "reset", form_reset, node_external);
-    install_method(
-        scope,
-        template,
-        "__aurora_adoptShadowRoot",
-        adopt_shadow_root,
-        node_external,
-    );
-
-    if let Node::Element(el) = &*node.borrow() {
-        if el.tag_name.eq_ignore_ascii_case("slot") {
-            install_method(
-                scope,
-                template,
-                "assignedNodes",
-                assigned_nodes,
-                node_external,
-            );
-            install_method(
-                scope,
-                template,
-                "assignedElements",
-                assigned_elements,
-                node_external,
-            );
-        }
-    }
-
-    let obj = template
-        .new_instance(scope)
-        .expect("object template instantiation failed");
 
     obj.set(
         scope,
@@ -199,8 +61,8 @@ pub(super) fn create_js_node<'s>(
         v8::Integer::new(scope, node_id as i32).into(),
     );
     if node_type(&node) == 1 {
-        let node_data = unsafe { &*(node_external.value() as *const NodeData) };
-        let style_obj = style::build_style_object(scope, node_data);
+        // SAFETY: allocated above and never freed.
+        let style_obj = style::build_style_object(scope, unsafe { &*node_data });
         // Hidden slot, exposed as `style` by the HTMLElement/SVGElement
         // prototype accessor in v8_base.js. An own `style` data property would
         // shadow custom-element class accessors: YouTube's wrapped components
@@ -433,7 +295,9 @@ fn assigned_nodes(
     args: v8::FunctionCallbackArguments,
     mut retval: v8::ReturnValue,
 ) {
-    let node_data = node_data_from(args.data());
+    let Some(node_data) = this_node(scope, &args) else {
+        return;
+    };
     let flatten = assigned_flatten_flag(scope, &args);
     let nodes = slot_assigned_nodes(&node_data.node, flatten);
     retval.set(nodes_to_js_array(scope, nodes, node_data).into());
@@ -446,7 +310,9 @@ fn assigned_elements(
     args: v8::FunctionCallbackArguments,
     mut retval: v8::ReturnValue,
 ) {
-    let node_data = node_data_from(args.data());
+    let Some(node_data) = this_node(scope, &args) else {
+        return;
+    };
     let flatten = assigned_flatten_flag(scope, &args);
     let elements = slot_assigned_nodes(&node_data.node, flatten)
         .into_iter()
@@ -472,10 +338,164 @@ pub(super) fn v8_str<'s>(scope: &v8::PinScope<'s, '_, ()>, s: &str) -> v8::Local
 /// Sound as long as the data slot really is the External we installed for this
 /// callback and the pointee `T` matches — which is an invariant of how the
 /// templates are constructed here, `classlist.rs`, and `style.rs`.
+/// Members every wrapper of `kind` gets as own properties. Built once per
+/// runtime; the callbacks find their node through the receiver.
+fn build_wrapper_template<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    template: v8::Local<'s, v8::ObjectTemplate>,
+    kind: TemplateKind,
+) {
+    // --- Methods ---
+
+    // Selector queries are on the ParentNode/Element/Document prototypes.
+
+    // Mutation methods. Node's own (appendChild, insertBefore, removeChild,
+    // replaceChild, cloneNode, hasChildNodes) are on Node.prototype.
+
+    // Attribute methods are on Element.prototype (generated).
+
+    // --- Accessors ---
+
+    // Only registered engine shadow roots get the native own `host` accessor.
+    // Installing it on every DocumentFragment shadows ShadyDOM's prototype
+    // getter/constructor assignment and erases the logical host relationship it
+    // is trying to expose.
+    if kind == TemplateKind::ShadowRoot {
+        install_readonly_accessor(scope, template, "host", get_shadow_host);
+    }
+
+    install_accessor(
+        scope,
+        template,
+        "innerText",
+        get_text_content,
+        set_text_content,
+    );
+    install_readonly_accessor(scope, template, "outerHTML", get_outer_html);
+    install_accessor(
+        scope,
+        template,
+        "hidden",
+        get_hidden,
+        set_hidden,
+    );
+
+    // classList
+    install_readonly_accessor(scope, template, "classList", get_classlist);
+    install_readonly_accessor(scope, template, "attributes", get_attributes);
+
+
+    // Events: addEventListener/removeEventListener/dispatchEvent come from the
+    // JS `EventTarget` prototype (installed below via the prototype chain), so
+    // node listeners share one model with `window`/`document` and bubbling works.
+
+    // Geometry and misc
+    install_method(
+        scope,
+        template,
+        "getBoundingClientRect",
+        get_bounding_client_rect,
+    );
+    install_method(
+        scope,
+        template,
+        "getClientRects",
+        get_client_rects,
+    );
+    // Native bridge to Blitz/Stylo layout (Phase 8.2). v8_post.js's metric
+    // getters call this so `offsetWidth`/`clientWidth`/etc. report the real
+    // rendered box size, falling back to their heuristic only when unlaid out.
+    install_method(
+        scope,
+        template,
+        "__aurora_metric__",
+        get_layout_metric,
+    );
+    install_method(
+        scope,
+        template,
+        "insertAdjacentHTML",
+        insert_adjacent_html,
+    );
+    install_method(
+        scope,
+        template,
+        "insertAdjacentElement",
+        insert_adjacent_element,
+    );
+    install_method(
+        scope,
+        template,
+        "insertAdjacentText",
+        insert_adjacent_text,
+    );
+
+    // Shadow DOM — attachShadow creates a distinct ShadowRoot fragment. Blitz
+    // currently paints it through a native shadow container while JS keeps the
+    // root separate from the host's light children.
+    install_method(
+        scope,
+        template,
+        "attachShadow",
+        attach_shadow,
+    );
+    install_method(
+        scope,
+        template,
+        "__shady_attachShadow",
+        attach_shadow,
+    );
+    install_method(
+        scope,
+        template,
+        "attachInternals",
+        attach_internals,
+    );
+    install_method(scope, template, "reset", form_reset);
+    install_method(
+        scope,
+        template,
+        "__aurora_adoptShadowRoot",
+        adopt_shadow_root,
+    );
+
+    if kind == TemplateKind::Slot {
+        install_method(
+            scope,
+            template,
+            "assignedNodes",
+            assigned_nodes,
+        );
+        install_method(
+            scope,
+            template,
+            "assignedElements",
+            assigned_elements,
+        );
+    }
+}
+
 pub(super) fn external_data<'a, T>(data: v8::Local<'a, v8::Value>) -> &'a T {
     let external = v8::Local::<v8::External>::try_from(data)
         .expect("callback data is always the External we installed");
     unsafe { &*(external.value() as *const T) }
+}
+
+/// The node behind a method's receiver (a wrapper, its `classList` or its
+/// `attributes`); throws and returns `None` for any other receiver.
+pub(super) fn this_node<'a>(
+    scope: &mut v8::PinScope<'_, '_>,
+    args: &v8::FunctionCallbackArguments,
+) -> Option<&'a NodeData> {
+    templates::receiver(scope, args.this(), NativeTag::Node)
+}
+
+/// The node behind a wrapper accessor's holder; throws if there is none.
+fn holder_node<'a>(
+    scope: &mut v8::PinScope<'_, '_>,
+    args: &v8::PropertyCallbackArguments,
+) -> Option<&'a NodeData> {
+    templates::receiver(scope, args.holder(), NativeTag::Node)
 }
 
 /// Recover the `&NodeData` a per-node method callback was installed with.
@@ -508,11 +528,8 @@ fn install_method<'s>(
     template: v8::Local<v8::ObjectTemplate>,
     name: &str,
     callback: impl v8::MapFnTo<v8::FunctionCallback>,
-    data: v8::Local<'s, v8::External>,
 ) {
-    let t = v8::FunctionTemplate::builder(callback)
-        .data(data.into())
-        .build(scope);
+    let t = v8::FunctionTemplate::builder(callback).build(scope);
     template.set(v8_str(scope, name).into(), t.into());
 }
 
@@ -522,13 +539,10 @@ fn install_accessor<'s>(
     name: &str,
     getter: impl v8::MapFnTo<v8::AccessorNameGetterCallback>,
     setter: impl v8::MapFnTo<v8::AccessorNameSetterCallback>,
-    data: v8::Local<'s, v8::External>,
 ) {
     template.set_accessor_with_configuration(
         v8_str(scope, name).into(),
-        v8::AccessorConfiguration::new(getter)
-            .setter(setter)
-            .data(data.into()),
+        v8::AccessorConfiguration::new(getter).setter(setter),
     );
 }
 
@@ -537,11 +551,10 @@ fn install_readonly_accessor<'s>(
     template: v8::Local<v8::ObjectTemplate>,
     name: &str,
     getter: impl v8::MapFnTo<v8::AccessorNameGetterCallback>,
-    data: v8::Local<'s, v8::External>,
 ) {
     template.set_accessor_with_configuration(
         v8_str(scope, name).into(),
-        v8::AccessorConfiguration::new(getter).data(data.into()),
+        v8::AccessorConfiguration::new(getter),
     );
 }
 
@@ -777,27 +790,17 @@ fn attr_entries(node_data: &NodeData) -> Vec<(String, String)> {
     }
 }
 
-fn install_map_method<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    obj: v8::Local<'s, v8::Object>,
-    name: &str,
-    callback: impl v8::MapFnTo<v8::FunctionCallback>,
-    data: v8::Local<'s, v8::External>,
-) {
-    let function = v8::FunctionTemplate::builder(callback)
-        .data(data.into())
-        .build(scope)
-        .get_function(scope)
-        .expect("function template yields a function outside of a pending exception");
-    obj.set(scope, v8_str(scope, name).into(), function.into());
-}
-
 fn build_named_node_map<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    node_external: v8::Local<'s, v8::External>,
     node_data: &NodeData,
 ) -> v8::Local<'s, v8::Object> {
-    let obj = v8::Object::new(scope);
+    let template = templates::cached(scope, &node_data.registry, TemplateKind::NamedNodeMap, |scope, template| {
+        install_method(scope, template, "item", named_node_map_item);
+        install_method(scope, template, "getNamedItem", named_node_map_get_named_item);
+        install_method(scope, template, "setNamedItem", named_node_map_set_named_item);
+        install_method(scope, template, "removeNamedItem", named_node_map_remove_named_item);
+    });
+    let obj = templates::instantiate(scope, template, NativeTag::Node, node_data as *const NodeData);
     let entries = attr_entries(node_data);
     obj.set(
         scope,
@@ -808,28 +811,6 @@ fn build_named_node_map<'s>(
         let attr = build_attr_object(scope, name, value);
         obj.set_index(scope, idx as u32, attr.into());
     }
-    install_map_method(scope, obj, "item", named_node_map_item, node_external);
-    install_map_method(
-        scope,
-        obj,
-        "getNamedItem",
-        named_node_map_get_named_item,
-        node_external,
-    );
-    install_map_method(
-        scope,
-        obj,
-        "setNamedItem",
-        named_node_map_set_named_item,
-        node_external,
-    );
-    install_map_method(
-        scope,
-        obj,
-        "removeNamedItem",
-        named_node_map_remove_named_item,
-        node_external,
-    );
     // The bridge returns a fresh array-like NamedNodeMap snapshot on every
     // access. Web components commonly iterate `element.attributes` directly.
     // Put the array iterator on this instance so later polyfills cannot make
@@ -867,10 +848,10 @@ fn get_attributes<'s>(
     args: v8::PropertyCallbackArguments<'s>,
     mut retval: v8::ReturnValue,
 ) {
-    let external = v8::Local::<v8::External>::try_from(args.data())
-        .expect("callback data is always the NodeData External we installed");
-    let node_data = node_data_from(args.data());
-    let attrs = build_named_node_map(scope, external, node_data);
+    let Some(node_data) = holder_node(scope, &args) else {
+        return;
+    };
+    let attrs = build_named_node_map(scope, node_data);
     retval.set(attrs.into());
 }
 
@@ -880,7 +861,9 @@ fn named_node_map_item(
     mut retval: v8::ReturnValue,
 ) {
     let idx = args.get(0).uint32_value(scope).unwrap_or(0) as usize;
-    let node_data = node_data_from(args.data());
+    let Some(node_data) = this_node(scope, &args) else {
+        return;
+    };
     match attr_entries(node_data).into_iter().nth(idx) {
         Some((name, value)) => retval.set(build_attr_object(scope, &name, &value).into()),
         None => retval.set(v8::null(scope).into()),
@@ -893,7 +876,9 @@ fn named_node_map_get_named_item(
     mut retval: v8::ReturnValue,
 ) {
     let name = args.get(0).to_rust_string_lossy(scope);
-    let node_data = node_data_from(args.data());
+    let Some(node_data) = this_node(scope, &args) else {
+        return;
+    };
     if let Node::Element(el) = &*node_data.node.borrow() {
         if let Some(value) = el.attributes.get(&name) {
             retval.set(build_attr_object(scope, &name, value).into());
@@ -930,7 +915,9 @@ fn named_node_map_set_named_item(
         return;
     }
 
-    let node_data = node_data_from(args.data());
+    let Some(node_data) = this_node(scope, &args) else {
+        return;
+    };
     let _reactions = CeReactionsGuard::new(scope, &node_data.registry);
     let old = match &*node_data.node.borrow() {
         Node::Element(el) => el.attributes.get(&name).cloned(),
@@ -956,7 +943,9 @@ fn named_node_map_remove_named_item(
     mut retval: v8::ReturnValue,
 ) {
     let name = args.get(0).to_rust_string_lossy(scope);
-    let node_data = node_data_from(args.data());
+    let Some(node_data) = this_node(scope, &args) else {
+        return;
+    };
     let _reactions = CeReactionsGuard::new(scope, &node_data.registry);
     let old = match &*node_data.node.borrow() {
         Node::Element(el) => el.attributes.get(&name).cloned(),
@@ -987,7 +976,9 @@ fn get_hidden(
     args: v8::PropertyCallbackArguments,
     mut retval: v8::ReturnValue,
 ) {
-    let node_data = node_data_from(args.data());
+    let Some(node_data) = holder_node(scope, &args) else {
+        return;
+    };
     let hidden = matches!(&*node_data.node.borrow(), Node::Element(el) if el.attributes.contains_key("hidden"));
     retval.set(v8::Boolean::new(scope, hidden).into());
 }
@@ -999,7 +990,9 @@ fn set_hidden(
     args: v8::PropertyCallbackArguments,
     _retval: v8::ReturnValue<()>,
 ) {
-    let node_data = node_data_from(args.data());
+    let Some(node_data) = holder_node(scope, &args) else {
+        return;
+    };
     let _reactions = CeReactionsGuard::new(scope, &node_data.registry);
     let mutation = if value.boolean_value(scope) {
         mutation::DomMutation::SetAttribute {
@@ -1027,7 +1020,9 @@ fn get_shadow_host(
     mut retval: v8::ReturnValue,
 ) {
     use crate::dom::ShadowTreeBackend;
-    let node_data = node_data_from(args.data());
+    let Some(node_data) = holder_node(scope, &args) else {
+        return;
+    };
 
     if let Some(host) = crate::dom::SyntheticShadowTreeBackend.host_for_shadow_root(&node_data.node)
     {
@@ -1051,7 +1046,9 @@ fn get_text_content(
     args: v8::PropertyCallbackArguments,
     mut retval: v8::ReturnValue,
 ) {
-    let node_data = node_data_from(args.data());
+    let Some(node_data) = holder_node(scope, &args) else {
+        return;
+    };
 
     let text = mutation::collect_text(&node_data.node);
     retval.set(v8_str(scope, &text).into());
@@ -1064,7 +1061,9 @@ fn set_text_content(
     args: v8::PropertyCallbackArguments,
     _retval: v8::ReturnValue<()>,
 ) {
-    let node_data = node_data_from(args.data());
+    let Some(node_data) = holder_node(scope, &args) else {
+        return;
+    };
     let _reactions = CeReactionsGuard::new(scope, &node_data.registry);
 
     let text = value.to_rust_string_lossy(scope);
@@ -1100,7 +1099,9 @@ fn get_outer_html(
     args: v8::PropertyCallbackArguments,
     mut retval: v8::ReturnValue,
 ) {
-    let node_data = node_data_from(args.data());
+    let Some(node_data) = holder_node(scope, &args) else {
+        return;
+    };
 
     let html = crate::dom::serialize_outer_html(&node_data.node);
     retval.set(v8_str(scope, &html).into());
@@ -1112,11 +1113,10 @@ fn get_classlist(
     args: v8::PropertyCallbackArguments,
     mut retval: v8::ReturnValue,
 ) {
-    let external = v8::Local::<v8::External>::try_from(args.data())
-        .expect("callback data is always the NodeData External we installed");
-    let node_external = v8::Local::<v8::External>::new(scope, external);
-
-    let obj = classlist::build_classlist_object(scope, node_external);
+    let Some(node_data) = holder_node(scope, &args) else {
+        return;
+    };
+    let obj = classlist::build_classlist_object(scope, node_data);
     retval.set(obj.into());
 }
 
@@ -1205,7 +1205,9 @@ fn get_bounding_client_rect(
     args: v8::FunctionCallbackArguments,
     mut retval: v8::ReturnValue,
 ) {
-    let node_data = node_data_from(args.data());
+    let Some(node_data) = this_node(scope, &args) else {
+        return;
+    };
     let obj = bounding_rect_object(scope, node_data);
     retval.set(obj.into());
 }
@@ -1215,7 +1217,9 @@ fn get_client_rects(
     args: v8::FunctionCallbackArguments,
     mut retval: v8::ReturnValue,
 ) {
-    let node_data = node_data_from(args.data());
+    let Some(node_data) = this_node(scope, &args) else {
+        return;
+    };
     let metrics = node_data.registry.layout_metrics(&node_data.node);
     // A laid-out box exposes its single border-box rect; an unlaid-out node has
     // no client rects.
@@ -1238,7 +1242,9 @@ fn get_layout_metric(
     args: v8::FunctionCallbackArguments,
     mut retval: v8::ReturnValue,
 ) {
-    let node_data = node_data_from(args.data());
+    let Some(node_data) = this_node(scope, &args) else {
+        return;
+    };
     let name = args.get(0).to_rust_string_lossy(scope);
     let value = match node_data.registry.layout_metrics(&node_data.node) {
         Some(m) => match name.as_str() {
@@ -1349,7 +1355,9 @@ fn insert_adjacent_html(
 ) {
     let position = args.get(0).to_rust_string_lossy(scope);
     let html = args.get(1).to_rust_string_lossy(scope);
-    let node_data = node_data_from(args.data());
+    let Some(node_data) = this_node(scope, &args) else {
+        return;
+    };
     let _reactions = CeReactionsGuard::new(scope, &node_data.registry);
     insert_nodes_at_position(scope, node_data, &position, parsed_html_nodes(&html));
 }
@@ -1361,7 +1369,9 @@ fn insert_adjacent_text(
 ) {
     let position = args.get(0).to_rust_string_lossy(scope);
     let text = args.get(1).to_rust_string_lossy(scope);
-    let node_data = node_data_from(args.data());
+    let Some(node_data) = this_node(scope, &args) else {
+        return;
+    };
     let _reactions = CeReactionsGuard::new(scope, &node_data.registry);
     insert_nodes_at_position(scope, node_data, &position, vec![Node::text(text)]);
 }
@@ -1373,7 +1383,9 @@ fn insert_adjacent_element(
 ) {
     let position = args.get(0).to_rust_string_lossy(scope);
     let element_value = args.get(1);
-    let node_data = node_data_from(args.data());
+    let Some(node_data) = this_node(scope, &args) else {
+        return;
+    };
     let _reactions = CeReactionsGuard::new(scope, &node_data.registry);
     let Some(element) = node_from_js(scope, element_value, &node_data.registry) else {
         retval.set(v8::null(scope).into());
@@ -1404,7 +1416,9 @@ fn attach_internals<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut retval: v8::ReturnValue,
 ) {
-    let node_data = node_data_from(args.data());
+    let Some(node_data) = this_node(scope, &args) else {
+        return;
+    };
     let tag = match &*node_data.node.borrow() {
         Node::Element(el) => el.tag_name.clone(),
         _ => String::new(),
@@ -1429,65 +1443,54 @@ fn attach_internals<'s>(
     }
     ce.create_element_internals(node_id);
 
-    let external = v8::Local::<v8::External>::try_from(args.data())
-        .expect("callback data is always the External we installed");
-    let template = v8::ObjectTemplate::new(scope);
-    install_readonly_accessor(
-        scope,
-        template,
-        "shadowRoot",
-        get_internals_shadow,
-        external,
-    );
-    install_readonly_accessor(scope, template, "form", get_internals_form, external);
-    install_readonly_accessor(
-        scope,
-        template,
-        "validationMessage",
-        get_internals_validation_message,
-        external,
-    );
-    install_readonly_accessor(
-        scope,
-        template,
-        "willValidate",
-        get_internals_will_validate,
-        external,
-    );
-    install_readonly_accessor(scope, template, "labels", get_internals_labels, external);
-    install_method(
-        scope,
-        template,
-        "setFormValue",
-        internals_set_form_value,
-        external,
-    );
-    install_method(
-        scope,
-        template,
-        "setValidity",
-        internals_set_validity,
-        external,
-    );
-    install_method(
-        scope,
-        template,
-        "checkValidity",
-        internals_check_validity,
-        external,
-    );
-    install_method(
-        scope,
-        template,
-        "reportValidity",
-        internals_check_validity,
-        external,
-    );
-
-    match template.new_instance(scope) {
-        Some(internals) => retval.set(internals.into()),
-        None => retval.set(v8::null(scope).into()),
-    }
+    let template = templates::cached(scope, &node_data.registry, TemplateKind::ElementInternals, |scope, template| {
+        install_readonly_accessor(
+            scope,
+            template,
+            "shadowRoot",
+            get_internals_shadow,
+        );
+        install_readonly_accessor(scope, template, "form", get_internals_form);
+        install_readonly_accessor(
+            scope,
+            template,
+            "validationMessage",
+            get_internals_validation_message,
+        );
+        install_readonly_accessor(
+            scope,
+            template,
+            "willValidate",
+            get_internals_will_validate,
+        );
+        install_readonly_accessor(scope, template, "labels", get_internals_labels);
+        install_method(
+            scope,
+            template,
+            "setFormValue",
+            internals_set_form_value,
+        );
+        install_method(
+            scope,
+            template,
+            "setValidity",
+            internals_set_validity,
+        );
+        install_method(
+            scope,
+            template,
+            "checkValidity",
+            internals_check_validity,
+        );
+        install_method(
+            scope,
+            template,
+            "reportValidity",
+            internals_check_validity,
+        );
+    });
+    let internals = templates::instantiate(scope, template, NativeTag::Node, node_data as *const NodeData);
+    retval.set(internals.into());
 }
 
 /// `internals.shadowRoot` — the element's own shadow root, or null.
@@ -1497,7 +1500,9 @@ fn get_internals_shadow(
     args: v8::PropertyCallbackArguments,
     mut retval: v8::ReturnValue,
 ) {
-    let node_data = node_data_from(args.data());
+    let Some(node_data) = holder_node(scope, &args) else {
+        return;
+    };
     let shadow = match &*node_data.node.borrow() {
         Node::Element(el) => el.shadow_root.clone(),
         _ => None,
@@ -1521,7 +1526,9 @@ fn get_internals_form(
     args: v8::PropertyCallbackArguments,
     mut retval: v8::ReturnValue,
 ) {
-    let node_data = node_data_from(args.data());
+    let Some(node_data) = holder_node(scope, &args) else {
+        return;
+    };
     let owner = form_associated::form_owner_of(&node_data.document, &node_data.node);
     match owner {
         Some(form) => {
@@ -1542,7 +1549,9 @@ fn get_internals_validation_message(
     args: v8::PropertyCallbackArguments,
     mut retval: v8::ReturnValue,
 ) {
-    let node_data = node_data_from(args.data());
+    let Some(node_data) = holder_node(scope, &args) else {
+        return;
+    };
     let node_id = node_data.registry.register(node_data.node.clone());
     let message = node_data.registry.ce_registry.validation_message(node_id);
     retval.set(v8_str(scope, &message).into());
@@ -1556,7 +1565,9 @@ fn get_internals_will_validate(
     args: v8::PropertyCallbackArguments,
     mut retval: v8::ReturnValue,
 ) {
-    let node_data = node_data_from(args.data());
+    let Some(node_data) = holder_node(scope, &args) else {
+        return;
+    };
     let disabled = form_associated::is_actually_disabled(&node_data.node);
     retval.set(v8::Boolean::new(scope, !disabled).into());
 }
@@ -1575,7 +1586,9 @@ fn form_reset(
     args: v8::FunctionCallbackArguments,
     mut _retval: v8::ReturnValue,
 ) {
-    let node_data = node_data_from(args.data());
+    let Some(node_data) = this_node(scope, &args) else {
+        return;
+    };
     let is_form = matches!(&*node_data.node.borrow(), Node::Element(el) if el.tag_name == "form");
     if !is_form {
         return;
@@ -1604,7 +1617,9 @@ fn internals_set_form_value(
     args: v8::FunctionCallbackArguments,
     mut _retval: v8::ReturnValue,
 ) {
-    let node_data = node_data_from(args.data());
+    let Some(node_data) = this_node(scope, &args) else {
+        return;
+    };
     let node_id = node_data.registry.register(node_data.node.clone());
     let value = args.get(0);
     let value = if value.is_null_or_undefined() {
@@ -1625,7 +1640,9 @@ fn internals_set_validity(
     args: v8::FunctionCallbackArguments,
     mut _retval: v8::ReturnValue,
 ) {
-    let node_data = node_data_from(args.data());
+    let Some(node_data) = this_node(scope, &args) else {
+        return;
+    };
     let node_id = node_data.registry.register(node_data.node.clone());
     let flags = args.get(0);
     let mut valid = true;
@@ -1659,7 +1676,9 @@ fn internals_check_validity(
     args: v8::FunctionCallbackArguments,
     mut retval: v8::ReturnValue,
 ) {
-    let node_data = node_data_from(args.data());
+    let Some(node_data) = this_node(scope, &args) else {
+        return;
+    };
     let node_id = node_data.registry.register(node_data.node.clone());
     let valid = node_data.registry.ce_registry.is_valid(node_id);
     retval.set(v8::Boolean::new(scope, valid).into());
@@ -1670,11 +1689,9 @@ fn attach_shadow(
     args: v8::FunctionCallbackArguments,
     mut retval: v8::ReturnValue,
 ) {
-    let external = v8::Local::<v8::External>::try_from(args.data())
-        .expect("callback data is always the NodeData External we installed");
-    // Rebind to the callback scope's lifetime so it can seed new templates.
-    let external = v8::Local::<v8::External>::new(scope, external);
-    let node_data = unsafe { &*(external.value() as *const NodeData) };
+    let Some(node_data) = this_node(scope, &args) else {
+        return;
+    };
 
     let opts = args
         .get(0)
@@ -1748,7 +1765,9 @@ fn adopt_shadow_root(
     args: v8::FunctionCallbackArguments,
     mut retval: v8::ReturnValue,
 ) {
-    let node_data = node_data_from(args.data());
+    let Some(node_data) = this_node(scope, &args) else {
+        return;
+    };
     let Some(shadow_root) = node_from_js(scope, args.get(0), &node_data.registry) else {
         retval.set(v8::Boolean::new(scope, false).into());
         return;

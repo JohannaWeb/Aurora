@@ -12,6 +12,8 @@ pub(super) struct NodeRegistry {
     /// Reverse map: Rc pointer address → node ID.
     reverse_nodes: RefCell<BTreeMap<usize, u32>>,
     wrappers: RefCell<BTreeMap<u32, v8::Global<v8::Object>>>,
+    /// Shared object templates, built on first use (see `templates`).
+    pub(super) templates: RefCell<BTreeMap<super::templates::TemplateKind, v8::Global<v8::ObjectTemplate>>>,
     pub(super) interface_prototypes: RefCell<BTreeMap<&'static str, v8::Global<v8::Object>>>,
     pub(super) next_id: RefCell<u32>,
     dirty: RefCell<DirtyState>,
@@ -59,6 +61,7 @@ impl NodeRegistry {
             nodes: RefCell::new(BTreeMap::new()),
             reverse_nodes: RefCell::new(BTreeMap::new()),
             wrappers: RefCell::new(BTreeMap::new()),
+            templates: RefCell::new(BTreeMap::new()),
             interface_prototypes: RefCell::new(BTreeMap::new()),
             next_id: RefCell::new(1),
             dirty: RefCell::new(DirtyState::default()),

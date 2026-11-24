@@ -22,6 +22,7 @@ mod runtime;
 mod runtime_tests;
 mod selectors;
 mod style_class;
+mod templates;
 mod tree;
 
 pub(crate) use runtime::V8Runtime;
