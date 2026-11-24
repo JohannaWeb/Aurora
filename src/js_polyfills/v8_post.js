@@ -386,6 +386,17 @@
         return (allowed ? 0 : 1) | (editable ? 2 : 0);
     };
 
+    // An image finished loading (`loaded` 1) or failed (0).
+    globalThis.__aurora_fire_image_event__ = function(img, loaded) {
+        var type = loaded ? 'load' : 'error';
+        var event = new Event(type, { bubbles: false, cancelable: false });
+        event.isTrusted = true;
+        img.dispatchEvent(event);
+        // EventTarget here does not know about event handler properties.
+        var handler = img['on' + type];
+        if (typeof handler === 'function') handler.call(img, event);
+    };
+
     // Size and position getters backed by layout (`__aurora_metric__`).
     function installMetrics(el) {
         if (el.__aurora_metric_fallbacks__) return;

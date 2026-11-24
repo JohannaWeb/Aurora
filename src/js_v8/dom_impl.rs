@@ -3,6 +3,7 @@
 //! generated callbacks have already brand-checked `this` and converted every
 //! argument per WebIDL by the time these run.
 
+use super::image_load;
 use super::bindings::{
     CharacterDataMembers, ChildNodeMembers, DocumentMembers, ElementMembers, Error, Fallible,
     FocusOptions, GetRootNodeOptions, HTMLHyperlinkElementUtilsMembers, HTMLImageElementMembers, HTMLInputElementMembers,
@@ -1448,6 +1449,19 @@ impl HTMLImageElementMembers for Dom {
     fn set_sizes(_: Scope, registry: &Rc<NodeRegistry>, this: &NodePtr, value: String) -> Fallible<()> {
         set_attribute(registry, this, "sizes", &value);
         Ok(())
+    }
+
+    fn natural_width(_: Scope, registry: &Rc<NodeRegistry>, this: &NodePtr) -> Fallible<u32> {
+        Ok(image_load::natural_size(registry, this).0)
+    }
+
+    fn natural_height(_: Scope, registry: &Rc<NodeRegistry>, this: &NodePtr) -> Fallible<u32> {
+        Ok(image_load::natural_size(registry, this).1)
+    }
+
+    /// Also true for a broken image and without a `src`.
+    fn complete(_: Scope, registry: &Rc<NodeRegistry>, this: &NodePtr) -> Fallible<bool> {
+        Ok(image_load::complete(registry, this))
     }
 }
 

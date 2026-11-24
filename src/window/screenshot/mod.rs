@@ -26,6 +26,7 @@ pub(super) fn render_to_file(mut input: WindowInput, path: &str) {
 
     wait_for_critical_resources(&input);
     flush_ready_frame_tasks(&mut input, width, height);
+    wait_for_images(&mut input, width, height);
 
     let mut img = ImageBuffer::new(width, height);
     for pixel in img.pixels_mut() {
@@ -144,6 +145,21 @@ fn wait_for_critical_resources(input: &WindowInput) {
             return;
         }
         std::thread::sleep(std::time::Duration::from_millis(25));
+    }
+}
+
+/// Waits for the images script is loading, so their `load` handlers (which
+/// often make them visible) run before the capture. Same bound as stylesheets.
+fn wait_for_images(input: &mut WindowInput, width: u32, height: u32) {
+    let timeout = std::time::Duration::from_millis(
+        env_u32("AURORA_SCREENSHOT_RESOURCE_TIMEOUT_MS").unwrap_or(15_000) as u64,
+    );
+    let started = Instant::now();
+    while input.runtime.as_ref().is_some_and(|runtime| runtime.has_pending_images())
+        && started.elapsed() < timeout
+    {
+        std::thread::sleep(std::time::Duration::from_millis(25));
+        flush_ready_frame_tasks(input, width, height);
     }
 }
 

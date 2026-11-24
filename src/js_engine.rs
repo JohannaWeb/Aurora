@@ -142,6 +142,12 @@ pub(crate) trait JsRuntime {
         false
     }
 
+    /// Whether an image load script can observe is still in flight; the next
+    /// `tick` after it arrives fires its event.
+    fn has_pending_images(&self) -> bool {
+        false
+    }
+
     fn dispatch_event(&mut self, node: &NodePtr, event_type: &str) -> bool;
 
     /// A primary-button click on `node` at viewport coordinates: the pointer

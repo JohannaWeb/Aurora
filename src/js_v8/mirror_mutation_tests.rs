@@ -173,3 +173,44 @@ fn root_element_client_size_is_the_viewport() {
     render_doc.borrow_mut().set_viewport(1000, 700);
     assert_eq!(runtime.eval_to_string(size), Ok("1000x700".into()));
 }
+
+#[test]
+fn image_loads_fire_load_and_error() {
+    let dom = blank_dom();
+    let render_doc = Rc::new(RefCell::new(
+        BlitzDocument::try_from_dom(&dom, None, &test_identity(), 800, 600).unwrap(),
+    ));
+    let mut runtime = V8Runtime::with_render_document(dom, Some(render_doc));
+    runtime
+        .execute(
+            r#"
+        var log = [];
+        function add(name, src) {
+            var img = document.createElement('img');
+            img.addEventListener('load', function(e) { log.push(name + ' load ' + e.isTrusted + ' ' + img.naturalWidth + 'x' + img.naturalHeight); });
+            img.addEventListener('error', function() { log.push(name + ' error ' + img.complete + ' ' + img.naturalWidth); });
+            img.onload = function() { log.push(name + ' onload'); };
+            document.body.appendChild(img);
+            img.src = src;
+            return img;
+        }
+        // A 3x2 PNG, a GIF that is not one, and one whose src is removed again.
+        var ok = add('ok', 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAMAAAACCAIAAAASFvFNAAAADElEQVR4nGNgIA4AAABUAAG5uxhVAAAAAElFTkSuQmCC');
+        add('broken', 'data:image/gif;base64,AAAA');
+        add('removed', 'data:image/gif;base64,AAAA').removeAttribute('src');
+        log.push('set ' + ok.complete);
+        var empty = document.createElement('img');
+        log.push('empty ' + empty.complete);
+    "#,
+        )
+        .unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while runtime.has_pending_images() && std::time::Instant::now() < deadline {
+        runtime.tick(crate::clock::now());
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert_eq!(
+        runtime.eval_to_string("log.slice().sort().join(' | ')"),
+        Ok("broken error true 0 | empty true | ok load true 3x2 | ok onload | set false".into())
+    );
+}

@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use vello::kurbo::Affine;
 use vello::peniko::{Color, Fill};
 use vello::util::{RenderContext, RenderSurface};
@@ -193,7 +193,14 @@ impl AuroraApp {
         self.input()
             .runtime
             .as_ref()
-            .and_then(|runtime| runtime.next_deadline())
+            .and_then(|runtime| {
+                // Nothing wakes the window when an image arrives, so look
+                // again next frame while one is loading.
+                let image = runtime
+                    .has_pending_images()
+                    .then(|| crate::clock::now() + Duration::from_millis(16));
+                [runtime.next_deadline(), image].into_iter().flatten().min()
+            })
     }
 
     pub(super) fn has_animation_frame_callbacks(&self) -> bool {

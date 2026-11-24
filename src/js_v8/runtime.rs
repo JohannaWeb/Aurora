@@ -1177,6 +1177,15 @@ impl V8Runtime {
         true
     }
 
+    /// Fires `load` or `error` at images whose load finished.
+    fn deliver_image_events(&mut self) -> bool {
+        let finished = super::image_load::take_finished(&self.registry);
+        for (node, loaded) in &finished {
+            self.call_ui_hook("__aurora_fire_image_event__", node, &[f64::from(u8::from(*loaded))]);
+        }
+        !finished.is_empty()
+    }
+
     fn fire_lifecycle_event(&mut self, event_type: &str) {
         // Lifecycle listeners live on the JS `document`/`window` EventTargets, so
         // fire through the JS event model rather than the legacy id-0 registry.
@@ -2392,9 +2401,10 @@ impl crate::js_engine::JsRuntime for V8Runtime {
     }
 
     fn tick(&mut self, now: Instant) -> bool {
+        let images = self.deliver_image_events();
         let ready = self.ready_timers(now);
         if ready.is_empty() {
-            return false;
+            return images;
         }
 
         {
@@ -2426,6 +2436,10 @@ impl crate::js_engine::JsRuntime for V8Runtime {
         }
 
         true
+    }
+
+    fn has_pending_images(&self) -> bool {
+        super::image_load::has_pending(&self.registry)
     }
 
     fn deliver_mutation_records(&mut self) -> bool {
@@ -2541,6 +2555,7 @@ impl crate::js_engine::JsRuntime for V8Runtime {
     }
     fn has_ready_work(&self, now: Instant) -> bool {
         self.has_animation_frame_callbacks()
+            || super::image_load::has_finished(&self.registry)
             || self.next_deadline().map(|d| d <= now).unwrap_or(false)
     }
 }

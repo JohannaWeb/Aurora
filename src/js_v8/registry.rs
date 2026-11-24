@@ -42,6 +42,8 @@ pub(super) struct NodeRegistry {
     /// Current values of `<input>` elements whose value was set or edited
     /// (HTML's "dirty value"), by node id; others show their `value` attribute.
     pub(super) input_values: RefCell<BTreeMap<u32, String>>,
+    /// Images script set `src` on or asked about, by node id.
+    pub(super) images: RefCell<BTreeMap<u32, super::image_load::ImageState>>,
     /// A navigation requested by script (location, form submission), for the
     /// window to perform.
     pub(super) pending_navigation: RefCell<Option<String>>,
@@ -78,6 +80,7 @@ impl NodeRegistry {
             ce_registry: super::custom_elements::CeRegistry::default(),
             focused: RefCell::new(None),
             input_values: RefCell::new(BTreeMap::new()),
+            images: RefCell::new(BTreeMap::new()),
             pending_navigation: RefCell::new(None),
             native_ce_reactions: std::cell::Cell::new(native_ce_reactions_default(
                 std::env::var("AURORA_NATIVE_CE_REACTIONS").ok().as_deref(),
@@ -389,6 +392,14 @@ impl NodeRegistry {
     ) -> Option<crate::blitz_document::LayoutMetrics> {
         let render_document = self.render_document.borrow().as_ref().cloned()?;
         render_document.borrow().dom_node_layout_metrics(node)
+    }
+
+    /// Starts loading an image for script to observe; `None` without a render
+    /// document.
+    pub(super) fn load_image(&self, src: &str) -> Option<crate::blitz_document::ImageLoad> {
+        let render_document = self.render_document.borrow().as_ref().cloned()?;
+        let load = render_document.borrow().load_image(src);
+        Some(load)
     }
 
     /// The viewport size in CSS pixels, without a render document `None`.

@@ -30,12 +30,14 @@ interface HTMLModElement : HTMLElement {};
 interface HTMLPictureElement : HTMLElement {};
 interface HTMLSourceElement : HTMLElement {};
 // https://html.spec.whatwg.org/multipage/embedded-content.html#htmlimageelement
-// (the reflected attributes only)
 interface HTMLImageElement : HTMLElement {
   [CEReactions] attribute DOMString alt;
   [CEReactions] attribute USVString src;
   [CEReactions] attribute USVString srcset;
   [CEReactions] attribute DOMString sizes;
+  readonly attribute unsigned long naturalWidth;
+  readonly attribute unsigned long naturalHeight;
+  readonly attribute boolean complete;
 };
 interface HTMLIFrameElement : HTMLElement {};
 interface HTMLEmbedElement : HTMLElement {};
