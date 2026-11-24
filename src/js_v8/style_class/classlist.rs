@@ -1,24 +1,22 @@
 use crate::dom::{Node, NodePtr};
-use crate::js_v8::node_create::{NodeData, node_data_from, v8_str};
+use crate::js_v8::node_create::{NodeData, this_node, v8_str};
+use crate::js_v8::templates::{self, NativeTag, TemplateKind};
 use std::collections::BTreeSet;
 
 pub(crate) fn build_classlist_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    node_external: v8::Local<'s, v8::External>,
+    node_data: &NodeData,
 ) -> v8::Local<'s, v8::Object> {
-    let template = v8::ObjectTemplate::new(scope);
-
-    install_method(scope, template, "add", add, node_external);
-    install_method(scope, template, "remove", remove, node_external);
-    install_method(scope, template, "contains", contains, node_external);
-    install_method(scope, template, "toggle", toggle, node_external);
-    install_method(scope, template, "replace", replace, node_external);
-    install_method(scope, template, "item", item, node_external);
-    install_method(scope, template, "toString", to_string, node_external);
-
-    let obj = template
-        .new_instance(scope)
-        .expect("object template instantiation failed");
+    let template = templates::cached(scope, &node_data.registry, TemplateKind::ClassList, |scope, template| {
+        install_method(scope, template, "add", add);
+        install_method(scope, template, "remove", remove);
+        install_method(scope, template, "contains", contains);
+        install_method(scope, template, "toggle", toggle);
+        install_method(scope, template, "replace", replace);
+        install_method(scope, template, "item", item);
+        install_method(scope, template, "toString", to_string);
+    });
+    let obj = templates::instantiate(scope, template, NativeTag::Node, node_data as *const NodeData);
     let global = scope.get_current_context().global(scope);
     let ctor = global.get(scope, v8_str(scope, "DOMTokenList").into()).and_then(|value| value.to_object(scope));
     if let Some(proto) = ctor.and_then(|ctor| ctor.get(scope, v8_str(scope, "prototype").into())) {
@@ -55,7 +53,6 @@ pub(crate) fn build_classlist_object<'s>(
     // Array-like shape (length + indexed tokens) so iteration helpers work.
     // The classList object is rebuilt on every `.classList` access, so a
     // snapshot taken here stays consistent with the live class attribute.
-    let node_data = unsafe { &*(node_external.value() as *const NodeData) };
     let tokens: Vec<String> = match &*node_data.node.borrow() {
         Node::Element(el) => el
             .attributes
@@ -83,11 +80,8 @@ fn install_method<'s>(
     template: v8::Local<v8::ObjectTemplate>,
     name: &str,
     callback: impl v8::MapFnTo<v8::FunctionCallback>,
-    data: v8::Local<'s, v8::External>,
 ) {
-    let t = v8::FunctionTemplate::builder(callback)
-        .data(data.into())
-        .build(scope);
+    let t = v8::FunctionTemplate::builder(callback).build(scope);
     let name_str = v8_str(scope, name);
     template.set(name_str.into(), t.into());
 }
@@ -97,7 +91,9 @@ fn add(
     args: v8::FunctionCallbackArguments,
     mut _retval: v8::ReturnValue,
 ) {
-    let node_data = node_data_from(args.data());
+    let Some(node_data) = this_node(scope, &args) else {
+        return;
+    };
 
     for i in 0..args.length() {
         let cls = args.get(i).to_rust_string_lossy(scope);
@@ -113,7 +109,9 @@ fn remove(
     args: v8::FunctionCallbackArguments,
     mut _retval: v8::ReturnValue,
 ) {
-    let node_data = node_data_from(args.data());
+    let Some(node_data) = this_node(scope, &args) else {
+        return;
+    };
 
     for i in 0..args.length() {
         let cls = args.get(i).to_rust_string_lossy(scope);
@@ -130,7 +128,9 @@ fn contains(
     mut retval: v8::ReturnValue,
 ) {
     let cls = args.get(0).to_rust_string_lossy(scope);
-    let node_data = node_data_from(args.data());
+    let Some(node_data) = this_node(scope, &args) else {
+        return;
+    };
 
     let b = node_data.node.borrow();
     if let Node::Element(el) = &*b {
@@ -149,7 +149,9 @@ fn toggle(
     mut retval: v8::ReturnValue,
 ) {
     let cls = args.get(0).to_rust_string_lossy(scope);
-    let node_data = node_data_from(args.data());
+    let Some(node_data) = this_node(scope, &args) else {
+        return;
+    };
 
     let mut present = false;
     modify_classlist(&node_data.node, |set| {
@@ -171,7 +173,9 @@ fn replace(
 ) {
     let old_cls = args.get(0).to_rust_string_lossy(scope);
     let new_cls = args.get(1).to_rust_string_lossy(scope);
-    let node_data = node_data_from(args.data());
+    let Some(node_data) = this_node(scope, &args) else {
+        return;
+    };
 
     let mut swapped = false;
     modify_classlist(&node_data.node, |set| {
@@ -190,7 +194,9 @@ fn item(
     mut retval: v8::ReturnValue,
 ) {
     let idx = args.get(0).uint32_value(scope).unwrap_or(0) as usize;
-    let node_data = node_data_from(args.data());
+    let Some(node_data) = this_node(scope, &args) else {
+        return;
+    };
 
     let b = node_data.node.borrow();
     if let Node::Element(el) = &*b {
@@ -210,7 +216,9 @@ fn to_string(
     args: v8::FunctionCallbackArguments,
     mut retval: v8::ReturnValue,
 ) {
-    let node_data = node_data_from(args.data());
+    let Some(node_data) = this_node(scope, &args) else {
+        return;
+    };
 
     let b = node_data.node.borrow();
     if let Node::Element(el) = &*b {
