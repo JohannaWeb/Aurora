@@ -1314,6 +1314,14 @@ impl BlitzDocument {
             .map(|element| element.name.ns.clone())
     }
 
+    /// Scrolls the viewport to `y` CSS pixels. Painting offsets content by it
+    /// and culls against the scrolled viewport; layout metrics and hit tests
+    /// stay in document coordinates.
+    pub fn set_scroll_y(&mut self, y: f64) {
+        self.inner
+            .set_viewport_scroll(blitz_dom::Point { x: 0.0, y });
+    }
+
     pub fn paint_to_scene(&mut self, scene: &mut Scene, width: u32, height: u32) -> PaintResult {
         if !self.resolve_inner() {
             return self.paint_failure_result("resolving before paint");
@@ -1897,6 +1905,10 @@ mod tests {
             .clone()
     }
 
+    fn styled_div(style: &str) -> NodePtr {
+        Node::element_with_attributes("div", attr("style", style), Vec::new())
+    }
+
     fn document_with_body_children(children: Vec<NodePtr>) -> NodePtr {
         let document = Node::document(vec![Node::element(
             "html",
@@ -2187,6 +2199,27 @@ mod tests {
         assert_eq!(trace.parent, Some(legacy_node_key(&orphan)));
         assert_eq!(trace.child, Some(legacy_node_key(&child)));
         assert_eq!(trace.blitz_node, None);
+    }
+
+    #[test]
+    fn scrolling_paints_content_below_the_first_screen() {
+        let document = document_with_body_children(vec![
+            styled_div("height:5000px"),
+            styled_div("height:100px;background:red"),
+        ]);
+        let mut blitz_doc =
+            BlitzDocument::try_from_dom(&document, None, &test_identity(), 800, 600)
+                .expect("Blitz document should build");
+        let mut draws_at = |y: f64| {
+            let mut scene = Scene::new();
+            blitz_doc.set_scroll_y(y);
+            blitz_doc.paint_to_scene(&mut scene, 800, 600);
+            scene.encoding().draw_tags.len()
+        };
+
+        let top = draws_at(0.0);
+        assert!(draws_at(4800.0) > top, "the box in view is painted");
+        assert_eq!(draws_at(0.0), top);
     }
 
     #[test]
