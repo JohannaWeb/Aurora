@@ -1201,6 +1201,34 @@ fn v8_native_reactions_drive_polymer_controller_connected_callback() {
 }
 
 #[test]
+fn v8_never_connected_custom_element_stops_retrying() {
+    let mut runtime = V8Runtime::new(blank_dom());
+    runtime
+        .execute(
+            r#"
+            globalThis.connected = 0;
+            customElements.define('x-never-connected', class extends HTMLElement {
+                connectedCallback() { connected++; }
+            });
+            globalThis.el = document.createElement('x-never-connected');
+            customElements.__aurora_track_custom_element__(el);
+            "#,
+        )
+        .unwrap();
+    let mut now = crate::clock::now();
+    for _ in 0..20 {
+        now += std::time::Duration::from_millis(100);
+        runtime.tick(now);
+    }
+    assert_eq!(runtime.next_deadline(), None, "no retry is left scheduled");
+    assert_eq!(
+        runtime.eval_to_string("document.body.appendChild(el); String(connected)"),
+        Ok("1".to_string()),
+        "a real insertion still connects it"
+    );
+}
+
+#[test]
 fn v8_custom_element_connects_only_after_append() {
     let mut runtime = V8Runtime::new(blank_dom());
 

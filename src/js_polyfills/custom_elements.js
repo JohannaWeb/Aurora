@@ -2244,21 +2244,16 @@
                     if (!connectedNow) {
                         ceLog('connect-bail-disconnected', el, 'retry=' + (el.__ce_connect_retry__ || 0) +
                             ' ancestry=' + ceAncestry(el) + ' owners=' + ceOwnerHints(el));
-                        if (!el.__ce_connect_retry__) {
-                            el.__ce_connect_retry__ = 1;
+                        // A few more tries, then leave it: a later insertion
+                        // connects it through the native reaction anyway.
+                        var tries = retrying ? el.__ce_connect_retry__ : 0;
+                        if (tries < 5 && (retrying || !el.__ce_connect_retry_pending__)) {
+                            el.__ce_connect_retry__ = tries + 1;
+                            el.__ce_connect_retry_pending__ = true;
                             setTimeout(function() {
-                                try {
-                                    el.__ce_connect_retry__ = 0;
-                                    connectUpgraded(el, name, true, true);
-                                } catch (e) {}
-                            }, 0);
-                        } else if (el.__ce_connect_retry__ < 5) {
-                            el.__ce_connect_retry__++;
-                            setTimeout(function() {
-                                try {
-                                    connectUpgraded(el, name, true, true);
-                                } catch (e) {}
-                            }, el.__ce_connect_retry__ < 3 ? 0 : 50);
+                                el.__ce_connect_retry_pending__ = false;
+                                try { connectUpgraded(el, name, true, true); } catch (e) {}
+                            }, tries < 2 ? 0 : 50);
                         }
                         return;
                     }
