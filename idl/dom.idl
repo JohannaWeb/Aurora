@@ -61,6 +61,14 @@ interface Document : Node {
 
   HTMLCollection getElementsByTagName(DOMString qualifiedName);
   HTMLCollection getElementsByClassName(DOMString classNames);
+
+  // HTML's partial interface Document (the parser takes no partials).
+  readonly attribute HTMLCollection images;
+  readonly attribute HTMLCollection embeds;
+  readonly attribute HTMLCollection plugins;
+  readonly attribute HTMLCollection links;
+  readonly attribute HTMLCollection forms;
+  readonly attribute HTMLCollection scripts;
 };
 interface DocumentType : Node {};
 interface DocumentFragment : Node {};
