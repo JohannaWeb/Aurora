@@ -79,6 +79,21 @@ fn request_bytes(url: String, identity: &Identity, done: NetCallback) {
 /// How an image load ended: its natural size, or `None` if it failed.
 type ImageOutcome = Option<(u32, u32)>;
 
+/// A script's source on its way, or why it could not be fetched.
+#[derive(Clone)]
+pub struct TextLoad(std::sync::Arc<Mutex<Option<Result<String, String>>>>);
+
+impl TextLoad {
+    pub fn is_finished(&self) -> bool {
+        self.0.lock().unwrap_or_else(PoisonError::into_inner).is_some()
+    }
+
+    /// The result, once; `None` while loading.
+    pub fn take(&self) -> Option<Result<String, String>> {
+        self.0.lock().unwrap_or_else(PoisonError::into_inner).take()
+    }
+}
+
 /// An image load script can observe.
 #[derive(Clone)]
 pub struct ImageLoad(std::sync::Arc<Mutex<Option<ImageOutcome>>>);
@@ -891,6 +906,37 @@ impl BlitzDocument {
     /// The viewport layout runs against, in CSS pixels.
     pub fn viewport_css_size(&self) -> (f32, f32) {
         self.inner.viewport().logical_size()
+    }
+
+    /// Fetches the script at `src`, resolved against the document's URL, as
+    /// the document's identity.
+    pub fn load_script(&self, src: &str) -> TextLoad {
+        let load = TextLoad(Default::default());
+        let url = match &self.base_url {
+            Some(base) => base.join(src),
+            None => url::Url::parse(src),
+        };
+        let url = match url {
+            Ok(url) => String::from(url),
+            Err(error) => {
+                *load.0.lock().unwrap_or_else(PoisonError::into_inner) = Some(Err(error.to_string()));
+                return load;
+            }
+        };
+        log::info!(target: "aurora::net", "[NET] GET {url} (script)");
+        let identity = self.identity.clone();
+        let result = load.clone();
+        let fetch = move || {
+            let source = crate::fetch::fetch_string(&url, &identity).map_err(|error| error.to_string());
+            *result.0.lock().unwrap_or_else(PoisonError::into_inner) = Some(source);
+        };
+        // As for images: a replay must not depend on thread timing.
+        if crate::fetch::replay::start_time_ms().is_some() {
+            fetch();
+        } else {
+            std::thread::spawn(fetch);
+        }
+        load
     }
 
     /// Loads the image at `src`, resolved against the document's URL, through

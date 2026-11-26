@@ -145,9 +145,9 @@ pub(crate) trait JsRuntime {
     /// How far the window has scrolled the page, in CSS pixels.
     fn set_scroll_position(&mut self, _x: f64, _y: f64) {}
 
-    /// Whether an image load script can observe is still in flight; the next
-    /// `tick` after it arrives fires its event.
-    fn has_pending_images(&self) -> bool {
+    /// Whether an image or script load that script can observe is still in
+    /// flight; the next `tick` after it arrives fires its event.
+    fn has_pending_loads(&self) -> bool {
         false
     }
 

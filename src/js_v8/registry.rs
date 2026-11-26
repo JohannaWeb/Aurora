@@ -51,6 +51,8 @@ pub(super) struct NodeRegistry {
     pub(super) observes_intersections: std::cell::Cell<bool>,
     /// Images script set `src` on or asked about, by node id.
     pub(super) images: RefCell<BTreeMap<u32, super::image_load::ImageState>>,
+    /// Scripts page script created, until they ran.
+    pub(super) scripts: RefCell<super::script_load::Scripts>,
     /// A navigation requested by script (location, form submission), for the
     /// window to perform.
     pub(super) pending_navigation: RefCell<Option<String>>,
@@ -91,6 +93,7 @@ impl NodeRegistry {
             intersections_checked: std::cell::Cell::new(None),
             observes_intersections: std::cell::Cell::new(false),
             images: RefCell::new(BTreeMap::new()),
+            scripts: RefCell::new(super::script_load::Scripts::default()),
             pending_navigation: RefCell::new(None),
             native_ce_reactions: std::cell::Cell::new(native_ce_reactions_default(
                 std::env::var("AURORA_NATIVE_CE_REACTIONS").ok().as_deref(),
@@ -426,6 +429,13 @@ impl NodeRegistry {
     pub(super) fn load_image(&self, src: &str) -> Option<crate::blitz_document::ImageLoad> {
         let render_document = self.render_document.borrow().as_ref().cloned()?;
         let load = render_document.borrow().load_image(src);
+        Some(load)
+    }
+
+    /// Starts fetching a script; `None` without a render document.
+    pub(super) fn load_script(&self, src: &str) -> Option<crate::blitz_document::TextLoad> {
+        let render_document = self.render_document.borrow().as_ref().cloned()?;
+        let load = render_document.borrow().load_script(src);
         Some(load)
     }
 
