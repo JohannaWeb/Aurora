@@ -1201,6 +1201,34 @@ fn v8_native_reactions_drive_polymer_controller_connected_callback() {
 }
 
 #[test]
+fn v8_never_connected_custom_element_stops_retrying() {
+    let mut runtime = V8Runtime::new(blank_dom());
+    runtime
+        .execute(
+            r#"
+            globalThis.connected = 0;
+            customElements.define('x-never-connected', class extends HTMLElement {
+                connectedCallback() { connected++; }
+            });
+            globalThis.el = document.createElement('x-never-connected');
+            customElements.__aurora_track_custom_element__(el);
+            "#,
+        )
+        .unwrap();
+    let mut now = crate::clock::now();
+    for _ in 0..20 {
+        now += std::time::Duration::from_millis(100);
+        runtime.tick(now);
+    }
+    assert_eq!(runtime.next_deadline(), None, "no retry is left scheduled");
+    assert_eq!(
+        runtime.eval_to_string("document.body.appendChild(el); String(connected)"),
+        Ok("1".to_string()),
+        "a real insertion still connects it"
+    );
+}
+
+#[test]
 fn v8_custom_element_connects_only_after_append() {
     let mut runtime = V8Runtime::new(blank_dom());
 
@@ -2984,7 +3012,7 @@ fn v8_composes_polymer_owned_detached_stamp_into_host_root() {
                 stamp.appendChild(child);
 
                 customElements.__aurora_track_custom_element__(child);
-                return [
+                globalThis.state = () => [
                     connected,
                     child.isConnected,
                     child.parentNode === root,
@@ -2992,10 +3020,14 @@ fn v8_composes_polymer_owned_detached_stamp_into_host_root() {
                     stamp.childNodes.length,
                     child.textContent,
                 ].join('|');
+                return state();
             })()"#,
         ),
-        Ok("1|true|true|1|0|composed".to_string())
+        Ok("0|false|false|0|1|".to_string()),
+        "the stamp's creator may still be filling it"
     );
+    runtime.tick(crate::clock::now());
+    assert_eq!(runtime.eval_to_string("state()"), Ok("1|true|true|1|0|composed".to_string()));
     render_doc.borrow().validate_mirror_integrity().unwrap();
 }
 
@@ -3027,7 +3059,7 @@ fn v8_tracks_fragment_owner_during_custom_element_lifecycle() {
                         const stamp = source.cloneNode(true);
                         const child = stamp.firstChild;
                         customElements.__aurora_track_custom_element__(child);
-                        this.result = [
+                        this.result = () => [
                             stamp.__aurora_fragment_owner__ === this,
                             child.parentNode === root,
                             stamp.childNodes.length,
@@ -3039,11 +3071,14 @@ fn v8_tracks_fragment_owner_during_custom_element_lifecycle() {
                 const owner = document.createElement('x-tracked-owner');
                 document.body.appendChild(owner);
                 customElements.__aurora_track_custom_element__(owner);
-                return owner.result + '|' + childConnected;
+                globalThis.state = () => owner.result() + '|' + childConnected;
+                return state();
             })()"#,
         ),
-        Ok("true|true|0|1".to_string())
+        Ok("true|false|1|0".to_string())
     );
+    runtime.tick(crate::clock::now());
+    assert_eq!(runtime.eval_to_string("state()"), Ok("true|true|0|1".to_string()));
     render_doc.borrow().validate_mirror_integrity().unwrap();
 }
 
@@ -3085,7 +3120,7 @@ fn v8_tracks_fragment_owner_during_custom_element_lifecycle_with_native_reaction
                         const stamp = source.cloneNode(true);
                         const child = stamp.firstChild;
                         customElements.__aurora_track_custom_element__(child);
-                        this.result = [
+                        this.result = () => [
                             stamp.__aurora_fragment_owner__ === this,
                             child.parentNode === root,
                             stamp.childNodes.length,
@@ -3096,9 +3131,15 @@ fn v8_tracks_fragment_owner_during_custom_element_lifecycle_with_native_reaction
                 customElements.define('x-tracked-owner2', XTrackedOwner2);
                 const owner = document.createElement('x-tracked-owner2');
                 document.body.appendChild(owner);
-                return owner.result + '|' + childConnected + '|' + ownerConnected;
+                globalThis.state = () => owner.result() + '|' + childConnected + '|' + ownerConnected;
+                return state();
             })()"#,
         ),
+        Ok("true|false|1|0|1".to_string())
+    );
+    runtime.tick(crate::clock::now());
+    assert_eq!(
+        runtime.eval_to_string("state()"),
         Ok("true|true|0|1|1".to_string()),
         "owner's connectedCallback (native-queued) and child's (JS fallback) must each fire exactly once"
     );
@@ -3476,9 +3517,9 @@ fn v8_inserting_an_emptied_composed_fragment_reclaims_its_nodes() {
 
 #[test]
 fn v8_reused_composed_fragment_reclaims_every_composed_node() {
-    // YouTube's renderer stamper appends items to one fragment in turn; each
-    // upgrades, finds itself detached and is composed out into the owner's
-    // shadow root. Inserting the fragment must bring back all of them, not
+    // Items appended to one fragment in turn each upgrade, find themselves
+    // detached and, if still detached at the retry, are composed out into the
+    // owner's shadow root. Inserting the fragment must bring back all of them, not
     // only the last one composed.
     let mut runtime = V8Runtime::new(blank_dom());
     assert_eq!(
@@ -3501,16 +3542,21 @@ fn v8_reused_composed_fragment_reclaims_every_composed_node() {
                 fragment.appendChild(item);
                 items.push(item);
             }
-            const composed = items.filter(item => item.parentNode === root).length;
-            contents.appendChild(fragment);
-            return [composed,
-                    items.filter(item => item.parentNode === contents).length,
-                    fragment.childNodes.length].join(',');
+            globalThis.composed = () => items.filter(item => item.parentNode === root).length;
+            globalThis.insert = () => {
+                contents.appendChild(fragment);
+                return [items.filter(item => item.parentNode === contents).length,
+                        fragment.childNodes.length].join(',');
+            };
+            return composed();
             })()
             "#
         ),
-        Ok("3,3,0".to_string())
+        Ok("0".to_string())
     );
+    runtime.tick(crate::clock::now());
+    assert_eq!(runtime.eval_to_string("composed()"), Ok("3".to_string()));
+    assert_eq!(runtime.eval_to_string("insert()"), Ok("3,0".to_string()));
 }
 
 #[test]
