@@ -573,6 +573,31 @@ fn selector_queries_are_generated_and_spec_shaped() {
 }
 
 #[test]
+fn document_collections_list_their_html_elements_in_tree_order() {
+    let mut runtime = runtime();
+    assert_eq!(
+        runtime.eval_to_string(
+            r#"(() => {
+        const box = document.createElement('div');
+        box.innerHTML = '<img id="i1"><form id="f1"><img id="i2"></form>'
+            + '<a id="a1" href="/x"></a><a id="a2"></a><map><area id="r1" href="/y"></map>'
+            + '<embed id="e1"><script id="s1"></script>';
+        document.body.appendChild(box);
+        const ids = c => Array.from(c, el => el.id).filter(Boolean).join(',');
+        const before = document.images.length;
+        box.appendChild(document.createElement('img'));
+        return [ids(document.images), ids(document.forms), ids(document.links),
+            ids(document.embeds), ids(document.plugins), ids(document.scripts),
+            document.images.length === before + 1,
+            Object.getOwnPropertyDescriptor(Document.prototype, 'scripts').get !== undefined,
+        ].join('|');
+    })()"#
+        ),
+        Ok("i1,i2|f1|a1,r1|e1|e1|s1|true|true".to_string())
+    );
+}
+
+#[test]
 fn child_node_methods_follow_the_spec() {
     let mut runtime = runtime();
     assert_eq!(
