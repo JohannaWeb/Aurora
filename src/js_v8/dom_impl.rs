@@ -819,6 +819,50 @@ impl DocumentMembers for Dom {
     fn get_elements_by_class_name(_: Scope, _: &Rc<NodeRegistry>, this: &NodePtr, names: String) -> Fallible<Vec<NodePtr>> {
         Ok(elements_by_class_name(this, &names))
     }
+
+    /// <https://html.spec.whatwg.org/multipage/dom.html#dom-document-images>
+    fn images(_: Scope, _: &Rc<NodeRegistry>, this: &NodePtr) -> Fallible<Vec<NodePtr>> {
+        Ok(html_elements(this, |name, _| name == "img"))
+    }
+
+    /// <https://html.spec.whatwg.org/multipage/dom.html#dom-document-embeds>
+    fn embeds(_: Scope, _: &Rc<NodeRegistry>, this: &NodePtr) -> Fallible<Vec<NodePtr>> {
+        Ok(html_elements(this, |name, _| name == "embed"))
+    }
+
+    /// <https://html.spec.whatwg.org/multipage/dom.html#dom-document-plugins>:
+    /// the same elements as `embeds`.
+    fn plugins(_: Scope, _: &Rc<NodeRegistry>, this: &NodePtr) -> Fallible<Vec<NodePtr>> {
+        Ok(html_elements(this, |name, _| name == "embed"))
+    }
+
+    /// <https://html.spec.whatwg.org/multipage/dom.html#dom-document-links>:
+    /// `a` and `area` elements with an `href`.
+    fn links(_: Scope, _: &Rc<NodeRegistry>, this: &NodePtr) -> Fallible<Vec<NodePtr>> {
+        Ok(html_elements(this, |name, el| {
+            matches!(name, "a" | "area") && attribute(el, "href").is_some()
+        }))
+    }
+
+    /// <https://html.spec.whatwg.org/multipage/dom.html#dom-document-forms>
+    fn forms(_: Scope, _: &Rc<NodeRegistry>, this: &NodePtr) -> Fallible<Vec<NodePtr>> {
+        Ok(html_elements(this, |name, _| name == "form"))
+    }
+
+    /// <https://html.spec.whatwg.org/multipage/dom.html#dom-document-scripts>
+    fn scripts(_: Scope, _: &Rc<NodeRegistry>, this: &NodePtr) -> Fallible<Vec<NodePtr>> {
+        Ok(html_elements(this, |name, _| name == "script"))
+    }
+}
+
+/// The document's HTML elements, in tree order, whose local name and element
+/// pass `keep`. Aurora has no element namespaces yet, so an `a` or `script`
+/// inside `<svg>` counts as HTML here too.
+fn html_elements(document: &NodePtr, keep: impl Fn(&str, &NodePtr) -> bool) -> Vec<NodePtr> {
+    let mut all = Vec::new();
+    descendant_elements(document, &mut all);
+    all.retain(|el| !is_svg(el) && keep(&local_name(el), el));
+    all
 }
 
 impl ParentNodeMembers for Dom {
