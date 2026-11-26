@@ -6,7 +6,7 @@
 use super::image_load;
 use super::bindings::{
     CharacterDataMembers, ChildNodeMembers, DocumentMembers, ElementMembers, Error, Fallible,
-    FocusOptions, GetRootNodeOptions, HTMLHyperlinkElementUtilsMembers, HTMLImageElementMembers, HTMLInputElementMembers,
+    FocusOptions, GetRootNodeOptions, HTMLHyperlinkElementUtilsMembers, HTMLImageElementMembers, HTMLInputElementMembers, HTMLScriptElementMembers,
     HTMLOrSVGElementMembers, InnerHTMLMembers, NodeMembers, NodeOrString,
     NonDocumentTypeChildNodeMembers, ParentNodeMembers,
 };
@@ -1404,6 +1404,27 @@ impl HTMLInputElementMembers for Dom {
     }
 }
 
+/// A reflected URL attribute: resolved against the document's URL, the raw
+/// value when it does not parse, and empty without the attribute.
+/// <https://html.spec.whatwg.org/multipage/common-dom-interfaces.html#reflecting-content-attributes-in-idl-attributes>
+fn url_attribute(scope: Scope, this: &NodePtr, name: &str) -> String {
+    let Some(value) = attribute(this, name) else { return String::new() };
+    let resolved = match document_base_url(scope) {
+        Some(base) => base.join(&value).ok(),
+        None => url::Url::parse(&value).ok(),
+    };
+    resolved.map_or(value, String::from)
+}
+
+/// A reflected boolean attribute: present or not.
+fn set_boolean_attribute(registry: &Rc<NodeRegistry>, this: &NodePtr, name: &str, on: bool) {
+    if on {
+        set_attribute(registry, this, name, "");
+    } else {
+        remove_attribute(registry, this, name);
+    }
+}
+
 // --- HTMLImageElement ------------------------------------------------------
 
 impl HTMLImageElementMembers for Dom {
@@ -1419,12 +1440,7 @@ impl HTMLImageElementMembers for Dom {
     /// Reflects `src` as a URL: resolved against the document's URL, or the
     /// raw attribute when it does not parse.
     fn src(scope: Scope, _: &Rc<NodeRegistry>, this: &NodePtr) -> Fallible<String> {
-        let Some(src) = attribute(this, "src") else { return Ok(String::new()) };
-        let resolved = match document_base_url(scope) {
-            Some(base) => base.join(&src).ok(),
-            None => url::Url::parse(&src).ok(),
-        };
-        Ok(resolved.map_or(src, String::from))
+        Ok(url_attribute(scope, this, "src"))
     }
 
     /// Setting the attribute is what makes the renderer load the image.
@@ -1462,6 +1478,63 @@ impl HTMLImageElementMembers for Dom {
     /// Also true for a broken image and without a `src`.
     fn complete(_: Scope, registry: &Rc<NodeRegistry>, this: &NodePtr) -> Fallible<bool> {
         Ok(image_load::complete(registry, this))
+    }
+}
+
+// --- HTMLScriptElement -----------------------------------------------------
+
+impl HTMLScriptElementMembers for Dom {
+    fn src(scope: Scope, _: &Rc<NodeRegistry>, this: &NodePtr) -> Fallible<String> {
+        Ok(url_attribute(scope, this, "src"))
+    }
+
+    fn set_src(_: Scope, registry: &Rc<NodeRegistry>, this: &NodePtr, value: String) -> Fallible<()> {
+        set_attribute(registry, this, "src", &value);
+        Ok(())
+    }
+
+    fn r#type(_: Scope, _: &Rc<NodeRegistry>, this: &NodePtr) -> Fallible<String> {
+        Ok(attribute(this, "type").unwrap_or_default())
+    }
+
+    fn set_type(_: Scope, registry: &Rc<NodeRegistry>, this: &NodePtr, value: String) -> Fallible<()> {
+        set_attribute(registry, this, "type", &value);
+        Ok(())
+    }
+
+    fn r#async(_: Scope, _: &Rc<NodeRegistry>, this: &NodePtr) -> Fallible<bool> {
+        Ok(attribute(this, "async").is_some())
+    }
+
+    fn set_async(_: Scope, registry: &Rc<NodeRegistry>, this: &NodePtr, value: bool) -> Fallible<()> {
+        set_boolean_attribute(registry, this, "async", value);
+        Ok(())
+    }
+
+    fn defer(_: Scope, _: &Rc<NodeRegistry>, this: &NodePtr) -> Fallible<bool> {
+        Ok(attribute(this, "defer").is_some())
+    }
+
+    fn set_defer(_: Scope, registry: &Rc<NodeRegistry>, this: &NodePtr, value: bool) -> Fallible<()> {
+        set_boolean_attribute(registry, this, "defer", value);
+        Ok(())
+    }
+
+    /// <https://html.spec.whatwg.org/multipage/urls-and-fetching.html#cors-settings-attributes>:
+    /// null without the attribute, else one of the two keywords, with
+    /// `anonymous` for an empty or unknown value.
+    fn cross_origin(_: Scope, _: &Rc<NodeRegistry>, this: &NodePtr) -> Fallible<Option<String>> {
+        Ok(attribute(this, "crossorigin").map(|value| {
+            if value.eq_ignore_ascii_case("use-credentials") { "use-credentials" } else { "anonymous" }.to_string()
+        }))
+    }
+
+    fn set_cross_origin(_: Scope, registry: &Rc<NodeRegistry>, this: &NodePtr, value: Option<String>) -> Fallible<()> {
+        match value {
+            Some(value) => set_attribute(registry, this, "crossorigin", &value),
+            None => remove_attribute(registry, this, "crossorigin"),
+        }
+        Ok(())
     }
 }
 

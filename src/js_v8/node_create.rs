@@ -102,10 +102,16 @@ pub(super) fn create_js_node<'s>(
             let hyperlink = matches!(el.tag_name.to_ascii_lowercase().as_str(), "a" | "area");
             // `<input>` gets `value` from HTMLInputElement.prototype.
             let input = el.tag_name.eq_ignore_ascii_case("input");
-            // `<img>` gets `src` from HTMLImageElement.prototype.
+            // `<img>` gets `src` from HTMLImageElement.prototype, `<script>`
+            // `src` and `type` from HTMLScriptElement.prototype.
             let image = el.tag_name.eq_ignore_ascii_case("img");
+            let script = el.tag_name.eq_ignore_ascii_case("script");
             for attr in ["href", "src", "type", "name", "value"] {
-                if (hyperlink && attr == "href") || (input && attr == "value") || (image && attr == "src") {
+                if (hyperlink && attr == "href")
+                    || (input && attr == "value")
+                    || (image && attr == "src")
+                    || (script && matches!(attr, "src" | "type"))
+                {
                     continue;
                 }
                 let val = el.attributes.get(attr).cloned().unwrap_or_default();
