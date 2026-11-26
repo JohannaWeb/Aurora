@@ -407,10 +407,12 @@ fn paint_content_layer(app: &mut AuroraApp, scene: &mut Scene, width: u32, heigh
     );
     let mut content_scene = Scene::new();
     if let Some(blitz_doc) = app.input().blitz_doc.as_ref().cloned() {
-        let paint_result =
-            blitz_doc
-                .borrow_mut()
-                .paint_to_scene(&mut content_scene, width, content_height);
+        let scroll_y = app.tab().scroll_y;
+        let paint_result = {
+            let mut blitz_doc = blitz_doc.borrow_mut();
+            blitz_doc.set_scroll_y(scroll_y);
+            blitz_doc.paint_to_scene(&mut content_scene, width, content_height)
+        };
         match paint_result {
             PaintResult::PaintedCurrentFrame => {
                 app.tab_mut().frame_cache.record_successful_paint(
@@ -433,7 +435,7 @@ fn paint_content_layer(app: &mut AuroraApp, scene: &mut Scene, width: u32, heigh
     }
     scene.append(
         &content_scene,
-        Some(Affine::translate((0.0, content_top - app.tab().scroll_y))),
+        Some(Affine::translate((0.0, content_top))),
     );
     scene.pop_layer();
 }
