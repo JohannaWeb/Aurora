@@ -79,7 +79,7 @@ fn collect_script(
 /// `module` is excluded deliberately — Aurora's runtime has no ES module
 /// loader, and running module source through the classic-script evaluator just
 /// fails on `import`/`export` syntax.
-fn is_classic_script_type(type_attr: Option<&str>) -> bool {
+pub(crate) fn is_classic_script_type(type_attr: Option<&str>) -> bool {
     let Some(raw) = type_attr else { return true };
     let trimmed = raw.trim();
     if trimmed.is_empty() {

@@ -4,6 +4,7 @@
 //! argument per WebIDL by the time these run.
 
 use super::image_load;
+use super::script_load;
 use super::bindings::{
     CharacterDataMembers, ChildNodeMembers, DocumentMembers, ElementMembers, Error, Fallible,
     FocusOptions, GetRootNodeOptions, HTMLHyperlinkElementUtilsMembers, HTMLImageElementMembers, HTMLInputElementMembers, HTMLScriptElementMembers,
@@ -1546,11 +1547,13 @@ impl HTMLScriptElementMembers for Dom {
         Ok(())
     }
 
-    fn r#async(_: Scope, _: &Rc<NodeRegistry>, this: &NodePtr) -> Fallible<bool> {
-        Ok(attribute(this, "async").is_some())
+    /// True for a script-created script until `async` is set to false.
+    fn r#async(_: Scope, registry: &Rc<NodeRegistry>, this: &NodePtr) -> Fallible<bool> {
+        Ok(script_load::is_async(registry, this))
     }
 
     fn set_async(_: Scope, registry: &Rc<NodeRegistry>, this: &NodePtr, value: bool) -> Fallible<()> {
+        script_load::async_set(registry, this);
         set_boolean_attribute(registry, this, "async", value);
         Ok(())
     }

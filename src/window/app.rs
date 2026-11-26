@@ -196,12 +196,12 @@ impl AuroraApp {
             .runtime
             .as_ref()
             .and_then(|runtime| {
-                // Nothing wakes the window when an image arrives, so look
-                // again next frame while one is loading.
-                let image = runtime
-                    .has_pending_images()
+                // Nothing wakes the window when an image or script arrives,
+                // so look again next frame while one is loading.
+                let load = runtime
+                    .has_pending_loads()
                     .then(|| crate::clock::now() + Duration::from_millis(16));
-                [runtime.next_deadline(), image].into_iter().flatten().min()
+                [runtime.next_deadline(), load].into_iter().flatten().min()
             })
     }
 

@@ -386,15 +386,19 @@
         return (allowed ? 0 : 1) | (editable ? 2 : 0);
     };
 
-    // An image finished loading (`loaded` 1) or failed (0).
-    globalThis.__aurora_fire_image_event__ = function(img, loaded) {
+    // An image or script finished loading (`loaded` 1) or failed (0).
+    globalThis.__aurora_fire_load_event__ = function(el, loaded) {
         var type = loaded ? 'load' : 'error';
         var event = new Event(type, { bubbles: false, cancelable: false });
         event.isTrusted = true;
-        img.dispatchEvent(event);
+        el.dispatchEvent(event);
         // EventTarget here does not know about event handler properties.
-        var handler = img['on' + type];
-        if (typeof handler === 'function') handler.call(img, event);
+        var handler = el['on' + type];
+        if (typeof handler === 'function') handler.call(el, event);
+    };
+
+    globalThis.__aurora_set_current_script__ = function(script) {
+        document.currentScript = script;
     };
 
     // Size and position getters backed by layout (`__aurora_metric__`).

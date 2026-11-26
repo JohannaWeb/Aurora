@@ -1,6 +1,7 @@
 use super::*;
 use crate::js_v8::form_associated;
 use crate::js_v8::image_load;
+use crate::js_v8::script_load;
 use crate::js_v8::mutation_observer;
 use crate::js_v8::registry::NodeRegistry;
 use crate::window::SnapshotRebuildReason;
@@ -159,6 +160,7 @@ pub(crate) fn apply_dom_mutation(
             enqueue_reactions_for_move(registry, child);
             append_child_ptr(parent, child);
             enqueue_connected_reactions(registry, &inserted_nodes);
+            script_load::inserted(registry, &inserted_nodes);
             let render_synced =
                 sync_inserted_nodes_to_render_document(registry, parent, &inserted_nodes);
             if render_synced {
@@ -181,6 +183,7 @@ pub(crate) fn apply_dom_mutation(
             enqueue_reactions_for_move(registry, child);
             prepend_child_ptr(parent, child);
             enqueue_connected_reactions(registry, &inserted_nodes);
+            script_load::inserted(registry, &inserted_nodes);
             let render_synced =
                 sync_inserted_nodes_to_render_document(registry, parent, &inserted_nodes);
             if render_synced {
@@ -207,6 +210,7 @@ pub(crate) fn apply_dom_mutation(
             enqueue_reactions_for_move(registry, new_child);
             insert_before_ptr(parent, new_child, ref_child);
             enqueue_connected_reactions(registry, &inserted_nodes);
+            script_load::inserted(registry, &inserted_nodes);
             let render_synced =
                 sync_inserted_nodes_to_render_document(registry, parent, &inserted_nodes);
             if render_synced {
@@ -258,6 +262,7 @@ pub(crate) fn apply_dom_mutation(
             enqueue_reactions_for_move(registry, new_child);
             replace_child_ptr(parent, new_child, old_child);
             enqueue_connected_reactions(registry, &inserted_nodes);
+            script_load::inserted(registry, &inserted_nodes);
             let render_synced = sync_removed_node_from_render_document(registry, old_child)
                 && sync_inserted_nodes_to_render_document(registry, parent, &inserted_nodes);
             if render_synced {
@@ -292,6 +297,7 @@ pub(crate) fn apply_dom_mutation(
                 form_associated::sync_after_attribute_change(registry, node, name);
                 if name == "src" {
                     image_load::src_changed(registry, node);
+                    script_load::src_set(registry, node);
                 }
                 registry.mark_style_dirty(node);
                 let render_synced = registry.sync_attribute_to_render_document(node, name, value);
@@ -438,6 +444,7 @@ pub(crate) fn apply_dom_mutation(
             if changed {
                 crate::dom::reparent_subtree(node);
                 enqueue_connected_reactions(registry, &new_children);
+                script_load::inserted(registry, &new_children);
                 render_synced = registry.sync_children_to_render_document(node);
                 if !render_synced {
                     schedule_sync_failure(registry);
