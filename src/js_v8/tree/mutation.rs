@@ -1,5 +1,6 @@
 use super::*;
 use crate::js_v8::form_associated;
+use crate::js_v8::image_load;
 use crate::js_v8::mutation_observer;
 use crate::js_v8::registry::NodeRegistry;
 use crate::window::SnapshotRebuildReason;
@@ -289,6 +290,9 @@ pub(crate) fn apply_dom_mutation(
                     Some(value.to_string()),
                 );
                 form_associated::sync_after_attribute_change(registry, node, name);
+                if name == "src" {
+                    image_load::src_changed(registry, node);
+                }
                 registry.mark_style_dirty(node);
                 let render_synced = registry.sync_attribute_to_render_document(node, name, value);
                 if render_synced {
@@ -321,6 +325,9 @@ pub(crate) fn apply_dom_mutation(
                 if old_value.is_some() {
                     enqueue_attribute_changed_reaction(registry, node, name, old_value, None);
                     form_associated::sync_after_attribute_change(registry, node, name);
+                    if name == "src" {
+                        image_load::src_changed(registry, node);
+                    }
                 }
                 registry.mark_style_dirty(node);
                 let render_synced = registry.sync_remove_attribute_from_render_document(node, name);

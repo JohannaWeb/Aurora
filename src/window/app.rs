@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use vello::kurbo::Affine;
 use vello::peniko::{Color, Fill};
 use vello::util::{RenderContext, RenderSurface};
@@ -153,11 +153,13 @@ impl AuroraApp {
 
     pub(super) fn run_frame_tasks(&mut self) -> bool {
         let now = crate::clock::now();
+        let scroll_y = self.tab().scroll_y;
         let input = self.input_mut();
         let mut needs_reflow = input.needs_reflow;
         let mut runtime_dirtied_blitz = false;
 
         if let Some(runtime) = input.runtime.as_mut() {
+            runtime.set_scroll_position(0.0, scroll_y);
             let runtime_needs_reflow = runtime.tick(now)
                 | runtime.drain_animation_frame_callbacks(now)
                 | runtime.deliver_mutation_records()
@@ -193,7 +195,14 @@ impl AuroraApp {
         self.input()
             .runtime
             .as_ref()
-            .and_then(|runtime| runtime.next_deadline())
+            .and_then(|runtime| {
+                // Nothing wakes the window when an image arrives, so look
+                // again next frame while one is loading.
+                let image = runtime
+                    .has_pending_images()
+                    .then(|| crate::clock::now() + Duration::from_millis(16));
+                [runtime.next_deadline(), image].into_iter().flatten().min()
+            })
     }
 
     pub(super) fn has_animation_frame_callbacks(&self) -> bool {

@@ -42,6 +42,15 @@ pub(super) struct NodeRegistry {
     /// Current values of `<input>` elements whose value was set or edited
     /// (HTML's "dirty value"), by node id; others show their `value` attribute.
     pub(super) input_values: RefCell<BTreeMap<u32, String>>,
+    /// How far the viewport is scrolled, in CSS pixels.
+    pub(super) scroll: std::cell::Cell<(f64, f64)>,
+    /// The layout and scroll position intersections were last checked at;
+    /// `None` after an `observe()`.
+    pub(super) intersections_checked: std::cell::Cell<Option<(u64, (f64, f64))>>,
+    /// Whether script has ever observed an intersection.
+    pub(super) observes_intersections: std::cell::Cell<bool>,
+    /// Images script set `src` on or asked about, by node id.
+    pub(super) images: RefCell<BTreeMap<u32, super::image_load::ImageState>>,
     /// A navigation requested by script (location, form submission), for the
     /// window to perform.
     pub(super) pending_navigation: RefCell<Option<String>>,
@@ -78,6 +87,10 @@ impl NodeRegistry {
             ce_registry: super::custom_elements::CeRegistry::default(),
             focused: RefCell::new(None),
             input_values: RefCell::new(BTreeMap::new()),
+            scroll: std::cell::Cell::new((0.0, 0.0)),
+            intersections_checked: std::cell::Cell::new(None),
+            observes_intersections: std::cell::Cell::new(false),
+            images: RefCell::new(BTreeMap::new()),
             pending_navigation: RefCell::new(None),
             native_ce_reactions: std::cell::Cell::new(native_ce_reactions_default(
                 std::env::var("AURORA_NATIVE_CE_REACTIONS").ok().as_deref(),
@@ -389,6 +402,38 @@ impl NodeRegistry {
     ) -> Option<crate::blitz_document::LayoutMetrics> {
         let render_document = self.render_document.borrow().as_ref().cloned()?;
         render_document.borrow().dom_node_layout_metrics(node)
+    }
+
+    /// Whether stylesheets still hold back rendering.
+    pub(super) fn is_render_blocked(&self) -> bool {
+        let render_document = self.render_document.borrow().as_ref().cloned();
+        render_document.is_some_and(|document| document.borrow().has_pending_critical_resources())
+    }
+
+    pub(super) fn layout_generation(&self) -> Option<u64> {
+        let render_document = self.render_document.borrow().as_ref().cloned()?;
+        let generation = render_document.borrow().layout_generation();
+        Some(generation)
+    }
+
+    pub(super) fn is_rendered(&self, node: &NodePtr) -> bool {
+        let render_document = self.render_document.borrow().as_ref().cloned();
+        render_document.is_some_and(|document| document.borrow().is_rendered(node))
+    }
+
+    /// Starts loading an image for script to observe; `None` without a render
+    /// document.
+    pub(super) fn load_image(&self, src: &str) -> Option<crate::blitz_document::ImageLoad> {
+        let render_document = self.render_document.borrow().as_ref().cloned()?;
+        let load = render_document.borrow().load_image(src);
+        Some(load)
+    }
+
+    /// The viewport size in CSS pixels, without a render document `None`.
+    pub(super) fn viewport_size(&self) -> Option<(f32, f32)> {
+        let render_document = self.render_document.borrow().as_ref().cloned()?;
+        let size = render_document.borrow().viewport_css_size();
+        Some(size)
     }
 
     pub(super) fn sync_shadow_root_to_render_document(

@@ -386,6 +386,95 @@
         return (allowed ? 0 : 1) | (editable ? 2 : 0);
     };
 
+    // An image finished loading (`loaded` 1) or failed (0).
+    globalThis.__aurora_fire_image_event__ = function(img, loaded) {
+        var type = loaded ? 'load' : 'error';
+        var event = new Event(type, { bubbles: false, cancelable: false });
+        event.isTrusted = true;
+        img.dispatchEvent(event);
+        // EventTarget here does not know about event handler properties.
+        var handler = img['on' + type];
+        if (typeof handler === 'function') handler.call(img, event);
+    };
+
+    // Size and position getters backed by layout (`__aurora_metric__`).
+    function installMetrics(el) {
+        if (el.__aurora_metric_fallbacks__) return;
+        try {
+            Object.defineProperty(el, '__aurora_metric_fallbacks__', {
+                value: true,
+                configurable: true
+            });
+        } catch (e) {
+            el.__aurora_metric_fallbacks__ = true;
+        }
+        var isCustomElement = function() {
+            try {
+                var name = el.localName || '';
+                return name.indexOf('-') >= 0;
+            } catch (e) {
+                return false;
+            }
+        };
+        var connected = function() {
+            try { return el.isConnected === true; } catch (e) { return false; }
+        };
+        var widthFallback = function() {
+            if (!isCustomElement() || !connected()) return 0;
+            var parent = null;
+            try { parent = el.parentElement || el.parentNode || null; } catch (e) {}
+            if (parent && parent !== el) {
+                try {
+                    var parentWidth = Number(parent.clientWidth || parent.offsetWidth || 0);
+                    if (parentWidth > 0) return parentWidth;
+                } catch (e2) {}
+            }
+            return Number(globalThis.innerWidth || 0);
+        };
+        var heightFallback = function() {
+            if (!isCustomElement() || !connected()) return 0;
+            return Number(globalThis.innerHeight || 0);
+        };
+        function metric(name, fallback) {
+            var value = 0;
+            try { value = Number(el[name] || 0); } catch (e) {}
+            try {
+                Object.defineProperty(el, name, {
+                    configurable: true,
+                    enumerable: true,
+                    get: function() {
+                        // Phase 8.2: prefer the real Blitz/Stylo rendered box
+                        // size; fall back to any set value, then the heuristic
+                        // (used only for unlaid-out / collapsed elements).
+                        var native = 0;
+                        try {
+                            if (typeof el.__aurora_metric__ === 'function') {
+                                native = Number(el.__aurora_metric__(name) || 0);
+                            }
+                        } catch (e) {}
+                        return native || value || fallback();
+                    },
+                    set: function(next) {
+                        value = Number(next || 0);
+                    }
+                });
+            } catch (e) {}
+        }
+        var zeroFallback = function() { return 0; };
+        metric('clientWidth', widthFallback);
+        metric('offsetWidth', widthFallback);
+        metric('scrollWidth', widthFallback);
+        metric('clientHeight', heightFallback);
+        metric('offsetHeight', heightFallback);
+        metric('scrollHeight', heightFallback);
+        // Position accessors read the Blitz/Stylo box origin (document-
+        // relative) via the same native bridge; __aurora_metric__ maps
+        // offsetTop→y and offsetLeft→x. scrollTop/scrollLeft stay plain
+        // settable data properties (element scroll offset, 0 until scrolled).
+        metric('offsetTop', zeroFallback);
+        metric('offsetLeft', zeroFallback);
+    }
+
     // Element decoration — called from the native bridge for every element
     // wrapper. Installs per-element JS APIs that are simpler here than native.
     globalThis.__aurora_decorate_element__ = function(el) {
@@ -410,81 +499,7 @@
             el.removeEventListener = EventTarget.prototype.removeEventListener;
             el.dispatchEvent = EventTarget.prototype.dispatchEvent;
         }
-        if (!el.__aurora_metric_fallbacks__) {
-            try {
-                Object.defineProperty(el, '__aurora_metric_fallbacks__', {
-                    value: true,
-                    configurable: true
-                });
-            } catch (e) {
-                el.__aurora_metric_fallbacks__ = true;
-            }
-            var isCustomElement = function() {
-                try {
-                    var name = el.localName || '';
-                    return name.indexOf('-') >= 0;
-                } catch (e) {
-                    return false;
-                }
-            };
-            var connected = function() {
-                try { return el.isConnected === true; } catch (e) { return false; }
-            };
-            var widthFallback = function() {
-                if (!isCustomElement() || !connected()) return 0;
-                var parent = null;
-                try { parent = el.parentElement || el.parentNode || null; } catch (e) {}
-                if (parent && parent !== el) {
-                    try {
-                        var parentWidth = Number(parent.clientWidth || parent.offsetWidth || 0);
-                        if (parentWidth > 0) return parentWidth;
-                    } catch (e2) {}
-                }
-                return Number(globalThis.innerWidth || 0);
-            };
-            var heightFallback = function() {
-                if (!isCustomElement() || !connected()) return 0;
-                return Number(globalThis.innerHeight || 0);
-            };
-            function metric(name, fallback) {
-                var value = 0;
-                try { value = Number(el[name] || 0); } catch (e) {}
-                try {
-                    Object.defineProperty(el, name, {
-                        configurable: true,
-                        enumerable: true,
-                        get: function() {
-                            // Phase 8.2: prefer the real Blitz/Stylo rendered box
-                            // size; fall back to any set value, then the heuristic
-                            // (used only for unlaid-out / collapsed elements).
-                            var native = 0;
-                            try {
-                                if (typeof el.__aurora_metric__ === 'function') {
-                                    native = Number(el.__aurora_metric__(name) || 0);
-                                }
-                            } catch (e) {}
-                            return native || value || fallback();
-                        },
-                        set: function(next) {
-                            value = Number(next || 0);
-                        }
-                    });
-                } catch (e) {}
-            }
-            var zeroFallback = function() { return 0; };
-            metric('clientWidth', widthFallback);
-            metric('offsetWidth', widthFallback);
-            metric('scrollWidth', widthFallback);
-            metric('clientHeight', heightFallback);
-            metric('offsetHeight', heightFallback);
-            metric('scrollHeight', heightFallback);
-            // Position accessors read the Blitz/Stylo box origin (document-
-            // relative) via the same native bridge; __aurora_metric__ maps
-            // offsetTop→y and offsetLeft→x. scrollTop/scrollLeft stay plain
-            // settable data properties (element scroll offset, 0 until scrolled).
-            metric('offsetTop', zeroFallback);
-            metric('offsetLeft', zeroFallback);
-        }
+        installMetrics(el);
         el.animate = function() {
             var anim = {
                 playState: 'finished', currentTime: 0, startTime: 0,
@@ -706,6 +721,11 @@
     if (typeof document.elementFromPoint !== 'function') {
         document.elementFromPoint = function() { return null; };
     }
+    // The document's own elements get their wrappers before
+    // __aurora_decorate_element__ exists, so they need these separately.
+    [document.documentElement, document.head, document.body].forEach(function(el) {
+        if (el) installMetrics(el);
+    });
     document.scrollingElement = document.documentElement || null;
     document.location = globalThis.location;
 

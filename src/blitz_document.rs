@@ -15,10 +15,95 @@ use std::panic::{self, AssertUnwindSafe};
 use std::rc::Rc;
 use std::sync::{Mutex, OnceLock, PoisonError};
 
-static NET_CACHE: OnceLock<Mutex<BTreeMap<String, Vec<u8>>>> = OnceLock::new();
+/// A requested resource: either on its way, with the callbacks waiting for
+/// it, or here. A failed request is kept as empty bytes.
+enum NetEntry {
+    InFlight(Vec<NetCallback>),
+    Done(Bytes),
+}
 
-fn get_net_cache() -> &'static Mutex<BTreeMap<String, Vec<u8>>> {
-    NET_CACHE.get_or_init(|| Mutex::new(BTreeMap::new()))
+type NetCallback = Box<dyn FnOnce(Bytes) + Send>;
+
+static NET_CACHE: OnceLock<Mutex<BTreeMap<String, NetEntry>>> = OnceLock::new();
+
+fn net_cache() -> std::sync::MutexGuard<'static, BTreeMap<String, NetEntry>> {
+    NET_CACHE
+        .get_or_init(|| Mutex::new(BTreeMap::new()))
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+}
+
+/// Calls `done` with the resource's bytes (empty if it failed), right away if
+/// they are cached. Concurrent requests for one URL share a single fetch.
+fn request_bytes(url: String, identity: &Identity, done: NetCallback) {
+    {
+        let mut cache = net_cache();
+        match cache.get_mut(&url) {
+            Some(NetEntry::Done(bytes)) => {
+                let bytes = bytes.clone();
+                drop(cache);
+                done(bytes);
+                return;
+            }
+            Some(NetEntry::InFlight(waiting)) => {
+                waiting.push(done);
+                return;
+            }
+            None => {
+                cache.insert(url.clone(), NetEntry::InFlight(vec![done]));
+            }
+        }
+    }
+    let identity = identity.clone();
+    let fetch = move || {
+        let bytes = Bytes::from(crate::fetch::fetch_bytes(&url, &identity).unwrap_or_else(|e| {
+            eprintln!("blitz fetch: {url}: {e}");
+            Vec::new()
+        }));
+        let previous = net_cache().insert(url, NetEntry::Done(bytes.clone()));
+        if let Some(NetEntry::InFlight(waiting)) = previous {
+            for done in waiting {
+                done(bytes.clone());
+            }
+        }
+    };
+    // Script can observe when resources arrive, so a replay must not depend
+    // on how fast a thread is. Its bytes come from disk.
+    if crate::fetch::replay::start_time_ms().is_some() {
+        fetch();
+    } else {
+        std::thread::spawn(fetch);
+    }
+}
+
+/// How an image load ended: its natural size, or `None` if it failed.
+type ImageOutcome = Option<(u32, u32)>;
+
+/// An image load script can observe.
+#[derive(Clone)]
+pub struct ImageLoad(std::sync::Arc<Mutex<Option<ImageOutcome>>>);
+
+impl ImageLoad {
+    /// `None` while loading.
+    pub fn outcome(&self) -> Option<ImageOutcome> {
+        *self.0.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    pub fn is_finished(&self) -> bool {
+        self.outcome().is_some()
+    }
+}
+
+/// The size an encoded raster or SVG image declares.
+fn encoded_image_size(bytes: &[u8]) -> Option<(u32, u32)> {
+    let raster = image::ImageReader::new(std::io::Cursor::new(bytes))
+        .with_guessed_format()
+        .ok()
+        .and_then(|reader| reader.into_dimensions().ok());
+    raster.or_else(|| {
+        let size = usvg::Tree::from_data(bytes, &usvg::Options::default()).ok()?.size();
+        Some((size.width().round() as u32, size.height().round() as u32))
+    })
 }
 
 struct AuroraNetProvider {
@@ -36,34 +121,8 @@ impl AuroraNetProvider {
 impl NetProvider for AuroraNetProvider {
     fn fetch(&self, _doc_id: usize, request: Request, handler: Box<dyn NetHandler>) {
         let url = request.url.to_string();
-        let identity = self.identity.clone();
-
-        // Check cache first
-        let cache = get_net_cache();
-        if let Some(cached_bytes) = cache
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .get(&url)
-        {
-            handler.bytes(url, Bytes::from(cached_bytes.clone()));
-            return;
-        }
-
-        std::thread::spawn(move || {
-            let bytes = match crate::fetch::fetch_bytes(&url, &identity) {
-                Ok(b) => b,
-                Err(e) => {
-                    eprintln!("blitz fetch: {url}: {e}");
-                    Vec::new()
-                }
-            };
-
-            // Save to cache
-            let cache = get_net_cache();
-            cache.lock().unwrap().insert(url.clone(), bytes.clone());
-
-            handler.bytes(url, Bytes::from(bytes));
-        });
+        let resolved = url.clone();
+        request_bytes(url, &self.identity, Box::new(move |bytes| handler.bytes(resolved, bytes)));
     }
 }
 
@@ -196,6 +255,10 @@ pub enum PaintResult {
 
 pub struct BlitzDocument {
     inner: BaseDocument,
+    identity: Identity,
+    base_url: Option<url::Url>,
+    /// Counts successful layouts, so others can tell when geometry may have changed.
+    layout_generation: u64,
     healthy: bool,
     consecutive_panics: u32,
     next_mirror_op_id: u64,
@@ -232,6 +295,9 @@ impl BlitzDocument {
             let inner = HtmlDocument::from_html(html, config).into_inner();
             BlitzDocument {
                 inner,
+                identity: identity.clone(),
+                base_url: base_url.and_then(|url| url::Url::parse(url).ok()),
+                layout_generation: 0,
                 healthy: true,
                 consecutive_panics: 0,
                 next_mirror_op_id: 1,
@@ -269,6 +335,9 @@ impl BlitzDocument {
             }
             BlitzDocument {
                 inner,
+                identity: identity.clone(),
+                base_url: base_url.and_then(|url| url::Url::parse(url).ok()),
+                layout_generation: 0,
                 healthy: true,
                 consecutive_panics: 0,
                 next_mirror_op_id: 1,
@@ -796,6 +865,55 @@ impl BlitzDocument {
             }
             node_id = self.inner.get_node(node_id)?.parent?;
         }
+    }
+
+    pub fn layout_generation(&self) -> u64 {
+        self.layout_generation
+    }
+
+    /// Whether `node` is in the render tree and neither it nor an ancestor is
+    /// `display: none`.
+    pub fn is_rendered(&self, node: &NodePtr) -> bool {
+        let mut current = self.blitz_node_id_for_dom(node);
+        if current.is_none() {
+            return false;
+        }
+        while let Some(id) = current {
+            let Some(blitz_node) = self.inner.get_node(id) else { return false };
+            if blitz_node.is_element() && blitz_node.primary_styles().is_none_or(|style| style.clone_display().is_none()) {
+                return false;
+            }
+            current = blitz_node.parent;
+        }
+        true
+    }
+
+    /// The viewport layout runs against, in CSS pixels.
+    pub fn viewport_css_size(&self) -> (f32, f32) {
+        self.inner.viewport().logical_size()
+    }
+
+    /// Loads the image at `src`, resolved against the document's URL, through
+    /// the cache the renderer uses.
+    pub fn load_image(&self, src: &str) -> ImageLoad {
+        let url = match &self.base_url {
+            Some(base) => base.join(src),
+            None => url::Url::parse(src),
+        };
+        let load = ImageLoad(Default::default());
+        let Ok(url) = url else {
+            *load.0.lock().unwrap_or_else(PoisonError::into_inner) = Some(None);
+            return load;
+        };
+        let result = load.clone();
+        request_bytes(
+            url.into(),
+            &self.identity,
+            Box::new(move |bytes| {
+                *result.0.lock().unwrap_or_else(PoisonError::into_inner) = Some(encoded_image_size(&bytes));
+            }),
+        );
+        load
     }
 
     pub fn document_height(&self) -> f32 {
@@ -1474,6 +1592,7 @@ impl BlitzDocument {
             .is_some()
         };
         if resolved {
+            self.layout_generation += 1;
             self.healthy = true;
             self.consecutive_panics = 0;
         } else {

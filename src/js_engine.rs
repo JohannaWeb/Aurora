@@ -142,6 +142,15 @@ pub(crate) trait JsRuntime {
         false
     }
 
+    /// How far the window has scrolled the page, in CSS pixels.
+    fn set_scroll_position(&mut self, _x: f64, _y: f64) {}
+
+    /// Whether an image load script can observe is still in flight; the next
+    /// `tick` after it arrives fires its event.
+    fn has_pending_images(&self) -> bool {
+        false
+    }
+
     fn dispatch_event(&mut self, node: &NodePtr, event_type: &str) -> bool;
 
     /// A primary-button click on `node` at viewport coordinates: the pointer

@@ -505,6 +505,35 @@ fn element_identity_is_on_the_prototype() {
 }
 
 #[test]
+fn script_elements_reflect_their_attributes() {
+    let mut runtime = runtime();
+    runtime.eval_to_string("location.href = 'https://example.com/dir/page'").unwrap();
+    assert_eq!(
+        runtime.eval_to_string(
+            r#"(() => {
+        const s = document.createElement('script');
+        const own = ['src', 'type', 'async', 'defer', 'crossOrigin']
+            .filter(n => Object.prototype.hasOwnProperty.call(s, n));
+        const out = [own.join(","), JSON.stringify(s.src), String(s.crossOrigin)];
+        s.src = 'a.js';
+        s.type = 'module';
+        s.defer = true;
+        out.push(s.getAttribute('src'), s.src, s.getAttribute('type'), s.hasAttribute('defer'));
+        s.defer = false;
+        s.setAttribute('crossorigin', 'bogus');
+        out.push(s.hasAttribute('defer'), s.crossOrigin);
+        s.crossOrigin = 'USE-CREDENTIALS';
+        out.push(s.crossOrigin);
+        s.crossOrigin = null;
+        out.push(s.hasAttribute('crossorigin'));
+        return out.join('|');
+    })()"#
+        ),
+        Ok("|\"\"|null|a.js|https://example.com/dir/a.js|module|true|false|anonymous|use-credentials|false".to_string())
+    );
+}
+
+#[test]
 fn selector_queries_are_generated_and_spec_shaped() {
     let mut runtime = runtime();
     assert_eq!(

@@ -14,6 +14,7 @@ mod dom_impl;
 mod custom_elements;
 mod determinism;
 mod form_associated;
+mod image_load;
 mod mutation_observer;
 mod node_create;
 mod registry;

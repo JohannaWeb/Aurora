@@ -102,8 +102,16 @@ pub(super) fn create_js_node<'s>(
             let hyperlink = matches!(el.tag_name.to_ascii_lowercase().as_str(), "a" | "area");
             // `<input>` gets `value` from HTMLInputElement.prototype.
             let input = el.tag_name.eq_ignore_ascii_case("input");
+            // `<img>` gets `src` from HTMLImageElement.prototype, `<script>`
+            // `src` and `type` from HTMLScriptElement.prototype.
+            let image = el.tag_name.eq_ignore_ascii_case("img");
+            let script = el.tag_name.eq_ignore_ascii_case("script");
             for attr in ["href", "src", "type", "name", "value"] {
-                if (hyperlink && attr == "href") || (input && attr == "value") {
+                if (hyperlink && attr == "href")
+                    || (input && attr == "value")
+                    || (image && attr == "src")
+                    || (script && matches!(attr, "src" | "type"))
+                {
                     continue;
                 }
                 let val = el.attributes.get(attr).cloned().unwrap_or_default();
@@ -1234,6 +1242,14 @@ fn get_client_rects(
     }
 }
 
+/// Whether `node` is the document element (`<html>` directly in a document).
+fn is_root_element(node: &NodePtr) -> bool {
+    let is_html = matches!(&*node.borrow(), Node::Element(el) if el.tag_name.eq_ignore_ascii_case("html"));
+    is_html
+        && crate::dom::parent_ptr(node)
+            .is_some_and(|parent| matches!(&*parent.borrow(), Node::Document { .. }))
+}
+
 /// Native bridge used by v8_post.js metric getters: returns the requested box
 /// metric from Blitz/Stylo layout, or 0 when the node is not laid out (so the
 /// JS fallback heuristic can take over).
@@ -1246,6 +1262,20 @@ fn get_layout_metric(
         return;
     };
     let name = args.get(0).to_rust_string_lossy(scope);
+    // The root element's client size is the viewport, not its box.
+    // <https://drafts.csswg.org/cssom-view/#dom-element-clientwidth>
+    if matches!(name.as_str(), "clientWidth" | "clientHeight") && is_root_element(&node_data.node) {
+        if let Some((width, height)) = node_data.registry.viewport_size() {
+            let value = if name == "clientWidth" { width } else { height };
+            retval.set(v8::Number::new(scope, value as f64).into());
+            return;
+        }
+    }
+    if name == "rendered" {
+        let rendered = node_data.registry.is_rendered(&node_data.node);
+        retval.set(v8::Integer::new(scope, rendered.into()).into());
+        return;
+    }
     let value = match node_data.registry.layout_metrics(&node_data.node) {
         Some(m) => match name.as_str() {
             "offsetWidth" | "clientWidth" | "scrollWidth" => m.width,
