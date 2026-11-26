@@ -205,7 +205,7 @@ fn image_loads_fire_load_and_error() {
         )
         .unwrap();
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-    while runtime.has_pending_images() && std::time::Instant::now() < deadline {
+    while runtime.has_pending_loads() && std::time::Instant::now() < deadline {
         runtime.tick(crate::clock::now());
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
@@ -264,5 +264,57 @@ fn intersection_observer_follows_layout_and_scrolling() {
             "['intersectionRatio' in IntersectionObserverEntry.prototype, observer.rootMargin, observer.thresholds.join()].join('|')"
         ),
         Ok("true|0px 0px 0px 0px|0,0.5".into())
+    );
+}
+
+#[test]
+fn inserted_scripts_run_in_order_and_fire_load() {
+    let dom = blank_dom();
+    let render_doc = Rc::new(RefCell::new(
+        BlitzDocument::try_from_dom(&dom, None, &test_identity(), 800, 600).unwrap(),
+    ));
+    let mut runtime = V8Runtime::with_render_document(dom, Some(render_doc));
+    runtime
+        .execute(
+            r#"
+        var log = [];
+        function js(code) { return 'data:text/javascript,' + encodeURIComponent(code); }
+        function add(name, src, ordered) {
+            var s = document.createElement('script');
+            log.push(name + ' async ' + s.async);
+            if (ordered) s.async = false;
+            s.addEventListener('load', function(e) { log.push(name + ' load ' + e.isTrusted); });
+            s.onerror = function() { log.push(name + ' error'); };
+            if (src !== null) s.src = src;
+            document.head.appendChild(s);
+            return s;
+        }
+        add('one', js("log.push('one ran ' + (document.currentScript.id || '-'))"), true).id = 'first';
+        add('two', js("log.push('two ran'); throw new Error('boom')"), true);
+        add('bad', 'nope:', true);
+        add('late', null, true).src = js("log.push('late ran')");
+        var detached = document.createElement('script');
+        detached.src = js("log.push('detached ran')");
+        var box = document.createElement('div');
+        box.innerHTML = '<script src="' + js("log.push('innerHTML ran')") + '"><\/script>';
+        document.body.appendChild(box);
+        log.push('inserted');
+    "#,
+        )
+        .unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while runtime.has_pending_loads() && std::time::Instant::now() < deadline {
+        runtime.tick(crate::clock::now());
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    // Moving a script that ran does not run it again.
+    runtime.execute("document.body.appendChild(document.getElementById('first'))").unwrap();
+    runtime.tick(crate::clock::now());
+    assert_eq!(
+        runtime.eval_to_string("log.join(' | ') + ' | ' + document.currentScript"),
+        Ok("one async true | two async true | bad async true | late async true | inserted \
+            | one ran first | one load true | two ran | two load true | bad error \
+            | late ran | late load true | null"
+            .into())
     );
 }
