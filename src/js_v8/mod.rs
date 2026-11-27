@@ -18,6 +18,7 @@ mod image_load;
 mod script_load;
 mod mutation_observer;
 mod node_create;
+mod performance;
 mod registry;
 mod runtime;
 #[cfg(test)]

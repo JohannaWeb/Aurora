@@ -601,6 +601,8 @@ impl V8Runtime {
                     .into(),
             );
 
+            super::performance::install(scope, global, registry_data);
+
             // [width, height, scrollX, scrollY] of the viewport in CSS pixels.
             let view_fn = v8::FunctionTemplate::builder(viewport_view)
                 .data(registry_data.into())
