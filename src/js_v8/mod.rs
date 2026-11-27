@@ -14,6 +14,7 @@ mod dom_impl;
 mod custom_elements;
 mod determinism;
 mod form_associated;
+mod html_all_collection;
 mod image_load;
 mod script_load;
 mod mutation_observer;
