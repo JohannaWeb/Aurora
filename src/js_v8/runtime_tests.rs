@@ -265,6 +265,37 @@ fn v8_mutation_observer_subtree_observes_descendants() {
 }
 
 #[test]
+fn v8_mutation_observer_delivers_character_data_and_old_values() {
+    let dom = Parser::new("<html><body><div id='host'>hello</div></body></html>").parse_document();
+    let mut runtime = V8Runtime::new(dom);
+    runtime
+        .execute(
+            r#"
+            globalThis.recs = [];
+            const host = document.getElementById('host');
+            const detached = document.createTextNode('init');
+            const mo = new MutationObserver((recs) => {
+                for (const r of recs) {
+                    recs_log = r.type + ':' + r.oldValue + ':' + (r.target === detached ? 'detached' : r.target.nodeName);
+                    globalThis.recs.push(recs_log);
+                }
+            });
+            mo.observe(detached, { characterData: true, characterDataOldValue: true });
+            mo.observe(host, { characterData: true, subtree: true });
+            detached.textContent = '1';
+            detached.data = '2';
+            host.firstChild.data = 'world';
+            "#,
+        )
+        .unwrap();
+    assert!(runtime.deliver_mutation_records());
+    assert_eq!(
+        runtime.eval_to_string("globalThis.recs.join('|')"),
+        Ok("characterData:init:detached|characterData:1:detached|characterData:null:#text".into())
+    );
+}
+
+#[test]
 fn v8_event_target_capture_once_and_remove() {
     // Exercises the JS EventTarget: capture-phase ordering, `once`, and
     // removeEventListener — all on real DOM nodes.

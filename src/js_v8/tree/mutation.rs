@@ -291,7 +291,7 @@ pub(crate) fn apply_dom_mutation(
                     registry,
                     node,
                     name,
-                    old_value,
+                    old_value.clone(),
                     Some(value.to_string()),
                 );
                 form_associated::sync_after_attribute_change(registry, node, name);
@@ -302,7 +302,7 @@ pub(crate) fn apply_dom_mutation(
                 registry.mark_style_dirty(node);
                 let render_synced = registry.sync_attribute_to_render_document(node, name, value);
                 if render_synced {
-                    mutation_observer::queue_attribute(registry, target_id, name);
+                    mutation_observer::queue_attribute(registry, target_id, name, old_value.as_deref());
                 } else {
                     schedule_sync_failure(registry);
                 }
@@ -329,7 +329,7 @@ pub(crate) fn apply_dom_mutation(
                 // Only a real removal (the attribute existed) is an attribute
                 // change for the callback's purposes.
                 if old_value.is_some() {
-                    enqueue_attribute_changed_reaction(registry, node, name, old_value, None);
+                    enqueue_attribute_changed_reaction(registry, node, name, old_value.clone(), None);
                     form_associated::sync_after_attribute_change(registry, node, name);
                     if name == "src" {
                         image_load::src_changed(registry, node);
@@ -338,7 +338,7 @@ pub(crate) fn apply_dom_mutation(
                 registry.mark_style_dirty(node);
                 let render_synced = registry.sync_remove_attribute_from_render_document(node, name);
                 if render_synced {
-                    mutation_observer::queue_attribute(registry, target_id, name);
+                    mutation_observer::queue_attribute(registry, target_id, name, old_value.as_deref());
                 } else {
                     schedule_sync_failure(registry);
                 }
@@ -367,10 +367,12 @@ pub(crate) fn apply_dom_mutation(
                 Element,
                 Unsupported,
             }
+            let mut old_text = None;
             let target = match &mut *node.borrow_mut() {
                 // Setting textContent on a Comment replaces its data, same as
                 // Text; it has no render mirror content to resync beyond that.
                 Node::Text(t) | Node::Comment(t) => {
+                    old_text = Some(t.content.clone());
                     t.content = text.clone();
                     TextTarget::TextNode
                 }
@@ -383,6 +385,11 @@ pub(crate) fn apply_dom_mutation(
             let changed = !matches!(target, TextTarget::Unsupported);
             match target {
                 TextTarget::TextNode => {
+                    mutation_observer::queue_character_data(
+                        registry,
+                        target_id,
+                        old_text.as_deref().unwrap_or_default(),
+                    );
                     render_synced = registry.sync_text_to_render_document(node, &text);
                     if !render_synced {
                         schedule_sync_failure(registry);
