@@ -687,3 +687,55 @@ fn snake_case_member_names() {
     assert_eq!(snake_case("type"), "r#type");
 }
 
+#[test]
+fn document_all_collection_exposes_same_object_and_live_lookups() {
+    let mut runtime = runtime();
+    assert_eq!(
+        runtime.eval_to_string(
+            r#"(() => {
+        const all = document.all;
+        const sameObject = document.all === all;
+        const distinctFromPrimitives =
+            undefined !== all && null !== all && false !== all && '' !== all;
+        const toStringTag = Object.prototype.toString.call(all);
+        const isInstance = all instanceof HTMLAllCollection;
+
+        let ctorErr = '';
+        try { new HTMLAllCollection(); } catch (e) { ctorErr = e.name; }
+        let brandErr = '';
+        try {
+            Object.getOwnPropertyDescriptor(Document.prototype, 'all').get.call({});
+        } catch (e) { brandErr = e.name; }
+        let lengthBrandErr = '';
+        try {
+            Object.getOwnPropertyDescriptor(HTMLAllCollection.prototype, 'length').get.call({});
+        } catch (e) { lengthBrandErr = e.name; }
+
+        const before = all.length;
+        const box = document.createElement('div');
+        box.innerHTML = '<div id="single"></div><img name="hero">'
+            + '<div name="ignored"></div><span id="dup"></span><a id="dup"></a>';
+        document.body.appendChild(box);
+        const after = all.length;
+
+        const spreadMatches = [...all].length === after;
+        const indexedFirst = all[0] === document.documentElement;
+        const itemByIndex = all.item(after - 1).id;
+        const itemOob = all.item(after + 5) === null;
+        const namedSingle = all.single.id + ',' + all.namedItem('hero').localName;
+        const namedIgnored = all.ignored === undefined && all.namedItem('ignored') === null;
+        const namedMultiple = all.dup.length + ',' + all.item('dup').map(e => e.localName).join(':');
+        const emptyArg = all.item() === null && all.namedItem('') === null;
+
+        return [
+            sameObject, distinctFromPrimitives, toStringTag, isInstance,
+            ctorErr, brandErr, lengthBrandErr,
+            after - before === 6, spreadMatches, indexedFirst,
+            itemByIndex, itemOob, namedSingle, namedIgnored, namedMultiple, emptyArg,
+        ].join('|');
+    })()"#
+        ),
+        Ok("true|true|[object HTMLAllCollection]|true|TypeError|TypeError|TypeError|true|true|true|dup|true|single,img|true|2,span:a|true".into())
+    );
+}
+

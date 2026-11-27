@@ -6,7 +6,7 @@
 #[allow(unused_imports)] // Used by generated [CEReactions] members.
 use super::custom_elements::CeReactionsGuard;
 use super::dom_impl::Dom;
-use super::node_create::{create_js_node, interface_for, node_from_js, v8_str};
+pub(super) use super::node_create::{create_js_node, interface_for, node_from_js, v8_str};
 use super::registry::NodeRegistry;
 use crate::dom::NodePtr;
 use std::rc::Rc;
@@ -35,6 +35,7 @@ pub(super) fn install(scope: &mut v8::PinScope<'_, '_>, registry: &Rc<NodeRegist
     // Generated callbacks find the registry here rather than in per-function
     // data, so it lives exactly as long as the context.
     scope.get_current_context().set_slot(registry.clone());
+    super::html_all_collection::install(scope);
     install_interfaces(scope, registry);
     let focus_from_click = v8::FunctionTemplate::new(scope, focus_from_click);
     let focus_from_click = focus_from_click.get_function(scope).expect("focus hook");
@@ -133,6 +134,12 @@ fn define_interface<'s>(
     );
     // Templates freeze once instantiated, so members go on first.
     members(scope, template);
+    if name == "Document" {
+        super::html_all_collection::install_on_document_proto(
+            scope,
+            template.prototype_template(scope),
+        );
+    }
     let function = template.get_function(scope).expect("interface constructor");
     if let Some(parent) = parent {
         let parent = parent.get_function(scope).expect("parent constructor");
@@ -253,7 +260,7 @@ fn unwrap_node(
     node_from_js(scope, value, registry).filter(|node| implements(interface_for(node), interface))
 }
 
-fn unwrap_this(
+pub(super) fn unwrap_this(
     scope: &mut v8::PinScope<'_, '_>,
     registry: &NodeRegistry,
     this: v8::Local<v8::Object>,
@@ -344,7 +351,7 @@ mod conv {
 }
 
 /// Conversion of a binding's Rust result back to JS.
-trait ToJs {
+pub(super) trait ToJs {
     fn to_js<'s>(
         self,
         scope: &mut v8::PinScope<'s, '_>,

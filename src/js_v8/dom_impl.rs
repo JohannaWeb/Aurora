@@ -757,7 +757,7 @@ fn parse_selectors(selectors: &str) -> Fallible<query::Selectors> {
 
 /// The node's descendant elements in tree order (template contents and
 /// shadow trees are not descendants).
-fn descendant_elements(node: &NodePtr, out: &mut Vec<NodePtr>) {
+pub(super) fn descendant_elements(node: &NodePtr, out: &mut Vec<NodePtr>) {
     for child in child_nodes_of(node) {
         if node_type(&child) == 1 {
             out.push(child.clone());
