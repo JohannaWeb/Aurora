@@ -493,3 +493,95 @@ fn inserted_scripts_run_in_order_and_fire_load() {
             .into())
     );
 }
+
+#[test]
+fn window_resize_updates_viewport_globals_events_and_match_media() {
+    let dom = Parser::new(
+        "<html><head><style>\
+         #box { width: 100px; height: 20px; }\
+         @media (min-width: 900px) { #box { width: 300px; } }\
+         </style></head><body><div id='box'></div></body></html>",
+    )
+    .parse_document();
+    crate::dom::reparent_subtree(&dom);
+    let render_doc = Rc::new(RefCell::new(
+        BlitzDocument::try_from_dom(&dom, None, &test_identity(), 800, 600).unwrap(),
+    ));
+    let mut runtime = V8Runtime::with_render_document(dom, Some(render_doc.clone()));
+    runtime
+        .execute(
+            r#"
+        var log = [];
+        var wide = matchMedia('(min-width: 900px)');
+        var portrait = matchMedia('(orientation: portrait)');
+        var light = matchMedia('(prefers-color-scheme: light)');
+        var multi = matchMedia('(max-width: 500px), (min-width: 900px) and (min-height: 700px)');
+        var invalid = matchMedia('not all; { body {} }');
+        log.push('init:' + innerWidth + 'x' + innerHeight + '/' + outerWidth + 'x' + outerHeight
+            + '/screen:' + screen.width + 'x' + screen.height
+            + '/vv:' + visualViewport.width + 'x' + visualViewport.height
+            + '/wide:' + wide.matches + ':' + wide.media
+            + '/portrait:' + portrait.matches
+            + '/light:' + light.matches
+            + '/multi:' + multi.matches
+            + '/invalid:' + invalid.matches + ':' + invalid.media
+            + '/box:' + document.getElementById('box').getBoundingClientRect().width);
+        window.addEventListener('resize', function(e) {
+            log.push('win:' + e.isTrusted + ':' + innerWidth + 'x' + innerHeight);
+        });
+        window.onresize = function() {
+            log.push('onresize:' + innerWidth);
+        };
+        visualViewport.addEventListener('resize', function(e) {
+            log.push('vv:' + e.isTrusted + ':' + visualViewport.width + 'x' + visualViewport.height);
+        });
+        visualViewport.onresize = function() {
+            log.push('vvonresize:' + visualViewport.width);
+        };
+        wide.addEventListener('change', function(e) {
+            log.push('wide-ev:' + (e instanceof MediaQueryListEvent) + ':' + e.isTrusted + ':' + e.matches + ':' + e.media);
+        });
+        wide.onchange = function(e) {
+            log.push('wide-on:' + e.matches);
+        };
+        wide.addListener(function(e) {
+            log.push('wide-legacy:' + e.matches);
+        });
+        portrait.addListener(function(e) {
+            log.push('portrait:' + e.matches);
+        });
+    "#,
+        )
+        .unwrap();
+
+    // Ticking without a resize must not fire resize or change events.
+    runtime.tick(crate::clock::now());
+    assert_eq!(
+        runtime.eval_to_string("log.join(' | ')"),
+        Ok("init:800x600/800x600/screen:800x600/vv:800x600/wide:false:(min-width: 900px)\
+            /portrait:false/light:true/multi:false/invalid:false:not all/box:100"
+            .into())
+    );
+
+    // Resize wider and taller: wide and multi flip true, portrait stays false, @media applies.
+    render_doc.borrow_mut().set_viewport(1000, 750);
+    runtime.tick(crate::clock::now());
+    assert_eq!(
+        runtime.eval_to_string("log.slice(1).join(' | ') + ' | box:' + document.getElementById('box').getBoundingClientRect().width + ' | multi:' + multi.matches"),
+        Ok("win:true:1000x750 | onresize:1000 | vv:true:1000x750 | vvonresize:1000 \
+            | wide-ev:true:true:true:(min-width: 900px) | wide-on:true | wide-legacy:true \
+            | box:300 | multi:true"
+            .into())
+    );
+
+    // Resize into portrait below 900px: wide flips false, portrait flips true.
+    render_doc.borrow_mut().set_viewport(600, 900);
+    runtime.tick(crate::clock::now());
+    assert_eq!(
+        runtime.eval_to_string("log.slice(8).join(' | ') + ' | box:' + document.getElementById('box').getBoundingClientRect().width"),
+        Ok("win:true:600x900 | onresize:600 | vv:true:600x900 | vvonresize:600 \
+            | wide-ev:true:true:false:(min-width: 900px) | wide-on:false | wide-legacy:false \
+            | portrait:true | box:100"
+            .into())
+    );
+}

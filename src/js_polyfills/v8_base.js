@@ -64,8 +64,9 @@
             if (!parent && event.composed && n.nodeType === 11 && n.host) parent = n.host;
             n = parent;
         }
-        if (typeof document !== 'undefined' && path.indexOf(document) < 0) path.push(document);
-        if (typeof window !== 'undefined' && path.indexOf(window) < 0) path.push(window);
+        var isDomNode = this && typeof this === 'object' && this.nodeType !== undefined;
+        if (isDomNode && typeof document !== 'undefined' && path.indexOf(document) < 0) path.push(document);
+        if ((isDomNode || this === globalThis) && typeof window !== 'undefined' && path.indexOf(window) < 0) path.push(window);
 
         event.target = this;
         event.composedPath = function() { return path.slice(); };
@@ -514,29 +515,143 @@
         });
     }
 
-    globalThis.matchMedia = function(query) {
-        return {
-            matches: false,
-            media: String(query),
-            onchange: null,
-            addListener: function() {}, removeListener: function() {},
-            addEventListener: function() {}, removeEventListener: function() {},
-            dispatchEvent: function() { return true; }
+    function viewportMetric(index, fallback) {
+        var v = typeof globalThis.__aurora_view__ === 'function' ? globalThis.__aurora_view__() : null;
+        return v ? v[index] : fallback;
+    }
+
+    [['innerWidth', 0, 1200], ['innerHeight', 1, 800], ['outerWidth', 0, 1200], ['outerHeight', 1, 800]].forEach(function(entry) {
+        Object.defineProperty(globalThis, entry[0], {
+            get: function() { return viewportMetric(entry[1], entry[2]); },
+            set: function(value) {
+                // Replaceable: assigning shadows the accessor with the value.
+                Object.defineProperty(globalThis, entry[0], {
+                    value: value, writable: true, enumerable: true, configurable: true
+                });
+            },
+            enumerable: true, configurable: true
+        });
+    });
+    if (!('onresize' in globalThis)) globalThis.onresize = null;
+
+    (function() {
+        var tracked = [];
+        function evalMedia(query) {
+            var result = typeof globalThis.__aurora_match_media__ === 'function'
+                ? globalThis.__aurora_match_media__(query) : null;
+            return result ? [!!result[0], String(result[1])] : [false, query];
+        }
+        function updateTracking(mql) {
+            var s = mql.__mql__;
+            var changeListeners = mql.__ael && mql.__ael.change;
+            var active = (changeListeners && changeListeners.length > 0)
+                || s.legacy.length > 0 || typeof s.onchange === 'function';
+            var idx = tracked.indexOf(mql);
+            if (active && idx < 0) {
+                s.lastMatches = evalMedia(s.query)[0];
+                tracked.push(mql);
+            } else if (!active && idx >= 0) {
+                tracked.splice(idx, 1);
+            }
+        }
+        function MediaQueryList(query) {
+            var initial = evalMedia(query);
+            Object.defineProperty(this, '__mql__', {
+                value: { query: query, media: initial[1], lastMatches: initial[0], legacy: [], onchange: null }
+            });
+        }
+        MediaQueryList.prototype = Object.create(globalThis.EventTarget.prototype);
+        MediaQueryList.prototype.constructor = MediaQueryList;
+        Object.defineProperty(MediaQueryList.prototype, 'media', {
+            get: function() { return this.__mql__.media; }, enumerable: true, configurable: true
+        });
+        Object.defineProperty(MediaQueryList.prototype, 'matches', {
+            get: function() { return evalMedia(this.__mql__.query)[0]; }, enumerable: true, configurable: true
+        });
+        Object.defineProperty(MediaQueryList.prototype, 'onchange', {
+            get: function() { return this.__mql__.onchange; },
+            set: function(fn) {
+                this.__mql__.onchange = typeof fn === 'function' ? fn : null;
+                updateTracking(this);
+            },
+            enumerable: true, configurable: true
+        });
+        MediaQueryList.prototype.addEventListener = function(type, listener, options) {
+            globalThis.EventTarget.prototype.addEventListener.call(this, type, listener, options);
+            if (type === 'change') updateTracking(this);
         };
-    };
+        MediaQueryList.prototype.removeEventListener = function(type, listener, options) {
+            globalThis.EventTarget.prototype.removeEventListener.call(this, type, listener, options);
+            if (type === 'change') updateTracking(this);
+        };
+        MediaQueryList.prototype.addListener = function(fn) {
+            if (typeof fn !== 'function' && (!fn || typeof fn.handleEvent !== 'function')) return;
+            if (this.__mql__.legacy.indexOf(fn) < 0) this.__mql__.legacy.push(fn);
+            updateTracking(this);
+        };
+        MediaQueryList.prototype.removeListener = function(fn) {
+            var idx = this.__mql__.legacy.indexOf(fn);
+            if (idx >= 0) this.__mql__.legacy.splice(idx, 1);
+            updateTracking(this);
+        };
+        globalThis.MediaQueryList = MediaQueryList;
+        globalThis.matchMedia = function(query) {
+            return new MediaQueryList(String(query));
+        };
+        globalThis.__aurora_fire_resize_event__ = function() {
+            var winEvt = new Event('resize', { bubbles: false, cancelable: false });
+            winEvt.isTrusted = true;
+            globalThis.dispatchEvent(winEvt);
+            if (typeof globalThis.onresize === 'function') {
+                try { globalThis.onresize.call(globalThis, winEvt); }
+                catch (e) { setTimeout(function() { throw e; }, 0); }
+            }
+            var vv = globalThis.visualViewport;
+            if (vv) {
+                var vvEvt = new Event('resize', { bubbles: false, cancelable: false });
+                vvEvt.isTrusted = true;
+                vv.dispatchEvent(vvEvt);
+                if (typeof vv.onresize === 'function') {
+                    try { vv.onresize.call(vv, vvEvt); }
+                    catch (e) { setTimeout(function() { throw e; }, 0); }
+                }
+            }
+            var snapshot = tracked.slice();
+            for (var i = 0; i < snapshot.length; i++) {
+                var mql = snapshot[i];
+                var s = mql.__mql__;
+                var now = evalMedia(s.query)[0];
+                if (now === s.lastMatches) continue;
+                s.lastMatches = now;
+                var changeEvt = new MediaQueryListEvent('change', { media: s.media, matches: now });
+                changeEvt.isTrusted = true;
+                mql.dispatchEvent(changeEvt);
+                if (typeof s.onchange === 'function') {
+                    try { s.onchange.call(mql, changeEvt); }
+                    catch (e) { setTimeout(function() { throw e; }, 0); }
+                }
+                var legacy = s.legacy.slice();
+                for (var j = 0; j < legacy.length; j++) {
+                    var fn = typeof legacy[j] === 'function' ? legacy[j] : legacy[j].handleEvent;
+                    try { fn.call(mql, changeEvt); }
+                    catch (e) { setTimeout(function() { throw e; }, 0); }
+                }
+            }
+        };
+    })();
 
     // VisualViewport: ytd-app.attached() does
-    // `window.visualViewport.addEventListener('resize'|'scroll', ...)`; without
-    // this the attached callback throws "Cannot read properties of undefined
-    // (reading 'addEventListener')" and ytd-app never connects, so navigation
-    // and page-content instantiation never run. Built on the real EventTarget
-    // so listeners register (we never fire resize/scroll, which is fine).
+    // `window.visualViewport.addEventListener('resize'|'scroll', ...)`; built on
+    // EventTarget so resize events and live dimensions reach listeners.
     globalThis.visualViewport = (function() {
         var vv = new globalThis.EventTarget();
-        vv.width = globalThis.innerWidth || 1200;
-        vv.height = globalThis.innerHeight || 1024;
+        [['width', 0, 1200], ['height', 1, 800], ['pageLeft', 2, 0], ['pageTop', 3, 0]].forEach(function(entry) {
+            Object.defineProperty(vv, entry[0], {
+                get: function() { return viewportMetric(entry[1], entry[2]); },
+                enumerable: true, configurable: true
+            });
+        });
         vv.offsetLeft = 0; vv.offsetTop = 0;
-        vv.pageLeft = 0; vv.pageTop = 0;
         vv.scale = 1;
         vv.onresize = null; vv.onscroll = null;
         return vv;
@@ -550,11 +665,15 @@
     };
 
     globalThis.Screen = function Screen() {
-        this.width = 1440; this.height = 1024;
-        this.availWidth = 1440; this.availHeight = 1024;
         this.colorDepth = 24; this.pixelDepth = 24;
         this.orientation = { angle: 0, type: 'landscape-primary', onchange: null };
     };
+    [['width', 0, 1440], ['height', 1, 1024], ['availWidth', 0, 1440], ['availHeight', 1, 1024]].forEach(function(entry) {
+        Object.defineProperty(globalThis.Screen.prototype, entry[0], {
+            get: function() { return viewportMetric(entry[1], entry[2]); },
+            enumerable: true, configurable: true
+        });
+    });
     globalThis.screen = new globalThis.Screen();
 
     var playerContextDefaults = {

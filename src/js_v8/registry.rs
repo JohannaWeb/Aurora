@@ -49,6 +49,8 @@ pub(super) struct NodeRegistry {
     pub(super) scroll_requested: std::cell::Cell<bool>,
     /// The viewport scrolled since `scroll` was last fired.
     pub(super) scroll_event_pending: std::cell::Cell<bool>,
+    /// The viewport size last seen by `tick`, to detect resizes.
+    pub(super) last_viewport: std::cell::Cell<Option<(f32, f32)>>,
     /// The layout and scroll position intersections were last checked at;
     /// `None` after an `observe()`.
     pub(super) intersections_checked: std::cell::Cell<Option<(u64, (f64, f64))>>,
@@ -101,6 +103,7 @@ impl NodeRegistry {
             scroll: std::cell::Cell::new((0.0, 0.0)),
             scroll_requested: std::cell::Cell::new(false),
             scroll_event_pending: std::cell::Cell::new(false),
+            last_viewport: std::cell::Cell::new(None),
             intersections_checked: std::cell::Cell::new(None),
             observes_intersections: std::cell::Cell::new(false),
             resizes_checked: std::cell::Cell::new(None),
@@ -185,6 +188,10 @@ impl NodeRegistry {
         &self,
         render_document: Option<Rc<RefCell<crate::blitz_document::BlitzDocument>>>,
     ) {
+        let viewport = render_document
+            .as_ref()
+            .map(|doc| doc.borrow().viewport_css_size());
+        self.last_viewport.set(viewport);
         *self.render_document.borrow_mut() = render_document;
     }
 
@@ -512,6 +519,15 @@ impl NodeRegistry {
         let render_document = self.render_document.borrow().as_ref().cloned()?;
         let size = render_document.borrow().viewport_css_size();
         Some(size)
+    }
+
+    /// Evaluates a CSS media query against the render document's Stylo device.
+    pub(super) fn match_media(&self, query: &str) -> (bool, String) {
+        let Some(render_document) = self.render_document.borrow().as_ref().cloned() else {
+            return (false, query.to_string());
+        };
+        let mut doc = render_document.borrow_mut();
+        doc.matches_media_query(query)
     }
 
     pub(super) fn sync_shadow_root_to_render_document(
