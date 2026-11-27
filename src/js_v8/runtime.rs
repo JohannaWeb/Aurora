@@ -624,6 +624,14 @@ impl V8Runtime {
                 .expect("function template yields a function outside of a pending exception");
             global.set(scope, v8_str(scope, "__aurora_observe_resizes__").into(), observe_resizes_fn.into());
 
+            // __aurora_match_media__(query): [matches, serialized_media].
+            let match_media_fn = v8::FunctionTemplate::builder(match_media_query)
+                .data(registry_data.into())
+                .build(scope)
+                .get_function(scope)
+                .expect("function template yields a function outside of a pending exception");
+            global.set(scope, v8_str(scope, "__aurora_match_media__").into(), match_media_fn.into());
+
             let observe_fn = v8::FunctionTemplate::builder(observe_intersections)
                 .data(registry_data.into())
                 .build(scope)
@@ -631,44 +639,11 @@ impl V8Runtime {
                 .expect("function template yields a function outside of a pending exception");
             global.set(scope, v8_str(scope, "__aurora_observe_intersections__").into(), observe_fn.into());
 
-            // Viewport stubs
-            global.set(
-                scope,
-                v8_str(scope, "innerWidth").into(),
-                v8::Number::new(scope, 1200.0).into(),
-            );
-            global.set(
-                scope,
-                v8_str(scope, "innerHeight").into(),
-                v8::Number::new(scope, 800.0).into(),
-            );
             global.set(
                 scope,
                 v8_str(scope, "devicePixelRatio").into(),
                 v8::Number::new(scope, 1.0).into(),
             );
-
-            let screen_template = v8::ObjectTemplate::new(scope);
-            screen_template.set(
-                v8_str(scope, "width").into(),
-                v8::Integer::new(scope, 1200).into(),
-            );
-            screen_template.set(
-                v8_str(scope, "height").into(),
-                v8::Integer::new(scope, 800).into(),
-            );
-            screen_template.set(
-                v8_str(scope, "availWidth").into(),
-                v8::Integer::new(scope, 1200).into(),
-            );
-            screen_template.set(
-                v8_str(scope, "availHeight").into(),
-                v8::Integer::new(scope, 800).into(),
-            );
-            let screen_obj = screen_template
-                .new_instance(scope)
-                .expect("object template instantiation failed");
-            global.set(scope, v8_str(scope, "screen").into(), screen_obj.into());
 
             // Storage
             let local_storage = build_storage_object(scope, window.borrow().storage.clone());
@@ -1327,6 +1302,23 @@ impl V8Runtime {
         !ready.is_empty()
     }
 
+    /// Fires `resize` at `window` and `visualViewport`, and `change` at any
+    /// tracked `MediaQueryList` whose result flipped, when the viewport changed.
+    fn fire_resize_event(&mut self) -> bool {
+        let Some(current) = self.registry.viewport_size() else {
+            return false;
+        };
+        if self.registry.last_viewport.get() == Some(current) {
+            return false;
+        }
+        self.registry.last_viewport.set(Some(current));
+        if let Some(doc) = self.registry.render_document() {
+            doc.borrow_mut().perform_layout();
+        }
+        self.run_js_quiet("__aurora_fire_resize_event__();");
+        true
+    }
+
     /// Fires `scroll` at the document (it bubbles to the window) if the
     /// viewport scrolled since the last one, like HTML's "run the scroll steps".
     fn fire_scroll_event(&mut self) -> bool {
@@ -1583,6 +1575,23 @@ fn viewport_scroll_to(
     let x = args.get(0).number_value(scope).unwrap_or(0.0);
     let y = args.get(1).number_value(scope).unwrap_or(0.0);
     registry.scroll_viewport_to(x, y);
+}
+
+fn match_media_query(
+    scope: &mut v8::PinScope<'_, '_>,
+    args: v8::FunctionCallbackArguments,
+    mut retval: v8::ReturnValue,
+) {
+    let external = v8::Local::<v8::External>::try_from(args.data())
+        .expect("callback data is always the External we installed");
+    let registry = unsafe { &*(external.value() as *const Rc<NodeRegistry>) };
+    let query = args.get(0).to_rust_string_lossy(scope);
+    let (matches, media) = registry.match_media(&query);
+    let values = [
+        v8::Boolean::new(scope, matches).into(),
+        v8_str(scope, &media).into(),
+    ];
+    retval.set(v8::Array::new_with_elements(scope, &values).into());
 }
 
 fn dispatch_event_global(
@@ -2611,6 +2620,7 @@ impl crate::js_engine::JsRuntime for V8Runtime {
     fn tick(&mut self, now: Instant) -> bool {
         let delivered = self.run_inserted_scripts()
             | self.deliver_image_events()
+            | self.fire_resize_event()
             | self.fire_scroll_event()
             | self.update_intersections()
             | self.update_resize_observations();

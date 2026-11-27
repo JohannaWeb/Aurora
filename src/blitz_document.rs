@@ -929,6 +929,41 @@ impl BlitzDocument {
         self.inner.viewport().logical_size()
     }
 
+    /// Parses `query` as a CSS media query list and evaluates it against the
+    /// document's Stylo device, returning `(matches, serialized_media)`.
+    pub fn matches_media_query(&mut self, query: &str) -> (bool, String) {
+        if query.trim().is_empty() {
+            return (true, String::new());
+        }
+        if has_disallowed_media_tokens(query) {
+            return (false, "not all".to_string());
+        }
+        use style::shared_lock::ToCssWithGuard as _;
+        use style::stylesheets::StylesheetInDocument as _;
+        let css = format!("@media {query} {{\n}}");
+        let sheet = self.inner.make_stylesheet(css, style::stylesheets::Origin::Author);
+        let lock = self.inner.guard().clone();
+        let guard = lock.read();
+        let rules = sheet.contents(&guard).rules.read_with(&guard);
+        let [style::stylesheets::CssRule::Media(rule)] = rules.0.as_slice() else {
+            return (false, "not all".to_string());
+        };
+        let serialized = rule.to_css_string(&guard);
+        let media = serialized
+            .strip_prefix("@media ")
+            .and_then(|s| s.strip_suffix(" {\n}"))
+            .unwrap_or(query)
+            .to_string();
+        let media_list = rule.media_queries.read_with(&guard);
+        let device = self.inner.stylist_device();
+        let matches = media_list.evaluate(
+            device,
+            style::context::QuirksMode::NoQuirks,
+            &mut style::stylesheets::CustomMediaEvaluator::none(),
+        );
+        (matches, media)
+    }
+
     /// Fetches the script at `src`, resolved against the document's URL, as
     /// the document's identity.
     pub fn load_script(&self, src: &str) -> TextLoad {
@@ -2115,6 +2150,35 @@ fn collect_node_counts(node: &blitz_dom::Node, counts: &mut NodeCounts) {
             }
         }
     }
+}
+
+/// Rejects syntax that could escape an `@media <query> {}` wrapper before
+/// handing the query to Stylo's media list parser.
+fn has_disallowed_media_tokens(query: &str) -> bool {
+    fn scan(parser: &mut cssparser::Parser<'_, '_>) -> bool {
+        while let Ok(token) = parser.next() {
+            match token {
+                cssparser::Token::CurlyBracketBlock
+                | cssparser::Token::CloseCurlyBracket
+                | cssparser::Token::Semicolon
+                | cssparser::Token::BadString(_)
+                | cssparser::Token::BadUrl(_) => return true,
+                cssparser::Token::ParenthesisBlock
+                | cssparser::Token::SquareBracketBlock
+                | cssparser::Token::Function(_) => {
+                    let invalid = parser.parse_nested_block(|nested| Ok::<_, cssparser::ParseError<'_, ()>>(scan(nested)));
+                    if invalid.unwrap_or(true) {
+                        return true;
+                    }
+                }
+                _ => {}
+            }
+        }
+        false
+    }
+    let mut input = cssparser::ParserInput::new(query);
+    let mut parser = cssparser::Parser::new(&mut input);
+    scan(&mut parser)
 }
 
 #[cfg(test)]

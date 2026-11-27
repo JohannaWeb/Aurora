@@ -856,7 +856,6 @@
             if (typeof globalThis.onscroll === 'function') globalThis.onscroll(event);
         };
     })();
-    globalThis.outerWidth = globalThis.innerWidth; globalThis.outerHeight = globalThis.innerHeight;
     globalThis.frames = globalThis;
     globalThis.parent = globalThis;
     globalThis.top = globalThis;

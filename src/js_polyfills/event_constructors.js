@@ -61,6 +61,15 @@
             };
             globalThis.MessageEvent.prototype = Object.create(globalThis.Event.prototype);
 
+            globalThis.MediaQueryListEvent = function MediaQueryListEvent(type, init) {
+                BaseEvent.call(this, type, init);
+                init = init || {};
+                this.media = init.media !== undefined ? String(init.media) : '';
+                this.matches = !!init.matches;
+            };
+            globalThis.MediaQueryListEvent.prototype = Object.create(globalThis.Event.prototype);
+            globalThis.MediaQueryListEvent.prototype.constructor = globalThis.MediaQueryListEvent;
+
             globalThis.MessagePort = function MessagePort() {};
             globalThis.MessagePort.prototype.postMessage = function(data) {
                 var target = this.__peer__;
