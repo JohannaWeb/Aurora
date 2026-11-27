@@ -54,6 +54,10 @@ pub(super) struct NodeRegistry {
     pub(super) intersections_checked: std::cell::Cell<Option<(u64, (f64, f64))>>,
     /// Whether script has ever observed an intersection.
     pub(super) observes_intersections: std::cell::Cell<bool>,
+    /// Layout generation the ResizeObserver observations were last checked
+    /// against; `None` forces a check.
+    pub(super) resizes_checked: std::cell::Cell<Option<u64>>,
+    pub(super) observes_resizes: std::cell::Cell<bool>,
     /// Images script set `src` on or asked about, by node id.
     pub(super) images: RefCell<BTreeMap<u32, super::image_load::ImageState>>,
     /// Scripts page script created, until they ran.
@@ -99,6 +103,8 @@ impl NodeRegistry {
             scroll_event_pending: std::cell::Cell::new(false),
             intersections_checked: std::cell::Cell::new(None),
             observes_intersections: std::cell::Cell::new(false),
+            resizes_checked: std::cell::Cell::new(None),
+            observes_resizes: std::cell::Cell::new(false),
             images: RefCell::new(BTreeMap::new()),
             scripts: RefCell::new(super::script_load::Scripts::default()),
             pending_navigation: RefCell::new(None),
@@ -409,6 +415,12 @@ impl NodeRegistry {
     pub(super) fn client_rect(&self, node: &NodePtr) -> Option<crate::blitz_document::LayoutMetrics> {
         let render_document = self.render_document.borrow().as_ref().cloned()?;
         render_document.borrow().dom_node_client_rect(node)
+    }
+
+    /// `node`'s boxes for ResizeObserver; `None` when it is not laid out.
+    pub(super) fn box_sizes(&self, node: &NodePtr) -> Option<crate::blitz_document::BoxSizes> {
+        let render_document = self.render_document.borrow().as_ref().cloned()?;
+        render_document.borrow().dom_node_box_sizes(node)
     }
 
     /// The document's scrollable size in CSS pixels: at least the viewport.

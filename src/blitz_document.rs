@@ -259,6 +259,15 @@ pub struct LayoutMetrics {
     pub height: f32,
 }
 
+/// The boxes ResizeObserver reports for an element, in CSS pixels.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct BoxSizes {
+    pub border_box: (f32, f32),
+    pub content_box: (f32, f32),
+    /// Top-left padding: where the content box starts in the padding box.
+    pub padding_offset: (f32, f32),
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[must_use]
 pub enum PaintResult {
@@ -1049,6 +1058,25 @@ impl BlitzDocument {
             y,
             width: size.width,
             height: size.height,
+        })
+    }
+
+    /// Border-box and content-box sizes of `node`, for ResizeObserver. The
+    /// content box excludes padding, border and scrollbars.
+    pub fn dom_node_box_sizes(&self, node: &NodePtr) -> Option<BoxSizes> {
+        let node_id = self.blitz_node_id_for_dom(node)?;
+        let layout = self.inner.get_node(node_id)?.final_layout();
+        let (border, padding) = (layout.border, layout.padding);
+        let width = layout.size.width;
+        let height = layout.size.height;
+        let content_width = width - border.left - border.right - padding.left - padding.right
+            - layout.scrollbar_size.width;
+        let content_height = height - border.top - border.bottom - padding.top - padding.bottom
+            - layout.scrollbar_size.height;
+        Some(BoxSizes {
+            border_box: (width, height),
+            content_box: (content_width.max(0.0), content_height.max(0.0)),
+            padding_offset: (padding.left, padding.top),
         })
     }
 

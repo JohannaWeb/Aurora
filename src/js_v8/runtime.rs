@@ -617,6 +617,13 @@ impl V8Runtime {
                 .expect("function template yields a function outside of a pending exception");
             global.set(scope, v8_str(scope, "__aurora_scroll_to__").into(), scroll_fn.into());
 
+            let observe_resizes_fn = v8::FunctionTemplate::builder(observe_resizes)
+                .data(registry_data.into())
+                .build(scope)
+                .get_function(scope)
+                .expect("function template yields a function outside of a pending exception");
+            global.set(scope, v8_str(scope, "__aurora_observe_resizes__").into(), observe_resizes_fn.into());
+
             let observe_fn = v8::FunctionTemplate::builder(observe_intersections)
                 .data(registry_data.into())
                 .build(scope)
@@ -1231,6 +1238,62 @@ impl V8Runtime {
         laid_out | notified
     }
 
+    /// ResizeObserver's part of a rendering update: deliver observations
+    /// whose size changed in rounds of increasing tree depth, laying out
+    /// between rounds, then report an error for any left undelivered (they
+    /// are delivered next frame). Runs when layout changed or a target was
+    /// added. <https://drafts.csswg.org/resize-observer/#html-event-loop>
+    fn update_resize_observations(&mut self) -> bool {
+        if !self.registry.observes_resizes.get() || self.registry.is_render_blocked() {
+            return false;
+        }
+        let mut worked = crate::js_engine::JsRuntime::perform_style_and_layout(self);
+        let Some(generation) = self.registry.layout_generation() else {
+            return worked;
+        };
+        if self.registry.resizes_checked.get() == Some(generation) {
+            return worked;
+        }
+        // Depth increases every round, so the tree depth bounds the loop; the
+        // cap only guards against a broken hook.
+        let mut depth = -1.0;
+        for _ in 0..256 {
+            match self.call_number_hook("__aurora_broadcast_resize_observations__", depth) {
+                Some(shallowest) if shallowest >= 0.0 => {
+                    worked = true;
+                    depth = shallowest;
+                    crate::js_engine::JsRuntime::perform_style_and_layout(self);
+                }
+                _ => break,
+            }
+        }
+        let skipped = depth >= 0.0
+            && self.call_number_hook("__aurora_report_resize_loop__", depth) == Some(1.0);
+        let checked = if skipped { None } else { self.registry.layout_generation() };
+        self.registry.resizes_checked.set(checked);
+        worked
+    }
+
+    /// Calls a global hook with one number and returns its numeric result.
+    fn call_number_hook(&mut self, name: &str, arg: f64) -> Option<f64> {
+        let _entered = self.entered();
+        v8::scope_with_context!(let scope, &mut self.isolate, &self.context);
+        v8::tc_scope!(let scope, scope);
+        let global = scope.get_current_context().global(scope);
+        let key = v8_str(scope, name);
+        let hook = global
+            .get(scope, key.into())
+            .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok())?;
+        let arg = v8::Number::new(scope, arg).into();
+        let result = hook.call(scope, global.into(), &[arg]);
+        if result.is_none() {
+            log::warn!(target: "aurora::js", "{name}: {}", exception_message(scope, "threw"));
+        }
+        let value = result.and_then(|value| value.number_value(scope));
+        scope.perform_microtask_checkpoint();
+        value
+    }
+
     /// Fires `load` or `error` at images whose load finished.
     fn deliver_image_events(&mut self) -> bool {
         let finished = super::image_load::take_finished(&self.registry);
@@ -1479,6 +1542,18 @@ fn observe_intersections(
     let registry = unsafe { &*(external.value() as *const Rc<NodeRegistry>) };
     registry.observes_intersections.set(true);
     registry.intersections_checked.set(None);
+}
+
+fn observe_resizes(
+    _scope: &mut v8::PinScope<'_, '_>,
+    args: v8::FunctionCallbackArguments,
+    _retval: v8::ReturnValue,
+) {
+    let external = v8::Local::<v8::External>::try_from(args.data())
+        .expect("callback data is always the External we installed");
+    let registry = unsafe { &*(external.value() as *const Rc<NodeRegistry>) };
+    registry.observes_resizes.set(true);
+    registry.resizes_checked.set(None);
 }
 
 fn viewport_view(
@@ -2537,7 +2612,8 @@ impl crate::js_engine::JsRuntime for V8Runtime {
         let delivered = self.run_inserted_scripts()
             | self.deliver_image_events()
             | self.fire_scroll_event()
-            | self.update_intersections();
+            | self.update_intersections()
+            | self.update_resize_observations();
         let ready = self.ready_timers(now);
         if ready.is_empty() {
             return delivered;
