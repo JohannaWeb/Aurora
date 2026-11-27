@@ -24,6 +24,7 @@ pub(super) enum TemplateKind {
     /// A `<slot>`: also has `assignedNodes`/`assignedElements`.
     Slot,
     Style,
+    ComputedStyle,
     ClassList,
     NamedNodeMap,
     ElementInternals,
@@ -36,6 +37,8 @@ pub(super) enum NativeTag {
     Node = 1,
     /// `style::StyleData`.
     Style = 2,
+    /// `computed_style::ComputedStyleData`.
+    ComputedStyle = 3,
 }
 
 const POINTER_FIELD: usize = 0;

@@ -766,15 +766,6 @@
         mergeYtConfig(globalThis.yt.config_, values);
     };
 
-    globalThis.getComputedStyle = function(el) {
-        var style = el && el.style;
-        if (style && typeof style.getPropertyValue === 'function') return style;
-        return {
-            getPropertyValue: function() { return ''; },
-            setProperty: function() {}, removeProperty: function() {}
-        };
-    };
-
     // Replace the networking-block URL stubs with a parser that handles the
     // relative URL and query-param shapes YouTube uses during bootstrap.
     function decodeUrlPart(value) {

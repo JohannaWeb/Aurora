@@ -632,6 +632,19 @@ impl V8Runtime {
                 .expect("function template yields a function outside of a pending exception");
             global.set(scope, v8_str(scope, "__aurora_match_media__").into(), match_media_fn.into());
 
+            let get_computed_style_fn = v8::FunctionTemplate::builder(
+                super::style_class::computed_style::get_computed_style,
+            )
+            .data(registry_data.into())
+            .build(scope)
+            .get_function(scope)
+            .expect("function template yields a function outside of a pending exception");
+            global.set(
+                scope,
+                v8_str(scope, "getComputedStyle").into(),
+                get_computed_style_fn.into(),
+            );
+
             let observe_fn = v8::FunctionTemplate::builder(observe_intersections)
                 .data(registry_data.into())
                 .build(scope)

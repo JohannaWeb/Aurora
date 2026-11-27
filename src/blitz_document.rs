@@ -303,12 +303,21 @@ pub struct BlitzDocument {
     net_state: Arc<NetResourceState>,
     /// Counts successful layouts, so others can tell when geometry may have changed.
     layout_generation: u64,
+    /// Whether DOM, attribute, or viewport changes happened since the last resolve.
+    needs_resolve: bool,
     healthy: bool,
     consecutive_panics: u32,
     next_mirror_op_id: u64,
     last_mirror_mutation: Option<MirrorMutationTrace>,
     legacy_to_blitz: BTreeMap<usize, NodeId>,
     blitz_to_legacy: BTreeMap<NodeId, NodePtr>,
+}
+
+/// Pseudo-element targets supported by `getComputedStyle(elt, pseudoElt)`.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
+pub enum ComputedPseudo {
+    Before,
+    After,
 }
 
 impl BlitzDocument {
@@ -345,6 +354,7 @@ impl BlitzDocument {
                 base_url: base_url.and_then(|url| url::Url::parse(url).ok()),
                 net_state,
                 layout_generation: 0,
+                needs_resolve: false,
                 healthy: true,
                 consecutive_panics: 0,
                 next_mirror_op_id: 1,
@@ -387,6 +397,7 @@ impl BlitzDocument {
                 base_url: base_url.and_then(|url| url::Url::parse(url).ok()),
                 net_state,
                 layout_generation: 0,
+                needs_resolve: false,
                 healthy: true,
                 consecutive_panics: 0,
                 next_mirror_op_id: 1,
@@ -427,6 +438,7 @@ impl BlitzDocument {
         .is_some();
         if updated {
             self.consecutive_panics = 0;
+            self.needs_resolve = true;
         } else {
             self.consecutive_panics += 1;
             if self.consecutive_panics >= MAX_CONSECUTIVE_PANICS {
@@ -823,6 +835,7 @@ impl BlitzDocument {
     fn finish_mirror_mutation(&mut self, op: &MirrorOp, blitz_node: Option<NodeId>, updated: bool) {
         if updated {
             self.consecutive_panics = 0;
+            self.needs_resolve = true;
             let validation_failed = self.debug_validate_mirror_after(op.op_name).is_err();
             self.record_mirror_mutation(
                 op,
@@ -951,18 +964,137 @@ impl BlitzDocument {
     /// Whether `node` is in the render tree and neither it nor an ancestor is
     /// `display: none`.
     pub fn is_rendered(&self, node: &NodePtr) -> bool {
-        let mut current = self.blitz_node_id_for_dom(node);
-        if current.is_none() {
+        let Some(id) = self.blitz_node_id_for_dom(node) else {
             return false;
-        }
-        while let Some(id) = current {
-            let Some(blitz_node) = self.inner.get_node(id) else { return false };
-            if blitz_node.is_element() && blitz_node.primary_styles().is_none_or(|style| style.clone_display().is_none()) {
+        };
+        self.is_rendered_blitz_id(id)
+    }
+
+    fn is_rendered_blitz_id(&self, mut current: NodeId) -> bool {
+        loop {
+            let Some(blitz_node) = self.inner.get_node(current) else {
+                return false;
+            };
+            if blitz_node.is_element()
+                && blitz_node
+                    .primary_styles()
+                    .is_none_or(|style| style.clone_display().is_none())
+            {
                 return false;
             }
-            current = blitz_node.parent;
+            let Some(parent) = blitz_node.parent else {
+                return true;
+            };
+            current = parent;
         }
-        true
+    }
+
+    /// Re-runs Stylo style resolution and Taffy layout if DOM, attribute, or
+    /// viewport changes happened since the last resolve.
+    pub fn ensure_resolved(&mut self) -> bool {
+        if self.needs_resolve || self.has_delivered_resources() {
+            self.resolve_inner()
+        } else {
+            self.healthy
+        }
+    }
+
+    /// Whether `name` is a web-exposed non-custom CSS property (longhand,
+    /// shorthand, or enabled alias).
+    pub fn is_exposed_non_custom_property(name: &str) -> bool {
+        matches!(
+            style::properties::PropertyId::parse_enabled_for_all_content(name),
+            Ok(style::properties::PropertyId::NonCustom(_))
+        )
+    }
+
+    /// Resolves and serializes a CSS property (longhand, shorthand, or custom
+    /// `--*` property) for `node` (and optional `::before`/`::after` pseudo).
+    pub fn computed_style_property(
+        &mut self,
+        node: &NodePtr,
+        pseudo: Option<ComputedPseudo>,
+        property: &str,
+    ) -> Option<String> {
+        let target_id = self.resolve_computed_target_id(node, pseudo)?;
+        let _traversal = STYLO_TRAVERSAL_LOCK
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        catch_stylo_panic("resolving computed style property", || {
+            self.inner.resolved_style_value(target_id, property)
+        })
+    }
+
+    /// Lists all exposed computed CSS property names (longhands plus active
+    /// custom properties) for `node` when it has computed styles.
+    pub fn computed_style_property_names(
+        &mut self,
+        node: &NodePtr,
+        pseudo: Option<ComputedPseudo>,
+    ) -> Vec<String> {
+        let Some(target_id) = self.resolve_computed_target_id(node, pseudo) else {
+            return Vec::new();
+        };
+        let Some(blitz_node) = self.inner.get_node(target_id) else {
+            return Vec::new();
+        };
+        let primary = blitz_node.primary_styles();
+        if primary.is_none() {
+            let _traversal = STYLO_TRAVERSAL_LOCK
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            let display = catch_stylo_panic("checking computed style display", || {
+                self.inner.resolved_style_value(target_id, "display")
+            })
+            .unwrap_or_default();
+            if display.is_empty() {
+                return Vec::new();
+            }
+        }
+
+        static LONGHAND_NAMES: OnceLock<Vec<&'static str>> = OnceLock::new();
+        let longhands = LONGHAND_NAMES.get_or_init(|| {
+            style::properties::ShorthandId::All
+                .longhands()
+                .map(|id| id.name())
+                .collect()
+        });
+
+        let mut names: Vec<String> = longhands.iter().map(|&n| n.to_string()).collect();
+        if let Some(styles) = primary {
+            let custom = styles.custom_properties();
+            for (name, _) in custom.inherited.iter() {
+                names.push(format!("--{name}"));
+            }
+            for (name, _) in custom.non_inherited.iter() {
+                if custom.inherited.get(name).is_none() {
+                    names.push(format!("--{name}"));
+                }
+            }
+        }
+        names
+    }
+
+    fn resolve_computed_target_id(
+        &mut self,
+        node: &NodePtr,
+        pseudo: Option<ComputedPseudo>,
+    ) -> Option<NodeId> {
+        if !is_element_node(node) {
+            return None;
+        }
+        let host_id = self.blitz_node_id_for_dom(node)?;
+        self.ensure_resolved();
+        let target_id = match pseudo {
+            None => host_id,
+            Some(ComputedPseudo::Before) => {
+                self.inner.get_node(host_id)?.data.downcast_element()?.before?
+            }
+            Some(ComputedPseudo::After) => {
+                self.inner.get_node(host_id)?.data.downcast_element()?.after?
+            }
+        };
+        Some(target_id)
     }
 
     /// The viewport layout runs against, in CSS pixels.
@@ -1808,6 +1940,7 @@ impl BlitzDocument {
         };
         if resolved {
             self.layout_generation += 1;
+            self.needs_resolve = false;
             self.healthy = true;
             self.consecutive_panics = 0;
         } else {

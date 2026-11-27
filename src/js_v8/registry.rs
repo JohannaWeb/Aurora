@@ -6,6 +6,8 @@ use crate::dom::{Node, NodePtr, ShadowTreeBackend};
 use crate::window::SnapshotRebuildReason;
 
 type EventListeners = BTreeMap<u32, BTreeMap<String, Vec<v8::Global<v8::Function>>>>;
+type ComputedStyleKey = (usize, Option<crate::blitz_document::ComputedPseudo>, bool);
+type ComputedStyleTargets = BTreeMap<ComputedStyleKey, Box<super::style_class::computed_style::ComputedStyleData>>;
 
 pub(super) struct NodeRegistry {
     pub(super) nodes: RefCell<BTreeMap<u32, NodePtr>>,
@@ -34,6 +36,9 @@ pub(super) struct NodeRegistry {
     /// Monotonic id source for MutationObservers (kept separate from node ids).
     mo_next: RefCell<u32>,
     snapshot_rebuild_reason: RefCell<Option<SnapshotRebuildReason>>,
+    /// Cached `getComputedStyle` targets keyed by `(node_id, pseudo)` so repeat
+    /// calls do not leak per-call heap allocations.
+    computed_style_targets: RefCell<ComputedStyleTargets>,
     /// Native mirror of the JS `customElements` registry (Phase 1 of the native
     /// custom-element-reaction plan). Populated from `customElements.define`.
     pub(super) ce_registry: super::custom_elements::CeRegistry,
@@ -97,6 +102,7 @@ impl NodeRegistry {
             mo_entries: RefCell::new(Vec::new()),
             mo_next: RefCell::new(1),
             snapshot_rebuild_reason: RefCell::new(None),
+            computed_style_targets: RefCell::new(BTreeMap::new()),
             ce_registry: super::custom_elements::CeRegistry::default(),
             focused: RefCell::new(None),
             input_values: RefCell::new(BTreeMap::new()),
@@ -534,6 +540,48 @@ impl NodeRegistry {
         };
         let mut doc = render_document.borrow_mut();
         doc.matches_media_query(query)
+    }
+
+    pub(super) fn computed_style_target(
+        registry: &Rc<NodeRegistry>,
+        node: &NodePtr,
+        pseudo: Option<crate::blitz_document::ComputedPseudo>,
+        valid_pseudo: bool,
+    ) -> *const super::style_class::computed_style::ComputedStyleData {
+        let mut targets = registry.computed_style_targets.borrow_mut();
+        let key = (Rc::as_ptr(node) as usize, pseudo, valid_pseudo);
+        let entry = targets.entry(key).or_insert_with(|| {
+            Box::new(super::style_class::computed_style::ComputedStyleData {
+                node: node.clone(),
+                registry: registry.clone(),
+                pseudo,
+                valid_pseudo,
+            })
+        });
+        entry.as_ref() as *const _
+    }
+
+    pub(super) fn computed_style_property(
+        &self,
+        node: &NodePtr,
+        pseudo: Option<crate::blitz_document::ComputedPseudo>,
+        property: &str,
+    ) -> Option<String> {
+        let render_document = self.render_document.borrow().as_ref().cloned()?;
+        let mut doc = render_document.borrow_mut();
+        doc.computed_style_property(node, pseudo, property)
+    }
+
+    pub(super) fn computed_style_property_names(
+        &self,
+        node: &NodePtr,
+        pseudo: Option<crate::blitz_document::ComputedPseudo>,
+    ) -> Vec<String> {
+        let Some(render_document) = self.render_document.borrow().as_ref().cloned() else {
+            return Vec::new();
+        };
+        let mut doc = render_document.borrow_mut();
+        doc.computed_style_property_names(node, pseudo)
     }
 
     pub(super) fn sync_shadow_root_to_render_document(

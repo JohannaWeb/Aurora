@@ -1,0 +1,40 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: JohannaWeb <joaocordeiroalmeida@gmail.com>
+Date: Fri, 27 Nov 2026 20:37:24 +0000
+Subject: [PATCH] Drop ThreadLocalStyleContext before exiting
+ ThreadState::LAYOUT
+
+resolve_undisplayed_style created ThreadLocalStyleContext before calling style::thread_state::exit(ThreadState::LAYOUT), so SequentialTaskList::drop ran after exiting ThreadState::LAYOUT and hit its debug_assert on getComputedStyle inside display: none subtrees.
+
+Tested by Aurora's get_computed_style_reads_stylo_values_layout_boxes_custom_props_and_pseudos lib test. Drop once upstream fixes the drop order.
+
+diff --git a/src/stylo.rs b/src/stylo.rs
+index 3ddcbf4..c10b870 100644
+--- a/src/stylo.rs
++++ b/src/stylo.rs
+@@ -216,16 +216,19 @@ impl crate::document::BaseDocument {
+             snapshot_map: &self.snapshots,
+             registered_speculative_painters: &RegisteredPaintersImpl,
+         };
+-        let mut thread_local = ThreadLocalStyleContext::new();
+-        let mut context = StyleContext {
+-            shared: &shared,
+-            thread_local: &mut thread_local,
++        let primary = {
++            let mut thread_local = ThreadLocalStyleContext::new();
++            let mut context = StyleContext {
++                shared: &shared,
++                thread_local: &mut thread_local,
++            };
++            let styles = resolve_style(&mut context, node, RuleInclusion::All, None, None);
++            styles.primary().clone()
+         };
+-        let styles = resolve_style(&mut context, node, RuleInclusion::All, None, None);
+
+         style::thread_state::exit(ThreadState::LAYOUT);
+
+-        Some(styles.primary().clone())
++        Some(primary)
+     }
+ }
+

@@ -631,3 +631,107 @@ fn replacing_render_document_preserves_scroll_position_and_tracks_image_delivery
     assert!(rebuilt.borrow_mut().perform_layout());
     assert!(!rebuilt.borrow().has_delivered_resources());
 }
+
+#[test]
+fn get_computed_style_reads_stylo_values_layout_boxes_custom_props_and_pseudos() {
+    let html = r#"<!DOCTYPE html>
+<html>
+<head>
+<style>
+  :root { --app-drawer-width: 240px; }
+  body { margin: 0; color: #112233; direction: rtl; }
+  .card {
+    position: fixed;
+    width: 50%;
+    height: 80px;
+    padding: 5px 10px;
+    border: 2px solid #000000;
+    margin-bottom: 12px;
+    background-color: rgba(10, 20, 30, 0.5);
+    float: right;
+  }
+  .card.border-box { box-sizing: border-box; width: 200px; }
+  .card::before { content: "hi"; display: block; color: rgb(255, 0, 0); }
+  .hidden { display: none; width: 50%; }
+  .child { width: 50%; }
+  .floated { float: right; }
+</style>
+</head>
+<body>
+  <div id="card" class="card">text</div>
+  <div id="bbox" class="card border-box">bbox</div>
+  <div id="floated" class="floated">floated</div>
+  <div id="hidden" class="hidden"><div id="inside-hidden" class="child"></div></div>
+  <span id="inline">inline</span>
+</body>
+</html>"#;
+    let dom = Parser::new(html).parse_document();
+    crate::dom::reparent_subtree(&dom);
+    let render_doc = Rc::new(RefCell::new(
+        BlitzDocument::try_from_dom(&dom, Some("https://example.test/"), &test_identity(), 800, 600)
+            .unwrap(),
+    ));
+    let mut runtime = V8Runtime::with_render_document(dom, Some(render_doc));
+
+    assert_eq!(
+        runtime.eval_to_string(
+            r#"(() => {
+                const card = document.getElementById('card');
+                const bbox = document.getElementById('bbox');
+                const floated = document.getElementById('floated');
+                const hidden = document.getElementById('hidden');
+                const inside = document.getElementById('inside-hidden');
+                const span = document.getElementById('inline');
+                const cs = getComputedStyle(card);
+                const before = getComputedStyle(card, '::before');
+                const detached = document.createElement('div');
+                detached.style.color = 'red';
+                let readonlyErr = '';
+                try { cs.setProperty('color', 'blue'); } catch (e) { readonlyErr = e.name; }
+                let typeErr = '';
+                try { getComputedStyle(document.createTextNode('x')); } catch (e) { typeErr = e.constructor.name; }
+                return [
+                    cs instanceof CSSStyleDeclaration,
+                    cs.position,
+                    cs.direction,
+                    cs.color,
+                    cs.backgroundColor,
+                    cs.getPropertyValue('--app-drawer-width'),
+                    cs.marginBottom,
+                    cs.paddingLeft,
+                    cs.padding,
+                    cs.width,
+                    getComputedStyle(bbox).width,
+                    getComputedStyle(floated).cssFloat,
+                    getComputedStyle(hidden).width,
+                    getComputedStyle(inside).width,
+                    getComputedStyle(span).width,
+                    before.color,
+                    before.display,
+                    cs.length > 0 && cs[0] === cs.item(0),
+                    getComputedStyle(detached).color,
+                    readonlyErr,
+                    typeErr,
+                ].join('|');
+            })()"#
+        ),
+        Ok(
+            "true|fixed|rtl|rgb(17, 34, 51)|rgba(10, 20, 30, 0.5)|240px|12px|10px|5px 10px|400px|200px|right|50%|50%|auto|rgb(255, 0, 0)|block|true||NoModificationAllowedError|TypeError"
+                .into()
+        )
+    );
+
+    // Mutating inline style/class flushes Stylo/layout on demand.
+    assert_eq!(
+        runtime.eval_to_string(
+            r#"(() => {
+                const card = document.getElementById('card');
+                card.style.marginBottom = '33px';
+                card.style.setProperty('position', 'sticky');
+                const cs = getComputedStyle(card);
+                return [cs.marginBottom, cs.position, cs.getPropertyValue('margin-bottom')].join('|');
+            })()"#
+        ),
+        Ok("33px|sticky|33px".into())
+    );
+}
