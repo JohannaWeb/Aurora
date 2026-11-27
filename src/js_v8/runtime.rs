@@ -2793,6 +2793,7 @@ impl crate::js_engine::JsRuntime for V8Runtime {
     }
     fn has_ready_work(&self, now: Instant) -> bool {
         self.has_animation_frame_callbacks()
+            || super::mutation_observer::has_pending(&self.registry)
             || super::image_load::has_finished(&self.registry)
             || super::script_load::has_ready(&self.registry)
             || self.next_deadline().map(|d| d <= now).unwrap_or(false)

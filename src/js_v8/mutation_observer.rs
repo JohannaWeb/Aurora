@@ -26,6 +26,9 @@ pub(super) struct MoEntry {
     target_id: u32,
     child_list: bool,
     attributes: bool,
+    character_data: bool,
+    attribute_old_value: bool,
+    character_data_old_value: bool,
     subtree: bool,
     pending: Vec<MutationRecordData>,
 }
@@ -40,6 +43,11 @@ pub(super) enum MutationRecordData {
     Attributes {
         target: u32,
         name: String,
+        old_value: Option<String>,
+    },
+    CharacterData {
+        target: u32,
+        old_value: Option<String>,
     },
 }
 
@@ -187,18 +195,40 @@ fn mutation_observer_observe(
         return;
     };
 
-    let (mut child_list, mut attributes, mut subtree) = (false, false, false);
+    let (
+        mut child_list,
+        mut attributes,
+        mut character_data,
+        mut attribute_old_value,
+        mut character_data_old_value,
+        mut subtree,
+    ) = (false, false, false, false, false, false);
+    let mut attributes_set = false;
+    let mut character_data_set = false;
     let opts = args.get(1);
     if let Some(opts) = opts.is_object().then(|| opts.to_object(scope)).flatten() {
-        for (k, slot) in [
-            ("childList", &mut child_list),
-            ("attributes", &mut attributes),
-            ("subtree", &mut subtree),
-        ] {
-            let key = v8_str(scope, k);
-            if let Some(v) = opts.get(scope, key.into()) {
-                *slot = v.boolean_value(scope);
-            }
+        let read_bool = |scope: &mut v8::PinScope<'_, '_>, name: &str| -> Option<bool> {
+            let key = v8_str(scope, name);
+            let val = opts.get(scope, key.into())?;
+            (!val.is_undefined()).then(|| val.boolean_value(scope))
+        };
+        child_list = read_bool(scope, "childList").unwrap_or(false);
+        if let Some(v) = read_bool(scope, "attributes") {
+            attributes = v;
+            attributes_set = true;
+        }
+        if let Some(v) = read_bool(scope, "characterData") {
+            character_data = v;
+            character_data_set = true;
+        }
+        attribute_old_value = read_bool(scope, "attributeOldValue").unwrap_or(false);
+        character_data_old_value = read_bool(scope, "characterDataOldValue").unwrap_or(false);
+        subtree = read_bool(scope, "subtree").unwrap_or(false);
+        if attribute_old_value && !attributes_set {
+            attributes = true;
+        }
+        if character_data_old_value && !character_data_set {
+            character_data = true;
         }
     }
 
@@ -209,6 +239,9 @@ fn mutation_observer_observe(
         target_id,
         child_list,
         attributes,
+        character_data,
+        attribute_old_value,
+        character_data_old_value,
         subtree,
         pending: Vec::new(),
     });
@@ -271,23 +304,45 @@ pub(super) fn queue_childlist(
         registry,
         target_id,
         |e| e.child_list,
-        MutationRecordData::ChildList {
+        |_| MutationRecordData::ChildList {
             target: target_id,
-            added,
-            removed,
+            added: added.clone(),
+            removed: removed.clone(),
         },
     );
 }
 
 /// Record an attribute mutation on `target_id`.
-pub(super) fn queue_attribute(registry: &Rc<NodeRegistry>, target_id: u32, name: &str) {
+pub(super) fn queue_attribute(
+    registry: &Rc<NodeRegistry>,
+    target_id: u32,
+    name: &str,
+    old_value: Option<&str>,
+) {
     queue_record(
         registry,
         target_id,
         |e| e.attributes,
-        MutationRecordData::Attributes {
+        |e| MutationRecordData::Attributes {
             target: target_id,
             name: name.to_string(),
+            old_value: e
+                .attribute_old_value
+                .then(|| old_value.map(str::to_string))
+                .flatten(),
+        },
+    );
+}
+
+/// Record a `characterData` mutation on `target_id`.
+pub(super) fn queue_character_data(registry: &Rc<NodeRegistry>, target_id: u32, old_value: &str) {
+    queue_record(
+        registry,
+        target_id,
+        |e| e.character_data,
+        |e| MutationRecordData::CharacterData {
+            target: target_id,
+            old_value: e.character_data_old_value.then(|| old_value.to_string()),
         },
     );
 }
@@ -296,7 +351,7 @@ fn queue_record(
     registry: &Rc<NodeRegistry>,
     target_id: u32,
     kind_matches: impl Fn(&MoEntry) -> bool,
-    record: MutationRecordData,
+    make_record: impl Fn(&MoEntry) -> MutationRecordData,
 ) {
     if registry.mo_entries.borrow().is_empty() {
         return;
@@ -318,7 +373,8 @@ fn queue_record(
             false
         };
         if matches {
-            entry.pending.push(record.clone());
+            let record = make_record(entry);
+            entry.pending.push(record);
         }
     }
 }
@@ -430,10 +486,33 @@ fn build_record<'s>(
             let key = v8_str(scope, "removedNodes");
             obj.set(scope, key.into(), removed_arr.into());
         }
-        MutationRecordData::Attributes { target, name } => {
+        MutationRecordData::Attributes {
+            target,
+            name,
+            old_value,
+        } => {
             set_str(scope, obj, "type", "attributes");
             set_target(scope, obj, registry, &document, *target);
             set_str(scope, obj, "attributeName", name);
+            if let Some(old_value) = old_value {
+                set_str(scope, obj, "oldValue", old_value);
+            }
+            let empty1 = v8::Array::new(scope, 0);
+            let key = v8_str(scope, "addedNodes");
+            obj.set(scope, key.into(), empty1.into());
+            let empty2 = v8::Array::new(scope, 0);
+            let key = v8_str(scope, "removedNodes");
+            obj.set(scope, key.into(), empty2.into());
+        }
+        MutationRecordData::CharacterData { target, old_value } => {
+            set_str(scope, obj, "type", "characterData");
+            set_target(scope, obj, registry, &document, *target);
+            let null = v8::null(scope);
+            let key = v8_str(scope, "attributeName");
+            obj.set(scope, key.into(), null.into());
+            if let Some(old_value) = old_value {
+                set_str(scope, obj, "oldValue", old_value);
+            }
             let empty1 = v8::Array::new(scope, 0);
             let key = v8_str(scope, "addedNodes");
             obj.set(scope, key.into(), empty1.into());
