@@ -1,5 +1,6 @@
 # Aurora
 Youtube results page:
+<img width="2048" height="1126" alt="image" src="https://github.com/user-attachments/assets/7c85966b-87c6-4b53-bc73-7eb273e23530" />
 <img width="2556" height="1404" alt="image" src="https://github.com/user-attachments/assets/35eb31b3-a4c8-4f09-a0c7-d58f096c4ce9" />
 <img width="1442" height="1030" alt="image" src="https://github.com/user-attachments/assets/cb0955cf-6b8e-4073-befc-30bf13280651" />
 
