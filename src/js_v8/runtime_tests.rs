@@ -4068,3 +4068,55 @@ fn v8_image_attributes_reflect() {
         .join(" | "))
     );
 }
+
+#[test]
+fn v8_performance_now_timing_and_user_timing_marks_and_measures() {
+    let mut runtime = V8Runtime::new(blank_dom());
+    assert_eq!(
+        runtime.eval_to_string(
+            r#"(() => {
+                const t1 = performance.now();
+                const t2 = performance.now();
+                const m1 = performance.mark('start', { startTime: 12, detail: { n: 1 } });
+                const m2 = performance.mark('end', { startTime: 30 });
+                const detached = new PerformanceMark('detached', { startTime: 5 });
+                const meas1 = performance.measure('span', 'start', 'end');
+                const meas2 = performance.measure('opts', { start: 10, end: 25, detail: 'ok' });
+                let missingErr = '';
+                try { performance.measure('bad', 'no-such-mark'); } catch (e) { missingErr = e.name; }
+                let illegalErr = '';
+                try { new Performance(); } catch (e) { illegalErr = e.constructor.name; }
+                const allNames = performance.getEntries().map(e => `${e.entryType}:${e.name}:${e.startTime}:${e.duration}`).join(',');
+                const navLen = performance.getEntriesByType('navigation').length;
+                performance.clearMarks('start');
+                const afterClearMarks = performance.getEntriesByType('mark').map(e => e.name).join(',');
+                performance.clearMeasures();
+                const afterClearMeasures = performance.getEntriesByType('measure').length;
+                return [
+                    performance instanceof Performance,
+                    typeof t1 === 'number' && t1 >= 0 && t2 >= t1,
+                    performance.timeOrigin > 0,
+                    performance.timing.navigationStart > 0 && performance.navigation.type === 0,
+                    m1 instanceof PerformanceMark && m1 instanceof PerformanceEntry,
+                    m1.detail.n === 1 && m1.duration === 0,
+                    detached instanceof PerformanceMark && performance.getEntriesByName('detached').length === 0,
+                    meas1 instanceof PerformanceMeasure && meas1 instanceof PerformanceEntry,
+                    meas1.duration,
+                    meas2.duration,
+                    meas2.detail,
+                    missingErr,
+                    illegalErr,
+                    allNames,
+                    navLen,
+                    afterClearMarks,
+                    afterClearMeasures,
+                    typeof performance.toJSON().timeOrigin === 'number',
+                ].join('|');
+            })()"#
+        ),
+        Ok(
+            "true|true|true|true|true|true|true|true|18|15|ok|SyntaxError|TypeError|measure:opts:10:15,mark:start:12:0,measure:span:12:18,mark:end:30:0|0|end|0|true"
+                .into()
+        )
+    );
+}

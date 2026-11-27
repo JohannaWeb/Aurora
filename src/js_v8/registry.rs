@@ -33,6 +33,8 @@ pub(super) struct NodeRegistry {
     pub(super) mo_entries: RefCell<Vec<super::mutation_observer::MoEntry>>,
     /// Monotonic id source for MutationObservers (kept separate from node ids).
     mo_next: RefCell<u32>,
+    /// `window.performance` clock origin and User Timing entries.
+    pub(super) performance: RefCell<super::performance::PerformanceState>,
     snapshot_rebuild_reason: RefCell<Option<SnapshotRebuildReason>>,
     /// Native mirror of the JS `customElements` registry (Phase 1 of the native
     /// custom-element-reaction plan). Populated from `customElements.define`.
@@ -96,6 +98,7 @@ impl NodeRegistry {
             mo_observers: RefCell::new(BTreeMap::new()),
             mo_entries: RefCell::new(Vec::new()),
             mo_next: RefCell::new(1),
+            performance: RefCell::new(super::performance::PerformanceState::new()),
             snapshot_rebuild_reason: RefCell::new(None),
             ce_registry: super::custom_elements::CeRegistry::default(),
             focused: RefCell::new(None),
