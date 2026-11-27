@@ -4120,3 +4120,65 @@ fn v8_performance_now_timing_and_user_timing_marks_and_measures() {
         )
     );
 }
+
+#[test]
+fn v8_text_encoder_and_text_decoder_match_whatwg_encoding() {
+    let mut runtime = V8Runtime::new(blank_dom());
+    assert_eq!(
+        runtime.eval_to_string(
+            r#"(() => {
+            const enc = new TextEncoder();
+            const encUndef = Array.from(enc.encode());
+            const encSurrogate = Array.from(enc.encode('a\uD800😀'));
+            const buf = new Uint8Array(5);
+            const r1 = enc.encodeInto('a😀b', buf);
+
+            const dec = new TextDecoder();
+            const bom = new Uint8Array([0xEF, 0xBB, 0xBF, 0x68, 0x69]);
+            const keepBom = new TextDecoder('utf-8', { ignoreBOM: true }).decode(bom);
+            const stripBom = dec.decode(bom);
+
+            // Split BOM + 4-byte UTF-8 sequence across streamed chunks.
+            const s1 = dec.decode(new Uint8Array([0xEF, 0xBB]), { stream: true });
+            const s2 = dec.decode(new Uint8Array([0xBF, 0xF0, 0x9F]), { stream: true });
+            const s3 = dec.decode(new Uint8Array([0x98, 0x80]), { stream: false });
+
+            // Invalid UTF-8 handling: replacement vs fatal TypeError.
+            const replaced = dec.decode(new Uint8Array([0x61, 0xFF, 0x62]));
+            let fatalErr = '';
+            try {
+                new TextDecoder('utf-8', { fatal: true }).decode(new Uint8Array([0xC2]));
+            } catch (e) { fatalErr = e.name; }
+
+            let badLabel = '';
+            try { new TextDecoder('invalid-encoding'); } catch (e) { badLabel = e.name; }
+            let noNew = '';
+            try { TextDecoder(); } catch (e) { noNew = e.name; }
+
+            const latin = new TextDecoder('latin1').decode(new Uint8Array([0x80, 0xE9]));
+            const utf16 = new TextDecoder('utf-16le').decode(new Uint8Array([0xFF, 0xFE, 0x41, 0x00, 0x3D, 0xD8, 0x00, 0xDE]).buffer);
+            const subview = new TextDecoder().decode(new DataView(new Uint8Array([99, 0x6F, 0x6B, 99]).buffer, 1, 2));
+
+            return [
+                enc.encoding,
+                Object.prototype.toString.call(enc),
+                encUndef.length,
+                encSurrogate.join(','),
+                r1.read + ':' + r1.written + ':' + Array.from(buf).join(','),
+                dec.encoding + ':' + dec.fatal + ':' + dec.ignoreBOM,
+                stripBom,
+                keepBom.charCodeAt(0) === 0xFEFF,
+                s1 + '|' + s2 + '|' + s3,
+                replaced === 'a\uFFFD' + 'b',
+                fatalErr,
+                badLabel,
+                noNew,
+                latin,
+                utf16,
+                subview,
+            ].join(' / ');
+        })()"#
+        ),
+        Ok("utf-8 / [object TextEncoder] / 0 / 97,239,191,189,240,159,152,128 / 3:5:97,240,159,152,128 / utf-8:false:false / hi / true / ||😀 / true / TypeError / RangeError / TypeError / €é / A😀 / ok".into())
+    );
+}

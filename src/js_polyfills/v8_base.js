@@ -1006,22 +1006,6 @@
     };
     WebSocket.CONNECTING = 0; WebSocket.OPEN = 1; WebSocket.CLOSING = 2; WebSocket.CLOSED = 3;
 
-    globalThis.TextEncoder = globalThis.TextEncoder || function TextEncoder() {
-        this.encode = function(s) {
-            s = String(s === undefined ? '' : s);
-            var out = [];
-            for (var i = 0; i < s.length; i++) {
-                var c = s.codePointAt(i);
-                if (c > 0xffff) i++;
-                if (c < 0x80) out.push(c);
-                else if (c < 0x800) out.push(0xc0 | (c >> 6), 0x80 | (c & 0x3f));
-                else if (c < 0x10000) out.push(0xe0 | (c >> 12), 0x80 | ((c >> 6) & 0x3f), 0x80 | (c & 0x3f));
-                else out.push(0xf0 | (c >> 18), 0x80 | ((c >> 12) & 0x3f), 0x80 | ((c >> 6) & 0x3f), 0x80 | (c & 0x3f));
-            }
-            return new Uint8Array(out);
-        };
-    };
-
     // AbortController / AbortSignal. YouTube's kevlar_base bundle references
     // `AbortSignal` during init (fetch + scheduler plumbing); without it the
     // main module throws a ReferenceError before ytd-app boots. Built on the
