@@ -157,9 +157,13 @@ impl AuroraApp {
         let input = self.input_mut();
         let mut needs_reflow = input.needs_reflow;
         let mut runtime_dirtied_blitz = false;
+        // Where page script scrolled to, between frames or during this one.
+        let mut scrolled_to = None;
 
         if let Some(runtime) = input.runtime.as_mut() {
-            runtime.set_scroll_position(0.0, scroll_y);
+            scrolled_to = runtime.take_scroll_request();
+            let (_, y) = scrolled_to.unwrap_or((0.0, scroll_y));
+            runtime.set_scroll_position(0.0, y);
             let runtime_needs_reflow = runtime.tick(now)
                 | runtime.drain_animation_frame_callbacks(now)
                 | runtime.deliver_mutation_records()
@@ -169,12 +173,16 @@ impl AuroraApp {
                 runtime_dirtied_blitz = true;
                 needs_reflow = true;
             }
+            scrolled_to = runtime.take_scroll_request().or(scrolled_to);
         }
         if runtime_dirtied_blitz && input.blitz_doc.is_none() {
             input.mark_blitz_snapshot_dirty(SnapshotRebuildReason::MissingMapping);
         }
+        if let Some((_, y)) = scrolled_to {
+            self.tab_mut().scroll_y = y;
+        }
 
-        let needs_redraw = self.input_mut().media.update();
+        let needs_redraw = self.input_mut().media.update() || scrolled_to.is_some();
         if needs_reflow {
             self.perform_sync_reflow();
         }

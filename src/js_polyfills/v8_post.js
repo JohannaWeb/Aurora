@@ -808,8 +808,54 @@
     document.__shady_native_createElement = document.createElement;
     document.__shady_native_createTextNode = document.createTextNode;
     document.__shady_native_importNode = document.importNode;
-    globalThis.scrollX = 0; globalThis.scrollY = 0;
-    globalThis.pageXOffset = 0; globalThis.pageYOffset = 0;
+    // The viewport's scroll position, shared with the window (CSSOM View).
+    (function() {
+        function position(index) {
+            var v = typeof globalThis.__aurora_view__ === 'function' ? globalThis.__aurora_view__() : null;
+            return v ? v[index] : 0;
+        }
+        [['scrollX', 2], ['pageXOffset', 2], ['scrollY', 3], ['pageYOffset', 3]].forEach(function(entry) {
+            Object.defineProperty(globalThis, entry[0], {
+                get: function() { return position(entry[1]); },
+                set: function(value) {
+                    // Replaceable: assigning shadows the accessor with the value.
+                    Object.defineProperty(globalThis, entry[0], {
+                        value: value, writable: true, enumerable: true, configurable: true
+                    });
+                },
+                enumerable: true, configurable: true
+            });
+        });
+        // scrollTo(x, y) or scrollTo({left, top, behavior}); scrollBy is relative.
+        function target(args, relative) {
+            var x = relative ? 0 : position(2), y = relative ? 0 : position(3);
+            if (args.length >= 2) {
+                x = Number(args[0]) || 0;
+                y = Number(args[1]) || 0;
+            } else if (args.length === 1 && args[0] !== null && typeof args[0] === 'object') {
+                if (args[0].left !== undefined) x = Number(args[0].left) || 0;
+                if (args[0].top !== undefined) y = Number(args[0].top) || 0;
+            }
+            return relative ? [position(2) + x, position(3) + y] : [x, y];
+        }
+        function scrollTo() {
+            var to = target(arguments, false);
+            globalThis.__aurora_scroll_to__(to[0], to[1]);
+        }
+        globalThis.scrollTo = scrollTo;
+        globalThis.scroll = scrollTo;
+        globalThis.scrollBy = function scrollBy() {
+            var to = target(arguments, true);
+            globalThis.__aurora_scroll_to__(to[0], to[1]);
+        };
+        globalThis.__aurora_fire_scroll_event__ = function() {
+            var event = new Event('scroll', { bubbles: true, cancelable: false });
+            event.isTrusted = true;
+            document.dispatchEvent(event);
+            // EventTarget here does not know about event handler properties.
+            if (typeof globalThis.onscroll === 'function') globalThis.onscroll(event);
+        };
+    })();
     globalThis.outerWidth = globalThis.innerWidth; globalThis.outerHeight = globalThis.innerHeight;
     globalThis.frames = globalThis;
     globalThis.parent = globalThis;

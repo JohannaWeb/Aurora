@@ -572,8 +572,6 @@ impl V8Runtime {
                 .get_function(scope)
                 .expect("function template yields a function outside of a pending exception");
             global.set(scope, v8_str(scope, "alert").into(), noop.into());
-            global.set(scope, v8_str(scope, "scrollTo").into(), noop.into());
-            global.set(scope, v8_str(scope, "scrollBy").into(), noop.into());
 
             // atob / btoa
             global.set(
@@ -610,6 +608,14 @@ impl V8Runtime {
                 .get_function(scope)
                 .expect("function template yields a function outside of a pending exception");
             global.set(scope, v8_str(scope, "__aurora_view__").into(), view_fn.into());
+
+            // __aurora_scroll_to__(x, y): window.scrollTo after option parsing.
+            let scroll_fn = v8::FunctionTemplate::builder(viewport_scroll_to)
+                .data(registry_data.into())
+                .build(scope)
+                .get_function(scope)
+                .expect("function template yields a function outside of a pending exception");
+            global.set(scope, v8_str(scope, "__aurora_scroll_to__").into(), scroll_fn.into());
 
             let observe_fn = v8::FunctionTemplate::builder(observe_intersections)
                 .data(registry_data.into())
@@ -1258,6 +1264,16 @@ impl V8Runtime {
         !ready.is_empty()
     }
 
+    /// Fires `scroll` at the document (it bubbles to the window) if the
+    /// viewport scrolled since the last one, like HTML's "run the scroll steps".
+    fn fire_scroll_event(&mut self) -> bool {
+        if !self.registry.scroll_event_pending.replace(false) {
+            return false;
+        }
+        self.run_js_quiet("__aurora_fire_scroll_event__();");
+        true
+    }
+
     fn fire_lifecycle_event(&mut self, event_type: &str) {
         // Lifecycle listeners live on the JS `document`/`window` EventTargets, so
         // fire through the JS event model rather than the legacy id-0 registry.
@@ -1479,6 +1495,19 @@ fn viewport_view(
     let (x, y) = registry.scroll.get();
     let values = [f64::from(width), f64::from(height), x, y].map(|n| v8::Number::new(scope, n).into());
     retval.set(v8::Array::new_with_elements(scope, &values).into());
+}
+
+fn viewport_scroll_to(
+    scope: &mut v8::PinScope<'_, '_>,
+    args: v8::FunctionCallbackArguments,
+    _retval: v8::ReturnValue,
+) {
+    let external = v8::Local::<v8::External>::try_from(args.data())
+        .expect("callback data is always the External we installed");
+    let registry = unsafe { &*(external.value() as *const Rc<NodeRegistry>) };
+    let x = args.get(0).number_value(scope).unwrap_or(0.0);
+    let y = args.get(1).number_value(scope).unwrap_or(0.0);
+    registry.scroll_viewport_to(x, y);
 }
 
 fn dispatch_event_global(
@@ -2505,8 +2534,10 @@ impl crate::js_engine::JsRuntime for V8Runtime {
     }
 
     fn tick(&mut self, now: Instant) -> bool {
-        let delivered =
-            self.run_inserted_scripts() | self.deliver_image_events() | self.update_intersections();
+        let delivered = self.run_inserted_scripts()
+            | self.deliver_image_events()
+            | self.fire_scroll_event()
+            | self.update_intersections();
         let ready = self.ready_timers(now);
         if ready.is_empty() {
             return delivered;
@@ -2544,7 +2575,19 @@ impl crate::js_engine::JsRuntime for V8Runtime {
     }
 
     fn set_scroll_position(&mut self, x: f64, y: f64) {
+        // A scroll from page script wins until the window has taken it.
+        if self.registry.scroll_requested.get() || self.registry.scroll.get() == (x, y) {
+            return;
+        }
         self.registry.scroll.set((x, y));
+        self.registry.scroll_event_pending.set(true);
+    }
+
+    fn take_scroll_request(&mut self) -> Option<(f64, f64)> {
+        self.registry
+            .scroll_requested
+            .replace(false)
+            .then(|| self.registry.scroll.get())
     }
 
     fn has_pending_loads(&self) -> bool {
