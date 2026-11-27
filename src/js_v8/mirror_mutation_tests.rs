@@ -585,3 +585,49 @@ fn window_resize_updates_viewport_globals_events_and_match_media() {
             .into())
     );
 }
+
+#[test]
+fn replacing_render_document_preserves_scroll_position_and_tracks_image_delivery() {
+    let dom = Parser::new(
+        "<html><body style='margin:0'><div style='height:1500px'></div>\
+         <img id='pic' style='display:block;width:120px;height:80px'></body></html>",
+    )
+    .parse_document();
+    crate::dom::reparent_subtree(&dom);
+    let render_doc = Rc::new(RefCell::new(
+        BlitzDocument::try_from_dom(&dom, None, &test_identity(), 800, 600).unwrap(),
+    ));
+    let mut runtime = V8Runtime::with_render_document(dom.clone(), Some(render_doc.clone()));
+    runtime.execute("window.scrollTo(0, 700);").unwrap();
+    runtime.tick(crate::clock::now());
+    assert_eq!(
+        runtime.eval_to_string("Math.round(document.getElementById('pic').getBoundingClientRect().top)"),
+        Ok("800".into())
+    );
+
+    // Simulate a snapshot rebuild replacing the BlitzDocument at scroll_y = 0.
+    let rebuilt = Rc::new(RefCell::new(
+        BlitzDocument::try_from_dom(&dom, None, &test_identity(), 800, 600).unwrap(),
+    ));
+    runtime.set_render_document(Some(rebuilt.clone()));
+    assert_eq!(
+        runtime.eval_to_string("Math.round(document.getElementById('pic').getBoundingClientRect().top)"),
+        Ok("800".into()),
+        "restoring scroll position keeps client rects and IntersectionObserver accurate across rebuilds"
+    );
+
+    // Assigning src triggers a Blitz fetch whose delivery flag clears on layout.
+    runtime
+        .execute("document.getElementById('pic').src = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAMAAAACCAIAAAASFvFNAAAADElEQVR4nGNgIA4AAABUAAG5uxhVAAAAAElFTkSuQmCC';")
+        .unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while (rebuilt.borrow().has_pending_resources() || runtime.has_pending_loads())
+        && std::time::Instant::now() < deadline
+    {
+        runtime.tick(crate::clock::now());
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert!(rebuilt.borrow().has_delivered_resources());
+    assert!(rebuilt.borrow_mut().perform_layout());
+    assert!(!rebuilt.borrow().has_delivered_resources());
+}

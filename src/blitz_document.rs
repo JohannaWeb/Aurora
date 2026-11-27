@@ -13,7 +13,8 @@ use crate::identity::Identity;
 use std::collections::BTreeMap;
 use std::panic::{self, AssertUnwindSafe};
 use std::rc::Rc;
-use std::sync::{Mutex, OnceLock, PoisonError};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
 /// A requested resource: either on its way, with the callbacks waiting for
 /// it, or here. A failed request is kept as empty bytes.
@@ -121,14 +122,22 @@ fn encoded_image_size(bytes: &[u8]) -> Option<(u32, u32)> {
     })
 }
 
+#[derive(Default)]
+struct NetResourceState {
+    in_flight: AtomicUsize,
+    delivered: AtomicBool,
+}
+
 struct AuroraNetProvider {
     identity: Identity,
+    state: Arc<NetResourceState>,
 }
 
 impl AuroraNetProvider {
-    fn new(identity: &Identity) -> std::sync::Arc<Self> {
-        std::sync::Arc::new(Self {
+    fn new(identity: &Identity, state: Arc<NetResourceState>) -> Arc<Self> {
+        Arc::new(Self {
             identity: identity.clone(),
+            state,
         })
     }
 }
@@ -137,7 +146,17 @@ impl NetProvider for AuroraNetProvider {
     fn fetch(&self, _doc_id: usize, request: Request, handler: Box<dyn NetHandler>) {
         let url = request.url.to_string();
         let resolved = url.clone();
-        request_bytes(url, &self.identity, Box::new(move |bytes| handler.bytes(resolved, bytes)));
+        let state = self.state.clone();
+        state.in_flight.fetch_add(1, Ordering::AcqRel);
+        request_bytes(
+            url,
+            &self.identity,
+            Box::new(move |bytes| {
+                handler.bytes(resolved, bytes);
+                state.delivered.store(true, Ordering::Release);
+                state.in_flight.fetch_sub(1, Ordering::AcqRel);
+            }),
+        );
     }
 }
 
@@ -281,6 +300,7 @@ pub struct BlitzDocument {
     inner: BaseDocument,
     identity: Identity,
     base_url: Option<url::Url>,
+    net_state: Arc<NetResourceState>,
     /// Counts successful layouts, so others can tell when geometry may have changed.
     layout_generation: u64,
     healthy: bool,
@@ -297,11 +317,12 @@ impl BlitzDocument {
         identity: &Identity,
         width: u32,
         height: u32,
+        net_state: Arc<NetResourceState>,
     ) -> DocumentConfig {
         DocumentConfig {
             base_url: base_url.map(|s| s.to_string()),
             viewport: Some(Viewport::new(width, height, 1.0, ColorScheme::Light)),
-            net_provider: Some(AuroraNetProvider::new(identity)),
+            net_provider: Some(AuroraNetProvider::new(identity, net_state)),
             ..Default::default()
         }
     }
@@ -314,13 +335,15 @@ impl BlitzDocument {
         width: u32,
         height: u32,
     ) -> Option<Self> {
-        let config = Self::config(base_url, identity, width, height);
+        let net_state = Arc::new(NetResourceState::default());
+        let config = Self::config(base_url, identity, width, height, net_state.clone());
         catch_stylo_panic("constructing Blitz document", || {
             let inner = HtmlDocument::from_html(html, config).into_inner();
             BlitzDocument {
                 inner,
                 identity: identity.clone(),
                 base_url: base_url.and_then(|url| url::Url::parse(url).ok()),
+                net_state,
                 layout_generation: 0,
                 healthy: true,
                 consecutive_panics: 0,
@@ -341,7 +364,8 @@ impl BlitzDocument {
         width: u32,
         height: u32,
     ) -> Option<Self> {
-        let config = Self::config(base_url, identity, width, height);
+        let net_state = Arc::new(NetResourceState::default());
+        let config = Self::config(base_url, identity, width, height, net_state.clone());
         catch_stylo_panic("constructing Blitz document from DOM", || {
             let mut inner = BaseDocument::new(config);
             let root_id = inner.root_node().id;
@@ -361,6 +385,7 @@ impl BlitzDocument {
                 inner,
                 identity: identity.clone(),
                 base_url: base_url.and_then(|url| url::Url::parse(url).ok()),
+                net_state,
                 layout_generation: 0,
                 healthy: true,
                 consecutive_panics: 0,
@@ -423,6 +448,22 @@ impl BlitzDocument {
     /// are still loading. They are applied on the next `perform_layout`.
     pub fn has_pending_critical_resources(&self) -> bool {
         self.inner.has_pending_critical_resources()
+    }
+
+    /// Whether Blitz has any resource fetch in flight.
+    pub fn has_pending_resources(&self) -> bool {
+        self.healthy && self.net_state.in_flight.load(Ordering::Acquire) > 0
+    }
+
+    /// Whether a resource fetch delivered bytes/bitmap to Blitz since the last
+    /// resolve, so `perform_layout` should run to ingest and paint it.
+    pub fn has_delivered_resources(&self) -> bool {
+        self.healthy && self.net_state.delivered.load(Ordering::Acquire)
+    }
+
+    /// The vertical scroll offset currently applied to the Blitz viewport.
+    pub fn viewport_scroll_y(&self) -> f64 {
+        self.inner.viewport_scroll().y
     }
 
     pub fn last_mirror_mutation_trace(&self) -> Option<&MirrorMutationTrace> {
@@ -1754,6 +1795,8 @@ impl BlitzDocument {
         if !self.healthy {
             return false;
         }
+        // Clear before resolving so deliveries arriving mid-resolve stay marked.
+        self.net_state.delivered.store(false, Ordering::Release);
         let resolved = {
             let _traversal = STYLO_TRAVERSAL_LOCK
                 .lock()

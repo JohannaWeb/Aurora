@@ -231,7 +231,10 @@ impl WindowInput {
             content_w,
             content_h,
         ) {
-            Some(next_doc) => {
+            Some(mut next_doc) => {
+                if let Some(existing) = self.blitz_doc.as_ref() {
+                    next_doc.set_scroll_y(existing.borrow().viewport_scroll_y());
+                }
                 let handle = match self.blitz_doc.as_ref() {
                     Some(existing) => {
                         *existing.borrow_mut() = next_doc;
