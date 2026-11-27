@@ -192,6 +192,12 @@ impl NodeRegistry {
             .as_ref()
             .map(|doc| doc.borrow().viewport_css_size());
         self.last_viewport.set(viewport);
+        if let Some(doc) = render_document.as_ref() {
+            let scroll_y = self.scroll.get().1;
+            if scroll_y != 0.0 {
+                doc.borrow_mut().set_scroll_y(scroll_y);
+            }
+        }
         *self.render_document.borrow_mut() = render_document;
     }
 

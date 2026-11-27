@@ -182,8 +182,14 @@ impl AuroraApp {
             self.tab_mut().scroll_y = y;
         }
 
-        let needs_redraw = self.input_mut().media.update() || scrolled_to.is_some();
-        if needs_reflow {
+        let blitz_delivered = self
+            .input()
+            .blitz_doc
+            .as_ref()
+            .is_some_and(|doc| doc.borrow().has_delivered_resources());
+        let needs_redraw =
+            self.input_mut().media.update() || scrolled_to.is_some() || blitz_delivered;
+        if needs_reflow || blitz_delivered {
             self.perform_sync_reflow();
         }
         needs_reflow || needs_redraw
@@ -200,17 +206,32 @@ impl AuroraApp {
     }
 
     pub(super) fn next_runtime_deadline(&self) -> Option<Instant> {
-        self.input()
-            .runtime
+        let input = self.input();
+        let blitz_delivered = input
+            .blitz_doc
             .as_ref()
-            .and_then(|runtime| {
-                // Nothing wakes the window when an image or script arrives,
-                // so look again next frame while one is loading.
-                let load = runtime
-                    .has_pending_loads()
-                    .then(|| crate::clock::now() + Duration::from_millis(16));
-                [runtime.next_deadline(), load].into_iter().flatten().min()
-            })
+            .is_some_and(|doc| doc.borrow().has_delivered_resources());
+        if blitz_delivered {
+            return Some(crate::clock::now());
+        }
+        let blitz_pending = input
+            .blitz_doc
+            .as_ref()
+            .is_some_and(|doc| doc.borrow().has_pending_resources());
+        let runtime_deadline = input.runtime.as_ref().and_then(|runtime| {
+            // Nothing wakes the window when an image or script arrives,
+            // so look again next frame while one is loading.
+            let load = runtime
+                .has_pending_loads()
+                .then(|| crate::clock::now() + Duration::from_millis(16));
+            [runtime.next_deadline(), load].into_iter().flatten().min()
+        });
+        let blitz_deadline =
+            blitz_pending.then(|| crate::clock::now() + Duration::from_millis(16));
+        [runtime_deadline, blitz_deadline]
+            .into_iter()
+            .flatten()
+            .min()
     }
 
     pub(super) fn has_animation_frame_callbacks(&self) -> bool {

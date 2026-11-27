@@ -99,11 +99,17 @@ impl winit::application::ApplicationHandler for AuroraApp {
             .as_ref()
             .map(|r| r.has_dirty_bits())
             .unwrap_or(false);
+        let blitz_delivered = self
+            .input()
+            .blitz_doc
+            .as_ref()
+            .is_some_and(|doc| doc.borrow().has_delivered_resources());
         if self.has_animation_frame_callbacks()
             || self.timer_is_due()
             || self.has_active_media()
             || self.input().needs_reflow
             || runtime_dirty
+            || blitz_delivered
         {
             self.request_redraw();
         }

@@ -160,14 +160,23 @@ fn wait_for_critical_resources(input: &WindowInput) {
 /// Waits for the images and scripts page script is loading, so their `load`
 /// handlers (which often make images visible) and the scripts run before the
 /// capture. Same bound as stylesheets.
+fn has_pending_loads_or_resources(input: &WindowInput) -> bool {
+    input
+        .runtime
+        .as_ref()
+        .is_some_and(|runtime| runtime.has_pending_loads())
+        || input.blitz_doc.as_ref().is_some_and(|doc| {
+            let doc = doc.borrow();
+            doc.has_pending_resources() || doc.has_delivered_resources()
+        })
+}
+
 fn wait_for_loads(input: &mut WindowInput, width: u32, height: u32) {
     let timeout = std::time::Duration::from_millis(
         env_u32("AURORA_SCREENSHOT_RESOURCE_TIMEOUT_MS").unwrap_or(15_000) as u64,
     );
     let started = Instant::now();
-    while input.runtime.as_ref().is_some_and(|runtime| runtime.has_pending_loads())
-        && started.elapsed() < timeout
-    {
+    while has_pending_loads_or_resources(input) && started.elapsed() < timeout {
         std::thread::sleep(std::time::Duration::from_millis(25));
         flush_ready_frame_tasks(input, width, height);
     }
@@ -186,7 +195,10 @@ fn flush_ready_frame_tasks(input: &mut WindowInput, width: u32, height: u32) {
                 | runtime.deliver_mutation_records()
                 | runtime.perform_style_and_layout()
                 | runtime.take_needs_reflow()
-        };
+        } || input
+            .blitz_doc
+            .as_ref()
+            .is_some_and(|doc| doc.borrow().has_delivered_resources());
         if needs_reflow {
             if input.blitz_doc.is_none() {
                 input.mark_blitz_snapshot_dirty(SnapshotRebuildReason::MissingMapping);
