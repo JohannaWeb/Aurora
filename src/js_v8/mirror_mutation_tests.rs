@@ -268,6 +268,50 @@ fn intersection_observer_follows_layout_and_scrolling() {
 }
 
 #[test]
+fn page_script_scrolls_the_viewport_and_sees_scroll_events() {
+    let dom = Parser::new("<html><body style='margin:0'><div style='height:2600px'></div></body></html>")
+        .parse_document();
+    crate::dom::reparent_subtree(&dom);
+    let render_doc = Rc::new(RefCell::new(
+        BlitzDocument::try_from_dom(&dom, None, &test_identity(), 800, 600).unwrap(),
+    ));
+    let mut runtime = V8Runtime::with_render_document(dom, Some(render_doc));
+    runtime
+        .execute(
+            r#"
+        var log = [];
+        document.addEventListener('scroll', function(e) { log.push('document ' + e.bubbles + ' ' + scrollY); });
+        window.addEventListener('scroll', function() { log.push('window ' + pageYOffset); });
+        function takeLog() { return log.splice(0).join(', '); }
+    "#,
+        )
+        .unwrap();
+    let tick = |runtime: &mut V8Runtime| {
+        runtime.tick(crate::clock::now());
+        runtime.eval_to_string("takeLog()").unwrap()
+    };
+
+    runtime.execute("scrollTo(0, 500); scrollBy({top: 100}); scroll({left: 0})").unwrap();
+    assert_eq!(runtime.eval_to_string("String(scrollY)"), Ok("600".into()));
+    assert_eq!(runtime.take_scroll_request(), Some((0.0, 600.0)));
+    assert_eq!(runtime.take_scroll_request(), None);
+    assert_eq!(tick(&mut runtime), "document true 600, window 600", "one event per frame");
+    assert_eq!(tick(&mut runtime), "");
+
+    runtime.execute("scrollTo(0, 1e9)").unwrap();
+    assert_eq!(runtime.eval_to_string("String(scrollY)"), Ok("2000".into()), "clamped to the page");
+    runtime.set_scroll_position(0.0, 0.0);
+    assert_eq!(runtime.eval_to_string("String(scrollY)"), Ok("2000".into()), "script wins until taken");
+    assert_eq!(runtime.take_scroll_request(), Some((0.0, 2000.0)));
+    tick(&mut runtime);
+
+    runtime.set_scroll_position(0.0, 300.0);
+    assert_eq!(tick(&mut runtime), "document true 300, window 300", "the window's scrolls fire too");
+    runtime.set_scroll_position(0.0, 300.0);
+    assert_eq!(tick(&mut runtime), "");
+}
+
+#[test]
 fn inserted_scripts_run_in_order_and_fire_load() {
     let dom = blank_dom();
     let render_doc = Rc::new(RefCell::new(

@@ -44,6 +44,11 @@ pub(super) struct NodeRegistry {
     pub(super) input_values: RefCell<BTreeMap<u32, String>>,
     /// How far the viewport is scrolled, in CSS pixels.
     pub(super) scroll: std::cell::Cell<(f64, f64)>,
+    /// Script scrolled the viewport and the window has not taken it yet; until
+    /// it does, the window's own position does not overwrite `scroll`.
+    pub(super) scroll_requested: std::cell::Cell<bool>,
+    /// The viewport scrolled since `scroll` was last fired.
+    pub(super) scroll_event_pending: std::cell::Cell<bool>,
     /// The layout and scroll position intersections were last checked at;
     /// `None` after an `observe()`.
     pub(super) intersections_checked: std::cell::Cell<Option<(u64, (f64, f64))>>,
@@ -90,6 +95,8 @@ impl NodeRegistry {
             focused: RefCell::new(None),
             input_values: RefCell::new(BTreeMap::new()),
             scroll: std::cell::Cell::new((0.0, 0.0)),
+            scroll_requested: std::cell::Cell::new(false),
+            scroll_event_pending: std::cell::Cell::new(false),
             intersections_checked: std::cell::Cell::new(None),
             observes_intersections: std::cell::Cell::new(false),
             images: RefCell::new(BTreeMap::new()),
@@ -440,6 +447,30 @@ impl NodeRegistry {
     }
 
     /// The viewport size in CSS pixels, without a render document `None`.
+    /// Scrolls the viewport for page script, clamped to the document, and asks
+    /// the window to follow. Returns whether the position changed. The window
+    /// only scrolls vertically, so `x` stays 0.
+    pub(super) fn scroll_viewport_to(&self, _x: f64, y: f64) -> bool {
+        let max_y = self
+            .render_document
+            .borrow()
+            .as_ref()
+            .map(|doc| {
+                let doc = doc.borrow();
+                f64::from(doc.document_height() - doc.viewport_css_size().1).max(0.0)
+            })
+            .unwrap_or(0.0);
+        let y = if y.is_finite() { y.clamp(0.0, max_y) } else { 0.0 };
+        let position = (0.0, y);
+        if position == self.scroll.get() {
+            return false;
+        }
+        self.scroll.set(position);
+        self.scroll_requested.set(true);
+        self.scroll_event_pending.set(true);
+        true
+    }
+
     pub(super) fn viewport_size(&self) -> Option<(f32, f32)> {
         let render_document = self.render_document.borrow().as_ref().cloned()?;
         let size = render_document.borrow().viewport_css_size();

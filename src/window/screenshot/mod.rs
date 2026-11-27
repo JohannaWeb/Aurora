@@ -27,6 +27,12 @@ pub(super) fn render_to_file(mut input: WindowInput, path: &str) {
     wait_for_critical_resources(&input);
     flush_ready_frame_tasks(&mut input, width, height);
     wait_for_loads(&mut input, width, height);
+    // Paint where page script scrolled to (for example a probe's scrollTo).
+    let scroll_y = input
+        .runtime
+        .as_mut()
+        .and_then(|runtime| runtime.take_scroll_request())
+        .map_or(0.0, |(_, y)| y);
 
     let mut img = ImageBuffer::new(width, height);
     for pixel in img.pixels_mut() {
@@ -37,7 +43,10 @@ pub(super) fn render_to_file(mut input: WindowInput, path: &str) {
     let rendered_with_blitz = input
         .blitz_doc
         .as_ref()
-        .map(|blitz_doc| render_blitz_content(blitz_doc, width, height, &mut img, chrome_offset))
+        .map(|blitz_doc| {
+            blitz_doc.borrow_mut().set_scroll_y(scroll_y);
+            render_blitz_content(blitz_doc, width, height, &mut img, chrome_offset)
+        })
         .unwrap_or(false);
     if !rendered_with_blitz {
         let layout = input.layout.borrow();
