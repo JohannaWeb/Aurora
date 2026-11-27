@@ -2388,6 +2388,44 @@ mod tests {
     }
 
     #[test]
+    fn fixed_boxes_stay_in_the_viewport_when_it_scrolls() {
+        // Nested, so the fixed box is hoisted to the root element; with and
+        // without a z-index, which paint through different paths.
+        for z_index in ["auto", "1"] {
+            let header = Node::element_with_attributes(
+                "div",
+                attr(
+                    "style",
+                    &format!("position:fixed;top:0;left:0;width:100px;height:50px;background:red;z-index:{z_index}"),
+                ),
+                Vec::new(),
+            );
+            let document = document_with_body_children(vec![Node::element(
+                "div",
+                vec![header.clone(), styled_div("height:5000px")],
+            )]);
+            let mut blitz_doc =
+                BlitzDocument::try_from_dom(&document, None, &test_identity(), 800, 600)
+                    .expect("Blitz document should build");
+            let mut draws_at = |y: f64| {
+                let mut scene = Scene::new();
+                blitz_doc.set_scroll_y(y);
+                blitz_doc.paint_to_scene(&mut scene, 800, 600);
+                scene.encoding().draw_tags.len()
+            };
+
+            let top = draws_at(0.0);
+            assert_eq!(draws_at(3000.0), top, "z-index {z_index}: the fixed box is painted");
+            // Hit testing takes document coordinates, like the window's clicks.
+            let hit = blitz_doc.hit_test_dom_node(10.0, 3010.0);
+            assert!(
+                hit.is_some_and(|node| Rc::ptr_eq(&node, &header)),
+                "z-index {z_index}: the fixed box is hit"
+            );
+        }
+    }
+
+    #[test]
     fn paint_to_scene_reports_painted_current_frame_on_success() {
         let document = document_with_body_children(vec![Node::element("p", vec![Node::text("x")])]);
         let mut blitz_doc =
