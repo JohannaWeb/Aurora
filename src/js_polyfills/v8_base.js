@@ -243,18 +243,17 @@
         };
         globalThis.IntersectionObserver = IntersectionObserver;
 
-        // Layout geometry is document-relative; the viewport sits at the
-        // scroll position in it.
+        // Client rects are viewport-relative, so the implicit root is the
+        // viewport at the origin.
         function rootRect(state, v) {
             var root = state.root && state.root.nodeType === 1
-                ? state.root.getBoundingClientRect() : rect(v[2], v[3], v[2] + v[0], v[3] + v[1]);
+                ? state.root.getBoundingClientRect() : rect(0, 0, v[0], v[1]);
             var width = root.right - root.left, height = root.bottom - root.top;
             var px = state.margin.map(function(m, side) {
                 return m.percent ? m.value * (side % 2 ? width : height) / 100 : m.value;
             });
             return rect(root.left - px[3], root.top - px[0], root.right + px[1], root.bottom + px[2]);
         }
-        function toViewport(r, v) { return rect(r.left - v[2], r.top - v[3], r.right - v[2], r.bottom - v[3]); }
         function contained(state, element) {
             if (!element.isConnected) return false;
             var root = state.root;
@@ -289,9 +288,9 @@
                     entry.index = index;
                     entry.intersecting = intersecting;
                     state.queue.push(new IntersectionObserverEntry({
-                        time: time, rootBounds: toViewport(bounds, v),
-                        boundingClientRect: rendered ? toViewport(box, v) : box,
-                        intersectionRect: intersecting ? toViewport(hit, v) : hit,
+                        time: time, rootBounds: bounds,
+                        boundingClientRect: box,
+                        intersectionRect: hit,
                         // Below the lowest threshold is not reported as intersecting.
                         isIntersecting: intersecting && index > 0,
                         intersectionRatio: ratio, target: el

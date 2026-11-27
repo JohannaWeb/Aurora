@@ -213,11 +213,11 @@ impl NodeRegistry {
         self.render_document.borrow().clone()
     }
 
-    /// Hit-test content coordinates against the Blitz layout, returning the
+    /// Hit-test a viewport point against the Blitz layout, returning the
     /// deepest mapped DOM node at that point. Backs `document.elementFromPoint`.
     pub(super) fn hit_test(&self, x: f32, y: f32) -> Option<NodePtr> {
         let render_document = self.render_document.borrow().as_ref().cloned()?;
-        render_document.borrow().hit_test_dom_node(x, y)
+        render_document.borrow().hit_test_viewport_point(x, y)
     }
 
     pub(super) fn blitz_node_id(&self, node: &NodePtr) -> Option<blitz_dom::NodeId> {
@@ -404,6 +404,21 @@ impl NodeRegistry {
             .is_none_or(|render_document| render_document.borrow_mut().sync_text_node(node, text))
     }
 
+    /// `node`'s border box relative to the viewport, for
+    /// `getBoundingClientRect`; `None` when it is not laid out.
+    pub(super) fn client_rect(&self, node: &NodePtr) -> Option<crate::blitz_document::LayoutMetrics> {
+        let render_document = self.render_document.borrow().as_ref().cloned()?;
+        render_document.borrow().dom_node_client_rect(node)
+    }
+
+    /// The document's scrollable size in CSS pixels: at least the viewport.
+    pub(super) fn scrolling_area(&self) -> Option<(f32, f32)> {
+        let render_document = self.render_document.borrow().as_ref().cloned()?;
+        let doc = render_document.borrow();
+        let (width, height) = doc.viewport_css_size();
+        Some((width, doc.document_height().max(height)))
+    }
+
     /// Blitz/Stylo border-box geometry for `node`, if a render document is
     /// attached and the node is laid out. Backs the JS layout accessors.
     pub(super) fn layout_metrics(
@@ -446,7 +461,6 @@ impl NodeRegistry {
         Some(load)
     }
 
-    /// The viewport size in CSS pixels, without a render document `None`.
     /// Scrolls the viewport for page script, clamped to the document, and asks
     /// the window to follow. Returns whether the position changed. The window
     /// only scrolls vertically, so `x` stays 0.
@@ -465,12 +479,23 @@ impl NodeRegistry {
         if position == self.scroll.get() {
             return false;
         }
-        self.scroll.set(position);
+        self.set_scroll(position);
         self.scroll_requested.set(true);
         self.scroll_event_pending.set(true);
         true
     }
 
+    /// Moves the viewport, in the render document too, so layout reads
+    /// (`getBoundingClientRect`, `elementFromPoint`) see it before the next
+    /// paint does.
+    pub(super) fn set_scroll(&self, position: (f64, f64)) {
+        self.scroll.set(position);
+        if let Some(doc) = self.render_document.borrow().as_ref() {
+            doc.borrow_mut().set_scroll_y(position.1);
+        }
+    }
+
+    /// The viewport size in CSS pixels, without a render document `None`.
     pub(super) fn viewport_size(&self) -> Option<(f32, f32)> {
         let render_document = self.render_document.borrow().as_ref().cloned()?;
         let size = render_document.borrow().viewport_css_size();

@@ -333,6 +333,34 @@ fn page_script_scrolls_the_viewport_and_sees_scroll_events() {
 }
 
 #[test]
+fn client_rects_and_hit_tests_are_viewport_relative() {
+    let dom = Parser::new(
+        "<html><body style='margin:0'><div id='bar' style='position:fixed;top:0;left:0;width:100px;height:40px'></div>\
+         <div style='height:1000px'></div><div id='box' style='height:100px'></div>\
+         <div style='height:1500px'></div></body></html>",
+    )
+    .parse_document();
+    crate::dom::reparent_subtree(&dom);
+    let render_doc = Rc::new(RefCell::new(
+        BlitzDocument::try_from_dom(&dom, None, &test_identity(), 800, 600).unwrap(),
+    ));
+    let mut runtime = V8Runtime::with_render_document(dom, Some(render_doc));
+    let probe = r#"(() => {
+        const top = (id) => document.getElementById(id).getBoundingClientRect().top;
+        const hit = (x, y) => { const el = document.elementFromPoint(x, y); return el ? el.id || el.tagName : 'null'; };
+        return [top('box'), top('bar'), hit(10, 10), hit(500, 1050 - scrollY), hit(10, -1), hit(10, 601),
+            document.documentElement.scrollHeight, document.documentElement.clientHeight].join(' ');
+    })()"#;
+    assert_eq!(runtime.eval_to_string(probe), Ok("1000 0 bar null null null 2600 600".into()), "the box is below the viewport");
+    runtime.set_scroll_position(0.0, 700.0);
+    assert_eq!(
+        runtime.eval_to_string(probe),
+        Ok("300 0 bar box null null 2600 600".into()),
+        "scrolled boxes move up; the fixed bar stays at the top"
+    );
+}
+
+#[test]
 fn inserted_scripts_run_in_order_and_fire_load() {
     let dom = blank_dom();
     let render_doc = Rc::new(RefCell::new(
