@@ -120,6 +120,27 @@ fn shadow_slots_keep_the_composed_render_tree_in_sync() {
 }
 
 #[test]
+fn slots_inside_an_inserted_subtree_render_the_host_children() {
+    let mut runtime = runtime_with_render_doc(blank_dom());
+    runtime.execute(r#"
+        var host = document.createElement('div');
+        host.innerHTML = '<span slot="top" style="display:block;height:20px">top</span>';
+        document.body.appendChild(host);
+        var root = host.attachShadow({mode:'open'});
+        var wrapper = document.createElement('div');
+        wrapper.appendChild(document.createElement('slot')).setAttribute('name', 'top');
+        root.appendChild(wrapper);
+    "#).unwrap();
+    runtime.perform_style_and_layout();
+    let height = "String(host.firstChild.getBoundingClientRect().height)";
+    assert_eq!(runtime.eval_to_string(height), Ok("20".into()));
+
+    runtime.execute("root.removeChild(wrapper);").unwrap();
+    runtime.perform_style_and_layout();
+    assert_eq!(runtime.eval_to_string(height), Ok("0".into()));
+}
+
+#[test]
 fn shadow_root_does_not_add_a_layout_box() {
     let mut runtime = runtime_with_render_doc(blank_dom());
     runtime.execute(r#"

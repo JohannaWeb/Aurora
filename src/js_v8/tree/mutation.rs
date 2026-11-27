@@ -738,7 +738,17 @@ fn sync_inserted_nodes_to_render_document(
 
 fn needs_composed_sync(parent: &NodePtr, nodes: &[NodePtr]) -> bool {
     matches!(&*parent.borrow(), Node::Element(el) if el.shadow_root.is_some() || el.tag_name == "slot")
-        || nodes.iter().any(|node| matches!(&*node.borrow(), Node::Element(el) if el.tag_name == "slot"))
+        || nodes.iter().any(contains_slot)
+}
+
+/// Whether `node` is or contains a slot of the tree it is in (not of a
+/// shadow tree below it). Adding or removing one changes which light
+/// children its host renders, so the incremental path cannot mirror it.
+fn contains_slot(node: &NodePtr) -> bool {
+    match &*node.borrow() {
+        Node::Element(el) => el.tag_name == "slot" || el.children.iter().any(contains_slot),
+        _ => false,
+    }
 }
 
 fn next_render_mapped_sibling(
