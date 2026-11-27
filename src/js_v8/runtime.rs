@@ -2579,7 +2579,7 @@ impl crate::js_engine::JsRuntime for V8Runtime {
         if self.registry.scroll_requested.get() || self.registry.scroll.get() == (x, y) {
             return;
         }
-        self.registry.scroll.set((x, y));
+        self.registry.set_scroll((x, y));
         self.registry.scroll_event_pending.set(true);
     }
 

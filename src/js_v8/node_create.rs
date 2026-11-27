@@ -1189,7 +1189,7 @@ fn bounding_rect_object<'s>(
 ) -> v8::Local<'s, v8::Object> {
     let m = node_data
         .registry
-        .layout_metrics(&node_data.node)
+        .client_rect(&node_data.node)
         .unwrap_or_default();
     let obj = v8::Object::new(scope);
     for (key, value) in [
@@ -1267,6 +1267,15 @@ fn get_layout_metric(
     if matches!(name.as_str(), "clientWidth" | "clientHeight") && is_root_element(&node_data.node) {
         if let Some((width, height)) = node_data.registry.viewport_size() {
             let value = if name == "clientWidth" { width } else { height };
+            retval.set(v8::Number::new(scope, value as f64).into());
+            return;
+        }
+    }
+    // The root element's scroll size is the document's scrolling area.
+    // <https://drafts.csswg.org/cssom-view/#dom-element-scrollheight>
+    if matches!(name.as_str(), "scrollWidth" | "scrollHeight") && is_root_element(&node_data.node) {
+        if let Some((width, height)) = node_data.registry.scrolling_area() {
+            let value = if name == "scrollWidth" { width } else { height };
             retval.set(v8::Number::new(scope, value as f64).into());
             return;
         }

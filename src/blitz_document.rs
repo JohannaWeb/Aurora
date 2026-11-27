@@ -882,6 +882,18 @@ impl BlitzDocument {
         }
     }
 
+    /// `document.elementFromPoint`: hit-tests a point given relative to the
+    /// viewport. Points outside the viewport hit nothing.
+    /// <https://drafts.csswg.org/cssom-view/#dom-document-elementfrompoint>
+    pub fn hit_test_viewport_point(&self, x: f32, y: f32) -> Option<NodePtr> {
+        let (width, height) = self.viewport_css_size();
+        if !(0.0..=width).contains(&x) || !(0.0..=height).contains(&y) {
+            return None;
+        }
+        let scroll = self.inner.viewport_scroll();
+        self.hit_test_dom_node(x + scroll.x as f32, y + scroll.y as f32)
+    }
+
     pub fn layout_generation(&self) -> u64 {
         self.layout_generation
     }
@@ -988,6 +1000,49 @@ impl BlitzDocument {
             // fixed), otherwise its layout parent. The DOM parent is wrong for
             // both hoisted boxes and children of anonymous blocks.
             current = n.containing_block();
+        }
+        Some(LayoutMetrics {
+            x,
+            y,
+            width: size.width,
+            height: size.height,
+        })
+    }
+
+    /// Border-box geometry of `node` relative to the viewport, as
+    /// `getBoundingClientRect` reports it: the document position minus the
+    /// scroll offsets of the boxes it scrolls with. A box positioned against
+    /// the viewport (fixed, contained by the root box) ignores the viewport
+    /// scroll.
+    pub fn dom_node_client_rect(&self, node: &NodePtr) -> Option<LayoutMetrics> {
+        let node_id = self.blitz_node_id_for_dom(node)?;
+        let size = self.inner.get_node(node_id)?.final_layout().size;
+        let (mut x, mut y) = (0.0_f32, 0.0_f32);
+        let mut fixed_to_viewport = false;
+        let mut current = Some(node_id);
+        while let Some(id) = current {
+            let Some(n) = self.inner.get_node(id) else {
+                break;
+            };
+            x += n.final_layout().location.x;
+            y += n.final_layout().location.y;
+            if id != node_id {
+                x -= n.scroll_offset().x as f32;
+                y -= n.scroll_offset().y as f32;
+            }
+            let fixed = n.primary_styles().is_some_and(|style| {
+                style.get_box().position == style::computed_values::position::T::Fixed
+            });
+            let contained_by_root = n.containing_block().is_none_or(|cb| n.with(cb).is_root_box());
+            if fixed && contained_by_root {
+                fixed_to_viewport = true;
+            }
+            current = n.containing_block();
+        }
+        if !fixed_to_viewport {
+            let scroll = self.inner.viewport_scroll();
+            x -= scroll.x as f32;
+            y -= scroll.y as f32;
         }
         Some(LayoutMetrics {
             x,
