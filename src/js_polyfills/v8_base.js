@@ -147,8 +147,7 @@
     CSSStyleSheet.prototype.deleteRule = function(index) {};
 
     // MutationObserver is implemented natively (see js_v8/mutation_observer.rs);
-    // don't override it here. ResizeObserver is an optimistic stub that fires
-    // once to unblock content waiting for its size.
+    // don't override it here.
     // https://w3c.github.io/IntersectionObserver/ against real layout. Not
     // done: clipping by scrolling/overflow ancestors between target and root.
     (function() {
@@ -310,28 +309,143 @@
         globalThis.__aurora_update_intersections__ = update;
     })();
 
-    globalThis.ResizeObserver = function ResizeObserver(cb) {
-        this._cb = cb;
-    };
-    ResizeObserver.prototype.observe = function(el) {
-        if (typeof this._cb === 'function') {
-            var self = this;
-            queueMicrotask(function() {
-                if (typeof self._cb === 'function') {
-                    try {
-                        self._cb([{
-                            target: el,
-                            contentRect: (typeof el.getBoundingClientRect === 'function')
-                                ? el.getBoundingClientRect()
-                                : { top: 0, left: 0, width: 1440, height: 1024, bottom: 1024, right: 1440, x: 0, y: 0 }
-                        }], self);
-                    } catch (e) {}
-                }
+    // https://drafts.csswg.org/resize-observer/ against Blitz layout. The
+    // runtime calls the broadcast hook after layout in rounds of increasing
+    // depth. Horizontal writing modes only: inline size is width.
+    (function() {
+        var active = [];
+        var BOXES = ['content-box', 'border-box', 'device-pixel-content-box'];
+
+        function readonly(proto, names) {
+            names.forEach(function(name) {
+                Object.defineProperty(proto, name, {
+                    get: function() { return this.__init__[name]; }, enumerable: true, configurable: true
+                });
             });
         }
-    };
-    ResizeObserver.prototype.unobserve = function() {};
-    ResizeObserver.prototype.disconnect = function() { this._cb = null; };
+        function ResizeObserverSize(inline, block) {
+            Object.defineProperty(this, '__init__', { value: { inlineSize: inline, blockSize: block } });
+        }
+        readonly(ResizeObserverSize.prototype, ['inlineSize', 'blockSize']);
+        globalThis.ResizeObserverSize = ResizeObserverSize;
+
+        // [borderW, borderH, contentW, contentH, paddingLeft, paddingTop];
+        // zeros when not rendered.
+        function measure(el) {
+            var s = null;
+            try { s = el.__aurora_box_sizes__ && el.__aurora_box_sizes__(); } catch (e) {}
+            return s || [0, 0, 0, 0, 0, 0];
+        }
+        function boxSize(m, box) {
+            if (box === 'border-box') return [m[0], m[1]];
+            var ratio = box === 'device-pixel-content-box' ? (globalThis.devicePixelRatio || 1) : 1;
+            return [m[2] * ratio, m[3] * ratio];
+        }
+        // Depth in the flat tree: shadow roots continue to their host.
+        function depth(node) {
+            var d = 0;
+            while (node) { node = node.parentNode || node.host || null; d++; }
+            return d;
+        }
+        function sizes(width, height) { return Object.freeze([new ResizeObserverSize(width, height)]); }
+
+        function ResizeObserverEntry(target, m) {
+            var ratio = globalThis.devicePixelRatio || 1;
+            var left = m[4], top = m[5];
+            Object.defineProperty(this, '__init__', { value: {
+                target: target,
+                contentRect: { x: left, y: top, left: left, top: top, width: m[2], height: m[3],
+                               right: left + m[2], bottom: top + m[3] },
+                borderBoxSize: sizes(m[0], m[1]),
+                contentBoxSize: sizes(m[2], m[3]),
+                devicePixelContentBoxSize: sizes(m[2] * ratio, m[3] * ratio)
+            } });
+        }
+        readonly(ResizeObserverEntry.prototype, ['target', 'contentRect', 'borderBoxSize',
+            'contentBoxSize', 'devicePixelContentBoxSize']);
+        globalThis.ResizeObserverEntry = ResizeObserverEntry;
+
+        function ResizeObserver(callback) {
+            if (!(this instanceof ResizeObserver)) throw new TypeError("Failed to construct 'ResizeObserver': Please use the 'new' operator.");
+            if (typeof callback !== 'function') throw new TypeError("Failed to construct 'ResizeObserver': parameter 1 is not a function.");
+            Object.defineProperty(this, '__state__', { value: { callback: callback, observations: [], observer: this } });
+        }
+        function deactivate(state) {
+            var at = active.indexOf(state);
+            if (at >= 0 && !state.observations.length) active.splice(at, 1);
+        }
+        ResizeObserver.prototype.observe = function(target, options) {
+            if (!target || target.nodeType !== 1) throw new TypeError("Failed to execute 'observe' on 'ResizeObserver': parameter 1 is not of type 'Element'.");
+            var box = options && options.box !== undefined ? String(options.box) : 'content-box';
+            if (BOXES.indexOf(box) < 0) throw new TypeError("Failed to execute 'observe' on 'ResizeObserver': The provided value '" + box + "' is not a valid enum value of type ResizeObserverBoxOptions.");
+            var state = this.__state__;
+            state.observations = state.observations.filter(function(o) { return o.target !== target; });
+            // Size 0x0 counts as already reported, so only rendered, non-empty
+            // targets fire on observe.
+            state.observations.push({ target: target, box: box, last: [0, 0] });
+            if (active.indexOf(state) < 0) active.push(state);
+            if (globalThis.__aurora_observe_resizes__) globalThis.__aurora_observe_resizes__();
+        };
+        ResizeObserver.prototype.unobserve = function(target) {
+            var state = this.__state__;
+            state.observations = state.observations.filter(function(o) { return o.target !== target; });
+            deactivate(state);
+        };
+        ResizeObserver.prototype.disconnect = function() {
+            this.__state__.observations = [];
+            deactivate(this.__state__);
+        };
+        globalThis.ResizeObserver = ResizeObserver;
+
+        // Observations whose size changed, deeper than `limit`, per observer.
+        function gather(limit) {
+            var found = [];
+            active.forEach(function(state) {
+                var changed = [];
+                state.observations.forEach(function(o) {
+                    var d = depth(o.target);
+                    if (d <= limit) return;
+                    var m = measure(o.target), size = boxSize(m, o.box);
+                    if (size[0] !== o.last[0] || size[1] !== o.last[1]) {
+                        changed.push({ observation: o, measured: m, size: size, depth: d });
+                    }
+                });
+                if (changed.length) found.push({ state: state, changed: changed });
+            });
+            return found;
+        }
+        // Delivers one round; returns the shallowest depth delivered, or -1.
+        globalThis.__aurora_broadcast_resize_observations__ = function(limit) {
+            var found = gather(limit), shallowest = Infinity;
+            found.forEach(function(group) {
+                var entries = group.changed.map(function(c) {
+                    c.observation.last = c.size;
+                    shallowest = Math.min(shallowest, c.depth);
+                    return new ResizeObserverEntry(c.observation.target, c.measured);
+                });
+                var observer = group.state.observer;
+                try { group.state.callback.call(observer, entries, observer); }
+                catch (e) { console.error('ResizeObserver callback: ' + (e && e.stack || e)); }
+            });
+            return found.length ? shallowest : -1;
+        };
+        // Changes at or above the last delivered depth wait for the next frame,
+        // and the page hears about it. Returns 1 if any were skipped.
+        globalThis.__aurora_report_resize_loop__ = function(limit) {
+            var skipped = gather(-1).some(function(group) {
+                return group.changed.some(function(c) { return c.depth <= limit; });
+            });
+            if (!skipped) return 0;
+            var message = 'ResizeObserver loop completed with undelivered notifications.';
+            var event = typeof globalThis.ErrorEvent === 'function'
+                ? new ErrorEvent('error', { message: message }) : new Event('error');
+            try { globalThis.dispatchEvent(event); } catch (e) {}
+            if (typeof globalThis.onerror === 'function') {
+                try { globalThis.onerror(message); } catch (e) {}
+            }
+            return 1;
+        };
+    })();
 
     globalThis.PerformanceObserver = function PerformanceObserver(cb) { this._cb = cb; };
     PerformanceObserver.prototype.observe = function() {};

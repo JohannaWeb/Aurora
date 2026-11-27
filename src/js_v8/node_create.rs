@@ -419,6 +419,7 @@ fn build_wrapper_template<'s>(
         "__aurora_metric__",
         get_layout_metric,
     );
+    install_method(scope, template, "__aurora_box_sizes__", get_box_sizes);
     install_method(
         scope,
         template,
@@ -1240,6 +1241,35 @@ fn get_client_rects(
         }
         _ => retval.set(v8::Array::new(scope, 0).into()),
     }
+}
+
+/// Native bridge for ResizeObserver: `[borderWidth, borderHeight,
+/// contentWidth, contentHeight, paddingLeft, paddingTop]`, or `undefined`
+/// when the element is not rendered.
+fn get_box_sizes(
+    scope: &mut v8::PinScope<'_, '_>,
+    args: v8::FunctionCallbackArguments,
+    mut retval: v8::ReturnValue,
+) {
+    let Some(node_data) = this_node(scope, &args) else {
+        return;
+    };
+    if !node_data.registry.is_rendered(&node_data.node) {
+        return;
+    }
+    let Some(b) = node_data.registry.box_sizes(&node_data.node) else {
+        return;
+    };
+    let values = [
+        b.border_box.0,
+        b.border_box.1,
+        b.content_box.0,
+        b.content_box.1,
+        b.padding_offset.0,
+        b.padding_offset.1,
+    ]
+    .map(|n| v8::Number::new(scope, f64::from(n)).into());
+    retval.set(v8::Array::new_with_elements(scope, &values).into());
 }
 
 /// Whether `node` is the document element (`<html>` directly in a document).

@@ -289,6 +289,88 @@ fn intersection_observer_follows_layout_and_scrolling() {
 }
 
 #[test]
+fn resize_observer_reports_layout_changes_in_depth_order() {
+    let dom = Parser::new(
+        "<html><body style='margin:0'>\
+         <div id='outer' style='width:200px;height:100px;padding:10px;border:5px solid'>\
+         <div id='inner' style='width:50px;height:20px'></div></div>\
+         <div id='empty' style='display:none'></div></body></html>",
+    )
+    .parse_document();
+    crate::dom::reparent_subtree(&dom);
+    let render_doc = Rc::new(RefCell::new(
+        BlitzDocument::try_from_dom(&dom, None, &test_identity(), 800, 600).unwrap(),
+    ));
+    let mut runtime = V8Runtime::with_render_document(dom, Some(render_doc));
+    runtime
+        .execute(
+            r#"
+        var log = [];
+        var $ = function(id) { return document.getElementById(id); };
+        function describe(e) {
+            var r = e.contentRect, b = e.borderBoxSize[0];
+            return e.target.id + ' ' + [r.x, r.y, r.width, r.height].join(',') + ' border ' + b.inlineSize + 'x' + b.blockSize;
+        }
+        var observer = new ResizeObserver(function(entries, self) {
+            entries.forEach(function(e) { log.push(describe(e) + (self === observer ? '' : ' wrong observer')); });
+        });
+        observer.observe($('outer'));
+        observer.observe($('empty'));
+        var borders = new ResizeObserver(function(entries) {
+            entries.forEach(function(e) { log.push('border-box ' + e.target.id); });
+        });
+        borders.observe($('inner'), { box: 'border-box' });
+        window.addEventListener('error', function(e) { log.push('error ' + e.message); });
+        function takeLog() { return log.splice(0).join(' | '); }
+    "#,
+        )
+        .unwrap();
+    let mut frame = |runtime: &mut V8Runtime, script: &str| {
+        runtime.execute(script).unwrap();
+        runtime.tick(crate::clock::now());
+        runtime.eval_to_string("takeLog()").unwrap()
+    };
+    assert_eq!(
+        frame(&mut runtime, ""),
+        "outer 10,10,200,100 border 230x130 | border-box inner",
+        "rendered, non-empty targets fire once on observe"
+    );
+    assert_eq!(frame(&mut runtime, ""), "", "nothing changed");
+    assert_eq!(
+        frame(&mut runtime, "$('outer').style.width = '300px'"),
+        "outer 10,10,300,100 border 330x130"
+    );
+    assert_eq!(frame(&mut runtime, "$('outer').style.display = 'none'"), "outer 0,0,0,0 border 0x0 | border-box inner");
+    assert_eq!(frame(&mut runtime, "$('outer').style.display = 'block'"), "outer 10,10,300,100 border 330x130 | border-box inner");
+
+    // A callback that grows a deeper element is delivered in the same frame;
+    // one that grows a shallower element waits for the next frame.
+    let deeper = "var grow = new ResizeObserver(function(entries) { \
+                      log.push('grow ' + entries[0].target.id); $('inner').style.height = '40px'; }); \
+                  grow.observe($('outer'), { box: 'border-box' });";
+    assert_eq!(frame(&mut runtime, deeper), "grow outer | border-box inner");
+    runtime.execute("grow.disconnect(); borders.disconnect();").unwrap();
+    let shallower = "var shrink = new ResizeObserver(function(entries) { \
+                         log.push('shrink ' + entries[0].target.id); $('outer').style.width = '100px'; }); \
+                     shrink.observe($('inner'));";
+    assert_eq!(
+        frame(&mut runtime, shallower),
+        "shrink inner | error ResizeObserver loop completed with undelivered notifications."
+    );
+    assert_eq!(frame(&mut runtime, ""), "outer 10,10,100,100 border 130x130");
+
+    runtime.execute("observer.disconnect(); shrink.disconnect()").unwrap();
+    assert_eq!(frame(&mut runtime, "$('outer').style.width = '50px'"), "");
+    assert_eq!(
+        runtime.eval_to_string(
+            "(() => { try { new ResizeObserver(function() {}).observe($('outer'), { box: 'margin-box' }); return 'no throw'; } \
+             catch (e) { return e.constructor.name; } })()"
+        ),
+        Ok("TypeError".into())
+    );
+}
+
+#[test]
 fn page_script_scrolls_the_viewport_and_sees_scroll_events() {
     let dom = Parser::new("<html><body style='margin:0'><div style='height:2600px'></div></body></html>")
         .parse_document();
