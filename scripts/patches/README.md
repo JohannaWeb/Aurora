@@ -14,7 +14,7 @@ at those trees. A tree whose series is unchanged is left alone, so running
 
 | Series | Patches | Why |
 |---|---|---|
-| `blitz-dom-0.3.0-beta.4` | 6 | Selectors see through the synthetic shadow container; late stylesheet loads for removed nodes; message receiver survives a caught handler panic; two blank lines in `events/driver.rs` carried over from the fork; text and comment nodes read as an empty layout instead of panicking; fixed boxes contained by the root stay in the viewport when it scrolls |
+| `blitz-dom-0.3.0-beta.4` | 7 | Selectors see through the synthetic shadow container; late stylesheet loads for removed nodes; message receiver survives a caught handler panic; two blank lines in `events/driver.rs` carried over from the fork; text and comment nodes read as an empty layout instead of panicking; fixed boxes contained by the root stay in the viewport when it scrolls; drop `ThreadLocalStyleContext` before exiting `ThreadState::LAYOUT` in `resolve_undisplayed_style` |
 | `blitz-paint-0.3.0-beta.4` | 2 | `<body>`'s overflow propagates to the viewport (CSS Overflow 3 §3.3); the debug overlay draws fixed boxes where they paint |
 | `stylo-0.22.0` | 1 | An unstyled element is not `display: none` (stylo#387) |
 
