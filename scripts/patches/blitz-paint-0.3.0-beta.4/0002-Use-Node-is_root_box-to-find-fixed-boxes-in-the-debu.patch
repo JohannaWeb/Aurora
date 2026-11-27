@@ -1,0 +1,26 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: JohannaWeb <joaocordeiroalmeida@gmail.com>
+Date: Fri, 27 Nov 2026 11:07:04 +0000
+Subject: [PATCH] Use Node::is_root_box to find fixed boxes in the debug
+ overlay
+
+The root element's containing block is the Document node, not None, so the
+overlay drew fixed boxes as if they scrolled. Needs the blitz-dom patch that
+adds is_root_box.
+
+Debug overlay only; not covered by a test. Drop together with that
+blitz-dom patch.
+
+diff --git a/src/debug_overlay.rs b/src/debug_overlay.rs
+index d768b62..648590a 100644
+--- a/src/debug_overlay.rs
++++ b/src/debug_overlay.rs
+@@ -64,7 +64,7 @@ pub(crate) fn render_debug_overlay(
+     while let Some(parent_id) = node.containing_block() {
+         let child_is_fixed = node.taffy_position() == taffy::Position::Fixed;
+         node = &dom.as_ref().tree()[parent_id];
+-        fixed_to_viewport = child_is_fixed && node.containing_block().is_none();
++        fixed_to_viewport = child_is_fixed && node.is_root_box();
+         let taffy::Point { x, y } = node.final_layout().location;
+         abs_x += x;
+         abs_y += y;

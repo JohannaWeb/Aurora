@@ -1,0 +1,60 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: JohannaWeb <joaocordeiroalmeida@gmail.com>
+Date: Fri, 27 Nov 2026 11:07:04 +0000
+Subject: [PATCH] Keep fixed boxes in the viewport when the root's parent is
+ the Document
+
+resolve_layout_children starts at the Document node, so the root element's
+layout_parent is the Document, and the root's containing_block() is never
+None. Painting hoisted fixed boxes and hit testing tested for None to find a
+fixed box contained by the root, so those boxes scrolled with the page.
+
+Node::is_root_box also accepts the Document node, which has no box.
+
+Tested by Aurora's fixed_boxes_stay_in_the_viewport_when_it_scrolls
+(src/blitz_document.rs). Drop when upstream Blitz stops giving the root
+element a layout parent or checks for the root element itself.
+
+diff --git a/src/layout/paint_tree.rs b/src/layout/paint_tree.rs
+index 99875ea..8d0b00a 100644
+--- a/src/layout/paint_tree.rs
++++ b/src/layout/paint_tree.rs
+@@ -41,7 +41,7 @@ pub fn hoisted_child_position(tree: &NodeTree, sc_root_id: NodeId, child_id: Nod
+     // A fixed box contained by a transformed ancestor scrolls with it.
+     if child.taffy_position() == taffy::Position::Fixed
+         && let Some(cb) = current.and_then(|id| tree.get(id))
+-        && cb.containing_block().is_none()
++        && cb.is_root_box()
+     {
+         let scroll_offset = *cb.scroll_offset();
+         let viewport_scroll = tree.viewport_scroll();
+diff --git a/src/node/node.rs b/src/node/node.rs
+index 9d282f9..099f5d5 100644
+--- a/src/node/node.rs
++++ b/src/node/node.rs
+@@ -1505,7 +1505,7 @@ impl Node {
+                 // against the viewport and do not scroll with it. (A fixed box
+                 // whose containing block is a transformed ancestor scrolls with
+                 // that ancestor like any other out-of-flow box.)
+-                if child_position == taffy::Position::Fixed && self.containing_block().is_none() {
++                if child_position == taffy::Position::Fixed && self.is_root_box() {
+                     child_x -= self.scroll_offset().x as f32;
+                     child_y -= self.scroll_offset().y as f32;
+                     let viewport_scroll = self.tree().viewport_scroll();
+@@ -1656,6 +1656,16 @@ impl Node {
+             .or_else(|| self.layout_parent.get())
+     }
+
++    /// Whether this is the root box: it has no containing block, or only the
++    /// Document node, which `resolve_layout_children` records as the root
++    /// element's `layout_parent` although it has no box of its own. A
++    /// fixed-position box contained by the root box is positioned against
++    /// the viewport.
++    pub fn is_root_box(&self) -> bool {
++        self.containing_block()
++            .is_none_or(|id| matches!(self.with(id).data, NodeData::Document(_)))
++    }
++
+     /// Computes the Document-relative coordinates of the `Node`
+     pub fn absolute_position(&self, x: f32, y: f32) -> crate::util::Point<f32> {
+         let x = x + self.final_layout().location.x - self.scroll_offset().x as f32;
