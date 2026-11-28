@@ -76,6 +76,8 @@ pub(super) struct NodeRegistry {
     pub(super) pending_navigation: RefCell<Option<String>>,
     /// Cached `[SameObject]` `document.all` collection wrapper.
     pub(super) all_collection: RefCell<Option<v8::Global<v8::Object>>>,
+    /// Per-instance streaming state for `TextDecoder`.
+    pub(super) text_decoders: RefCell<Vec<super::text_encoding::DecoderState>>,
     /// When set, the native insertion path enqueues custom-element lifecycle
     /// reactions (connected/disconnected/attributeChanged) and the JS shim's
     /// upgrade path defers connectedCallback to the native trampoline. Default
@@ -123,6 +125,7 @@ impl NodeRegistry {
             scripts: RefCell::new(super::script_load::Scripts::default()),
             pending_navigation: RefCell::new(None),
             all_collection: RefCell::new(None),
+            text_decoders: RefCell::new(Vec::new()),
             native_ce_reactions: std::cell::Cell::new(native_ce_reactions_default(
                 std::env::var("AURORA_NATIVE_CE_REACTIONS").ok().as_deref(),
             )),
