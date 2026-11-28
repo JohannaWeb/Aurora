@@ -7,6 +7,7 @@ mod bindings;
 #[cfg(test)]
 mod bindings_tests;
 mod capture;
+mod crypto;
 #[cfg(test)]
 mod css_tests;
 mod dom_exception;
