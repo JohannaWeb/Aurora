@@ -602,6 +602,7 @@ impl V8Runtime {
                     .into(),
             );
 
+            super::crypto::install(scope, global);
             super::performance::install(scope, global, registry_data);
 
             // [width, height, scrollX, scrollY] of the viewport in CSS pixels.
