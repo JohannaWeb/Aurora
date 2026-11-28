@@ -34,20 +34,58 @@
             if (list[i].listener === listener && list[i].capture === capture) { list.splice(i, 1); return; }
         }
     };
-    function invokeListeners(node, event, capturePhase) {
-        var store = node.__ael;
-        if (!store) return;
-        var list = store[event.type];
-        if (!list || !list.length) return;
+    function invokeHandlerProperty(node, event) {
+        var prop = 'on' + event.type;
+        var handler = null;
+        try { handler = node[prop]; } catch (e) { handler = null; }
+        if (typeof handler !== 'function' && node && node.nodeType === 1 && typeof node.getAttribute === 'function') {
+            var attr = null;
+            try { attr = node.getAttribute(prop); } catch (e) { attr = null; }
+            if (typeof attr === 'string' && attr.length) {
+                var cache = node.__aurora_oncache || (node.__aurora_oncache = Object.create(null));
+                if (!cache[prop] || cache[prop].src !== attr) {
+                    try {
+                        cache[prop] = { src: attr, fn: new Function('event', attr) };
+                    } catch (e) {
+                        cache[prop] = { src: attr, fn: null };
+                    }
+                }
+                handler = cache[prop].fn;
+            }
+        }
+        if (typeof handler !== 'function') return;
         event.currentTarget = node;
-        var snapshot = list.slice();
-        for (var i = 0; i < snapshot.length; i++) {
-            var entry = snapshot[i];
-            if (entry.capture !== capturePhase) continue;
-            if (entry.once) node.removeEventListener(event.type, entry.listener, entry.capture);
-            var fn = typeof entry.listener === 'function' ? entry.listener : entry.listener.handleEvent;
-            try { fn.call(node, event); } catch (e) { setTimeout(function(){ throw e; }, 0); }
-            if (event.__immediateStop) return;
+        try {
+            var res = handler.call(node, event);
+            if (res === false && event.type !== 'error' && event.type !== 'beforeunload') {
+                if (typeof event.preventDefault === 'function') event.preventDefault();
+            }
+        } catch (e) {
+            setTimeout(function(){ throw e; }, 0);
+        }
+    }
+    function invokeListeners(node, event, capturePhase, phase) {
+        event.eventPhase = phase;
+        var store = node.__ael;
+        if (store) {
+            var list = store[event.type];
+            if (list && list.length) {
+                event.currentTarget = node;
+                var snapshot = list.slice();
+                for (var i = 0; i < snapshot.length; i++) {
+                    var entry = snapshot[i];
+                    if (entry.capture !== capturePhase) continue;
+                    if (entry.once) node.removeEventListener(event.type, entry.listener, entry.capture);
+                    try {
+                        if (typeof entry.listener === 'function') entry.listener.call(node, event);
+                        else entry.listener.handleEvent(event);
+                    } catch (e) { setTimeout(function(){ throw e; }, 0); }
+                    if (event.__immediateStop) return;
+                }
+            }
+        }
+        if (!capturePhase && !event.__immediateStop) {
+            invokeHandlerProperty(node, event);
         }
     }
     EventTarget.prototype.dispatchEvent = function(event) {
@@ -74,21 +112,22 @@
         if (event.cancelBubble === undefined) event.cancelBubble = false;
         // Capture phase: root -> target.
         for (var i = path.length - 1; i >= 1; i--) {
-            invokeListeners(path[i], event, true);
+            invokeListeners(path[i], event, true, 1);
             if (event.cancelBubble || event.__immediateStop) break;
         }
         // Target phase.
         if (!event.cancelBubble && !event.__immediateStop) {
-            invokeListeners(path[0], event, true);
-            invokeListeners(path[0], event, false);
+            invokeListeners(path[0], event, true, 2);
+            if (!event.__immediateStop) invokeListeners(path[0], event, false, 2);
         }
         // Bubble phase: target+1 -> root (only if the event bubbles).
         if (event.bubbles) {
             for (var j = 1; j < path.length; j++) {
                 if (event.cancelBubble || event.__immediateStop) break;
-                invokeListeners(path[j], event, false);
+                invokeListeners(path[j], event, false, 3);
             }
         }
+        event.eventPhase = 0;
         event.currentTarget = null;
         return !event.defaultPrevented;
     };
@@ -602,19 +641,11 @@
             var winEvt = new Event('resize', { bubbles: false, cancelable: false });
             winEvt.isTrusted = true;
             globalThis.dispatchEvent(winEvt);
-            if (typeof globalThis.onresize === 'function') {
-                try { globalThis.onresize.call(globalThis, winEvt); }
-                catch (e) { setTimeout(function() { throw e; }, 0); }
-            }
             var vv = globalThis.visualViewport;
             if (vv) {
                 var vvEvt = new Event('resize', { bubbles: false, cancelable: false });
                 vvEvt.isTrusted = true;
                 vv.dispatchEvent(vvEvt);
-                if (typeof vv.onresize === 'function') {
-                    try { vv.onresize.call(vv, vvEvt); }
-                    catch (e) { setTimeout(function() { throw e; }, 0); }
-                }
             }
             var snapshot = tracked.slice();
             for (var i = 0; i < snapshot.length; i++) {
@@ -626,10 +657,6 @@
                 var changeEvt = new MediaQueryListEvent('change', { media: s.media, matches: now });
                 changeEvt.isTrusted = true;
                 mql.dispatchEvent(changeEvt);
-                if (typeof s.onchange === 'function') {
-                    try { s.onchange.call(mql, changeEvt); }
-                    catch (e) { setTimeout(function() { throw e; }, 0); }
-                }
                 var legacy = s.legacy.slice();
                 for (var j = 0; j < legacy.length; j++) {
                     var fn = typeof legacy[j] === 'function' ? legacy[j] : legacy[j].handleEvent;

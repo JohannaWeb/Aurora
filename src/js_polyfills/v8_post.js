@@ -42,6 +42,14 @@
         };
         Ctor.prototype = Object.create(globalThis.Event.prototype);
         Ctor.prototype.constructor = Ctor;
+        if (name === 'MouseEvent' || name === 'PointerEvent' || name === 'KeyboardEvent') {
+            Ctor.prototype.getModifierState = function(mod) {
+                return (mod === 'Shift' && !!this.shiftKey)
+                    || (mod === 'Control' && !!this.ctrlKey)
+                    || (mod === 'Alt' && !!this.altKey)
+                    || (mod === 'Meta' && !!this.metaKey);
+            };
+        }
         globalThis[name] = Ctor;
     });
 
@@ -298,7 +306,9 @@
 
     function elementTarget(node) {
         var target = node;
-        while (target && target.nodeType !== 1) target = target.parentNode;
+        while (target && target.nodeType !== 1) {
+            target = target.parentNode || (target.nodeType === 11 ? target.host : null);
+        }
         return (target && typeof target.dispatchEvent === 'function') ? target : null;
     }
 
@@ -427,9 +437,6 @@
         var event = new Event(type, { bubbles: false, cancelable: false });
         event.isTrusted = true;
         el.dispatchEvent(event);
-        // EventTarget here does not know about event handler properties.
-        var handler = el['on' + type];
-        if (typeof handler === 'function') handler.call(el, event);
     };
 
     globalThis.__aurora_set_current_script__ = function(script) {
@@ -529,6 +536,49 @@
         HTMLElement.prototype.click = performElementClick;
     }
 
+    if (typeof globalThis.KeyframeEffect !== 'function') {
+        globalThis.KeyframeEffect = function KeyframeEffect(target, keyframes, options) {
+            this.target = target || null;
+            this.keyframes = keyframes || null;
+            this.timing = options || {};
+        };
+    }
+    function createAnimationStub(effect, timeline) {
+        var anim = {
+            playState: 'finished', currentTime: 0, startTime: 0,
+            playbackRate: 1, effect: effect || null, timeline: timeline || null,
+            onfinish: null, oncancel: null,
+            play: function() {
+                anim.playState = 'finished';
+                queueMicrotask(function() {
+                    if (typeof anim.onfinish === 'function') anim.onfinish({ target: anim });
+                });
+            },
+            pause: function() {}, reverse: function() {},
+            updatePlaybackRate: function() {},
+            cancel: function() {
+                if (typeof anim.oncancel === 'function') anim.oncancel({ target: anim });
+            },
+            finish: function() {
+                if (typeof anim.onfinish === 'function') anim.onfinish({ target: anim });
+            },
+            addEventListener: function() {}, removeEventListener: function() {},
+            finished: Promise.resolve()
+        };
+        queueMicrotask(function() {
+            if (typeof anim.onfinish === 'function') anim.onfinish({ target: anim });
+        });
+        return anim;
+    }
+    if (typeof globalThis.Animation !== 'function') {
+        globalThis.Animation = function Animation(effect, timeline) {
+            return createAnimationStub(effect, timeline);
+        };
+    }
+    if (document && !document.timeline) {
+        document.timeline = { currentTime: 0 };
+    }
+
     // Element decoration — called from the native bridge for every element
     // wrapper. Installs per-element JS APIs that are simpler here than native.
     globalThis.__aurora_decorate_element__ = function(el) {
@@ -554,26 +604,9 @@
             el.dispatchEvent = EventTarget.prototype.dispatchEvent;
         }
         installMetrics(el);
-        el.animate = function() {
-            var anim = {
-                playState: 'finished', currentTime: 0, startTime: 0,
-                playbackRate: 1, effect: null, timeline: null,
-                onfinish: null, oncancel: null,
-                play: function() {}, pause: function() {}, reverse: function() {},
-                updatePlaybackRate: function() {},
-                cancel: function() {
-                    if (typeof anim.oncancel === 'function') anim.oncancel({ target: anim });
-                },
-                finish: function() {
-                    if (typeof anim.onfinish === 'function') anim.onfinish({ target: anim });
-                },
-                addEventListener: function() {}, removeEventListener: function() {},
-                finished: Promise.resolve()
-            };
-            queueMicrotask(function() {
-                if (typeof anim.onfinish === 'function') anim.onfinish({ target: anim });
-            });
-            return anim;
+        el.animate = function(keyframes, options) {
+            var effect = new KeyframeEffect(el, keyframes, options);
+            return createAnimationStub(effect, document.timeline || null);
         };
         el.getAnimations = function() { return []; };
         el.scrollIntoView = function() {};
@@ -1145,6 +1178,16 @@
                 get: function() { return getAdoptedStyleSheets(this); },
                 set: function(v) { setAdoptedStyleSheets(this, v); },
                 configurable: true
+            });
+        }
+        var targetProto = globalThis.DocumentFragment
+            ? DocumentFragment.prototype
+            : (globalThis.ShadowRoot ? ShadowRoot.prototype : null);
+        if (targetProto && typeof targetProto.Y !== 'function') {
+            Object.defineProperty(targetProto, 'Y', {
+                value: function() {},
+                configurable: true,
+                writable: true
             });
         }
         if (globalThis.ShadowRoot) {

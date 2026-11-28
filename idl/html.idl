@@ -68,7 +68,10 @@ interface HTMLSelectElement : HTMLElement {};
 interface HTMLDataListElement : HTMLElement {};
 interface HTMLOptGroupElement : HTMLElement {};
 interface HTMLOptionElement : HTMLElement {};
-interface HTMLTextAreaElement : HTMLElement {};
+interface HTMLTextAreaElement : HTMLElement {
+  [CEReactions] attribute DOMString defaultValue;
+  [CEReactions] attribute [LegacyNullToEmptyString] DOMString value;
+};
 interface HTMLOutputElement : HTMLElement {};
 interface HTMLProgressElement : HTMLElement {};
 interface HTMLMeterElement : HTMLElement {};

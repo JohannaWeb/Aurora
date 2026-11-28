@@ -336,6 +336,10 @@
                 try { Object.defineProperty(host, '__shady_shadowRoot', { value: root, configurable: true, writable: false }); } catch (e) {}
                 try { Object.defineProperty(root, 'host', { value: host, configurable: true, writable: false }); } catch (e) {}
                 try { Object.defineProperty(root, '__aurora_registered_shadow_root__', { value: true, configurable: true }); } catch (e) {}
+                // ShadyDOM's `get assignedSlot` reads `host.__shady_shadowRoot.Y()` when walking composed paths.
+                if (typeof root.Y !== 'function') {
+                    try { Object.defineProperty(root, 'Y', { value: function() {}, configurable: true, writable: true }); } catch (e) {}
+                }
                 if (logicalHostCache) logicalHostCache.set(root, host);
                 ceLog('logical-root-adopted', host,
                     (via ? 'via=' + via + ' ' : '') + 'rootKids=' + (root.childNodes ? root.childNodes.length : '?'));

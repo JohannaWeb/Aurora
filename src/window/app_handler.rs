@@ -148,6 +148,7 @@ impl AuroraApp {
         let max_scroll = (doc_height - content_height).max(0.0);
         let tab = self.tab_mut();
         tab.scroll_y = (tab.scroll_y + amount as f64).clamp(0.0, max_scroll as f64);
+        self.sync_blitz_scroll();
         self.request_redraw();
     }
 

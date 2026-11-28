@@ -100,15 +100,16 @@ pub(super) fn create_js_node<'s>(
             // Initial attribute snapshot for wrapper props. `<a>` and `<area>`
             // get `href` from HTMLHyperlinkElementUtils on their prototype.
             let hyperlink = matches!(el.tag_name.to_ascii_lowercase().as_str(), "a" | "area");
-            // `<input>` gets `value` from HTMLInputElement.prototype.
-            let input = el.tag_name.eq_ignore_ascii_case("input");
+            // `<input>` and `<textarea>` get `value` from their interface prototypes.
+            let input_or_textarea =
+                el.tag_name.eq_ignore_ascii_case("input") || el.tag_name.eq_ignore_ascii_case("textarea");
             // `<img>` gets `src` from HTMLImageElement.prototype, `<script>`
             // `src` and `type` from HTMLScriptElement.prototype.
             let image = el.tag_name.eq_ignore_ascii_case("img");
             let script = el.tag_name.eq_ignore_ascii_case("script");
             for attr in ["href", "src", "type", "name", "value"] {
                 if (hyperlink && attr == "href")
-                    || (input && attr == "value")
+                    || (input_or_textarea && attr == "value")
                     || (image && attr == "src")
                     || (script && matches!(attr, "src" | "type"))
                 {

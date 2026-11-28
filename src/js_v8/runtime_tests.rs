@@ -4319,3 +4319,100 @@ fn v8_checkbox_radio_and_label_activation_sync_checkedness_and_forms() {
         Some("https://example.com/save?agree=on&choice=b")
     );
 }
+
+#[test]
+fn v8_inline_handlers_handle_event_phases_textarea_and_web_animations() {
+    use crate::js_engine::KeyInput;
+    let dom = Parser::new(
+        "<html><body>\
+         <div id='wrap'>\
+           <button id='inline-btn' onclick='globalThis.log.push(\"attr:\" + event.eventPhase)'>Inline</button>\
+           <a id='blocked-link' href='/blocked' onclick='globalThis.log.push(\"blocked\"); return false'>Blocked</a>\
+         </div>\
+         <form id='f' action='/post'>\
+           <textarea id='ta' name='msg'>hi</textarea>\
+           <button id='sub' type='submit'>Send</button>\
+         </form>\
+         <div id='host'></div>\
+         </body></html>",
+    )
+    .parse_document();
+    let find = |id: &str| super::selectors::query::find_by_id(&dom, id).unwrap();
+    let (inline_btn, blocked_link, ta, sub, host) = (
+        find("inline-btn"),
+        find("blocked-link"),
+        find("ta"),
+        find("sub"),
+        find("host"),
+    );
+    let mut runtime = V8Runtime::new(dom.clone());
+    runtime
+        .eval_to_string(
+            r#"(() => {
+            __aurora_set_location__('https://example.com/');
+            globalThis.log = [];
+            const wrap = document.getElementById('wrap');
+            const objListener = { tag: 'obj', handleEvent(e) { globalThis.log.push(this.tag + ':' + e.eventPhase); } };
+            wrap.addEventListener('click', objListener, { capture: true });
+            wrap.onclick = function(e) { globalThis.log.push('prop:' + e.eventPhase); };
+            return 'ok';
+        })()"#,
+        )
+        .unwrap();
+
+    runtime.dispatch_click(&inline_btn, 1.0, 1.0);
+    assert_eq!(
+        runtime.eval_to_string("globalThis.log.join('|')").unwrap(),
+        "obj:1|attr:2|prop:3"
+    );
+
+    // Inline `onclick="return false"` calls preventDefault() and blocks anchor navigation.
+    runtime.dispatch_click(&blocked_link, 1.0, 1.0);
+    assert_eq!(runtime.take_pending_navigation(), None);
+
+    // Clicking & typing in <textarea> edits .value without breaking defaultValue, and submits cleanly.
+    runtime.dispatch_click(&ta, 1.0, 1.0);
+    runtime.dispatch_key(&KeyInput { key: "!".into(), text: Some("!".into()), ..KeyInput::default() });
+    assert_eq!(
+        runtime.eval_to_string(
+            "(() => { const t = document.getElementById('ta'); return [t.value, t.defaultValue].join('|'); })()"
+        ).unwrap(),
+        "hi!|hi"
+    );
+    runtime.dispatch_click(&sub, 1.0, 1.0);
+    assert_eq!(
+        runtime.take_pending_navigation().as_deref(),
+        Some("https://example.com/post?msg=hi%21")
+    );
+
+    // Web Animations API constructors + ShadowRoot `.Y()` compatibility.
+    assert_eq!(
+        runtime
+            .eval_to_string(
+                r#"(() => {
+                const host = document.createElement('div');
+                const frag = document.createDocumentFragment();
+                frag.innerHTML = '<span>in</span>';
+                const adopted = host.__aurora_adoptShadowRoot(frag, 'open');
+                frag.Y();
+                const nativeRoot = document.createElement('div').attachShadow({ mode: 'open' });
+                nativeRoot.Y();
+                const anim = new Animation(new KeyframeEffect(host, [{ opacity: 0 }, { opacity: 1 }], 100), document.timeline);
+                anim.play();
+                const mouse = new MouseEvent('click', { shiftKey: true });
+                return [
+                    typeof Event.CAPTURING_PHASE,
+                    Event.AT_TARGET,
+                    Event.BUBBLING_PHASE,
+                    mouse.getModifierState('Shift'),
+                    mouse.getModifierState('Control'),
+                    typeof anim.finished.then,
+                    adopted
+                ].join('|');
+            })()"#
+            )
+            .unwrap(),
+        "number|2|3|true|false|function|true"
+    );
+    let _ = host;
+}

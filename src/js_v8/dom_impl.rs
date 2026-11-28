@@ -7,8 +7,9 @@ use super::image_load;
 use super::script_load;
 use super::bindings::{
     CharacterDataMembers, ChildNodeMembers, DocumentMembers, ElementMembers, Error, Fallible,
-    FocusOptions, GetRootNodeOptions, HTMLHyperlinkElementUtilsMembers, HTMLImageElementMembers, HTMLInputElementMembers, HTMLScriptElementMembers,
-    HTMLOrSVGElementMembers, InnerHTMLMembers, NodeMembers, NodeOrString,
+    FocusOptions, GetRootNodeOptions, HTMLHyperlinkElementUtilsMembers, HTMLImageElementMembers,
+    HTMLInputElementMembers, HTMLOrSVGElementMembers, HTMLScriptElementMembers,
+    HTMLTextAreaElementMembers, InnerHTMLMembers, NodeMembers, NodeOrString,
     NonDocumentTypeChildNodeMembers, ParentNodeMembers,
 };
 use super::node_create::{
@@ -1428,13 +1429,14 @@ impl HTMLOrSVGElementMembers for Dom {
 // input's value starts as its `value` attribute and becomes independent once
 // set or edited (the dirty value flag). Values are not sanitized per type yet.
 
-/// `<input>` types whose value is edited as text.
+/// `<input>` types whose value is edited as text, plus `<textarea>`.
 pub(super) fn is_text_control(node: &NodePtr) -> bool {
     match &*node.borrow() {
         Node::Element(el) if el.tag_name.eq_ignore_ascii_case("input") => {
             let kind = el.attributes.get("type").map(|t| t.to_ascii_lowercase()).unwrap_or_default();
             matches!(kind.as_str(), "" | "text" | "search" | "email" | "url" | "tel" | "password" | "number")
         }
+        Node::Element(el) if el.tag_name.eq_ignore_ascii_case("textarea") => true,
         _ => false,
     }
 }
@@ -1443,6 +1445,9 @@ pub(super) fn input_value(registry: &NodeRegistry, node: &NodePtr) -> String {
     let id = registry.register(node.clone());
     if let Some(value) = registry.input_values.borrow().get(&id) {
         return value.clone();
+    }
+    if local_name(node) == "textarea" {
+        return mutation::collect_text(node);
     }
     attribute(node, "value").unwrap_or_default()
 }
@@ -1567,6 +1572,27 @@ impl HTMLInputElementMembers for Dom {
 
     fn set_checked(_: Scope, registry: &Rc<NodeRegistry>, this: &NodePtr, value: bool) -> Fallible<()> {
         set_input_checked(registry, this, value);
+        Ok(())
+    }
+}
+
+impl HTMLTextAreaElementMembers for Dom {
+    fn default_value(_: Scope, _: &Rc<NodeRegistry>, this: &NodePtr) -> Fallible<String> {
+        Ok(mutation::collect_text(this))
+    }
+
+    fn set_default_value(_: Scope, registry: &Rc<NodeRegistry>, this: &NodePtr, text: String) -> Fallible<()> {
+        mutation::apply_dom_mutation(registry, mutation::DomMutation::SetTextContent { node: this, text });
+        registry.mark_layout_dirty(this);
+        Ok(())
+    }
+
+    fn value(_: Scope, registry: &Rc<NodeRegistry>, this: &NodePtr) -> Fallible<String> {
+        Ok(input_value(registry, this))
+    }
+
+    fn set_value(_: Scope, registry: &Rc<NodeRegistry>, this: &NodePtr, value: String) -> Fallible<()> {
+        set_input_value(registry, this, value);
         Ok(())
     }
 }
@@ -1782,7 +1808,7 @@ fn form_entries(registry: &NodeRegistry, form: &NodePtr, submitter: Option<&Node
                     .then(|| attribute(&control, "value").unwrap_or_else(|| "on".into())),
                 _ => Some(input_value(registry, &control)),
             },
-            "textarea" => Some(mutation::collect_text(&control)),
+            "textarea" => Some(input_value(registry, &control)),
             "select" => {
                 let mut options = Vec::new();
                 descendant_elements(&control, &mut options);

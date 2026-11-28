@@ -28,16 +28,25 @@
                 obj.cancelable = !!(init.cancelable);
                 obj.composed = !!(init.composed);
                 obj.defaultPrevented = false;
+                obj.eventPhase = 0;
                 obj.isTrusted = false;
                 obj.timeStamp = 0;
                 if (obj.target === undefined) obj.target = null;
                 if (obj.currentTarget === undefined) obj.currentTarget = null;
                 obj.stopPropagation = function(){ obj.cancelBubble = true; };
                 obj.stopImmediatePropagation = function(){ obj.cancelBubble = true; obj.__immediateStop = true; };
-                obj.preventDefault = function(){ obj.defaultPrevented = true; };
+                obj.preventDefault = function(){ if (obj.cancelable) obj.defaultPrevented = true; };
                 obj.composedPath = function(){ return []; };
                 return obj;
             };
+            BaseEvent.NONE = 0;
+            BaseEvent.CAPTURING_PHASE = 1;
+            BaseEvent.AT_TARGET = 2;
+            BaseEvent.BUBBLING_PHASE = 3;
+            BaseEvent.prototype.NONE = 0;
+            BaseEvent.prototype.CAPTURING_PHASE = 1;
+            BaseEvent.prototype.AT_TARGET = 2;
+            BaseEvent.prototype.BUBBLING_PHASE = 3;
 
             globalThis.CustomEvent = function CustomEvent(type, init) {
                 BaseEvent.call(this, type, init);
