@@ -60,13 +60,18 @@ interface HTMLLabelElement : HTMLElement {};
 interface HTMLInputElement : HTMLElement {
   [CEReactions] attribute DOMString defaultValue;
   [CEReactions] attribute [LegacyNullToEmptyString] DOMString value;
+  [CEReactions] attribute boolean defaultChecked;
+  [CEReactions] attribute boolean checked;
 };
 interface HTMLButtonElement : HTMLElement {};
 interface HTMLSelectElement : HTMLElement {};
 interface HTMLDataListElement : HTMLElement {};
 interface HTMLOptGroupElement : HTMLElement {};
 interface HTMLOptionElement : HTMLElement {};
-interface HTMLTextAreaElement : HTMLElement {};
+interface HTMLTextAreaElement : HTMLElement {
+  [CEReactions] attribute DOMString defaultValue;
+  [CEReactions] attribute [LegacyNullToEmptyString] DOMString value;
+};
 interface HTMLOutputElement : HTMLElement {};
 interface HTMLProgressElement : HTMLElement {};
 interface HTMLMeterElement : HTMLElement {};

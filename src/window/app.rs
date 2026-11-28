@@ -49,6 +49,8 @@ pub(super) struct AuroraApp {
     /// rather than per-tab: switching tabs drops an in-progress edit, like
     /// mainstream browsers.
     pub(super) url_edit: Option<String>,
+    /// Active tab index and DOM node where a primary mouse press landed in page content.
+    pub(super) pressed_page_target: Option<(usize, crate::dom::NodePtr)>,
 }
 
 impl AuroraApp {
@@ -67,6 +69,7 @@ impl AuroraApp {
             modifiers: winit::keyboard::ModifiersState::default(),
             chrome: ChromeRenderer::default(),
             url_edit: None,
+            pressed_page_target: None,
         }
     }
 
@@ -125,6 +128,7 @@ impl AuroraApp {
 
     pub(super) fn activate_tab(&mut self, index: usize) {
         self.url_edit = None;
+        self.pressed_page_target = None;
         self.active = index.min(self.tabs.len() - 1);
         // The window may have been resized while this tab was inactive;
         // reflow against the real surface size, not the tab's stale viewport.

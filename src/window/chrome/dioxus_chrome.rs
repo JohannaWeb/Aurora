@@ -144,12 +144,16 @@ const URLBAR_HEIGHT: f64 = 24.0;
 /// Space reserved right of the URL bar for the diagnostics readout.
 const URLBAR_RIGHT_INSET: f64 = 180.0;
 
+const RELOAD_LEFT: f64 = 58.0;
+const RELOAD_RIGHT: f64 = 84.0;
+
 /// What a click inside the chrome band landed on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(in crate::window) enum ChromeHit {
     ActivateTab(usize),
     CloseTab(usize),
     NewTab,
+    Reload,
     UrlBar,
 }
 
@@ -161,10 +165,13 @@ pub(in crate::window) fn chrome_hit_test(
     tab_count: usize,
     width: f64,
 ) -> Option<ChromeHit> {
-    if (URLBAR_TOP..URLBAR_TOP + URLBAR_HEIGHT).contains(&y)
-        && (URLBAR_LEFT..(width - URLBAR_RIGHT_INSET).max(URLBAR_LEFT)).contains(&x)
-    {
-        return Some(ChromeHit::UrlBar);
+    if (URLBAR_TOP..URLBAR_TOP + URLBAR_HEIGHT).contains(&y) {
+        if (RELOAD_LEFT..RELOAD_RIGHT).contains(&x) {
+            return Some(ChromeHit::Reload);
+        }
+        if (URLBAR_LEFT..(width - URLBAR_RIGHT_INSET).max(URLBAR_LEFT)).contains(&x) {
+            return Some(ChromeHit::UrlBar);
+        }
     }
     if !(TAB_TOP..TAB_TOP + TAB_HEIGHT).contains(&y) {
         return None;
@@ -447,7 +454,11 @@ mod tests {
             chrome_hit_test(URLBAR_LEFT + 40.0, y, 1, WIN_W),
             Some(ChromeHit::UrlBar)
         );
-        // Left of the bar (nav buttons): nothing.
+        assert_eq!(
+            chrome_hit_test(68.0, y, 1, WIN_W),
+            Some(ChromeHit::Reload)
+        );
+        // Left of the bar (nav gap): nothing.
         assert_eq!(chrome_hit_test(URLBAR_LEFT - 10.0, y, 1, WIN_W), None);
         // Right of the bar, inside the diagnostics inset: nothing.
         assert_eq!(

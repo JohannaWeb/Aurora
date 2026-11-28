@@ -166,6 +166,34 @@ pub(crate) trait JsRuntime {
         self.dispatch_event(node, "click")
     }
 
+    /// Primary-button press on `node` at viewport coordinates: `pointerdown`,
+    /// `mousedown`, and click focus. Returns whether page script ran.
+    fn dispatch_mouse_down(
+        &mut self,
+        node: &NodePtr,
+        _client_x: f32,
+        _client_y: f32,
+        _modifiers: u32,
+    ) -> bool {
+        self.dispatch_event(node, "mousedown")
+    }
+
+    /// Primary-button release on `release_node` followed by `click` and
+    /// activation on `click_node` (if press and release share a target tree).
+    fn dispatch_mouse_up_and_click(
+        &mut self,
+        release_node: &NodePtr,
+        click_node: Option<&NodePtr>,
+        client_x: f32,
+        client_y: f32,
+        _modifiers: u32,
+    ) -> bool {
+        if let Some(target) = click_node {
+            return self.dispatch_click(target, client_x, client_y);
+        }
+        self.dispatch_event(release_node, "mouseup")
+    }
+
     /// A key press or release, delivered to the focused element (or body):
     /// keydown/keypress/keyup, and for a focused text control the edit and
     /// its `input` event.

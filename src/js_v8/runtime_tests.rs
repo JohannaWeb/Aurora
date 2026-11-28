@@ -4182,3 +4182,237 @@ fn v8_text_encoder_and_text_decoder_match_whatwg_encoding() {
         Ok("utf-8 / [object TextEncoder] / 0 / 97,239,191,189,240,159,152,128 / 3:5:97,240,159,152,128 / utf-8:false:false / hi / true / ||😀 / true / TypeError / RangeError / TypeError / €é / A😀 / ok".into())
     );
 }
+
+#[test]
+fn v8_click_activation_handles_anchors_prevent_default_nested_submits_and_element_click() {
+    let dom = Parser::new(
+        "<html><body>\
+         <a id='spa' href='/watch?v=1'><span id='spa-child'>Watch</span></a>\
+         <a id='jslink' href='javascript:void(0)'>noop</a>\
+         <a id='fraglink' href='#sec'>Jump</a>\
+         <form id='f' action='/search'><input name='q' value='hi'>\
+           <button id='sub' type='submit'><span id='sub-span'>Go</span></button>\
+           <button id='dis' type='submit' disabled><span id='dis-span'>No</span></button>\
+         </form>\
+         <div id='sec'>Target</div>\
+         </body></html>",
+    )
+    .parse_document();
+    let find = |id: &str| super::selectors::query::find_by_id(&dom, id).unwrap();
+    let (spa_child, jslink, fraglink, sub_span, dis_span) = (
+        find("spa-child"),
+        find("jslink"),
+        find("fraglink"),
+        find("sub-span"),
+        find("dis-span"),
+    );
+    let mut runtime = V8Runtime::new(dom.clone());
+    runtime
+        .eval_to_string(
+            r#"(() => {
+            __aurora_set_location__('https://www.youtube.com/');
+            globalThis.blockNav = true;
+            globalThis.clicks = [];
+            document.getElementById('spa').addEventListener('click', (e) => {
+                clicks.push(e.target.id || 'el');
+                if (globalThis.blockNav) e.preventDefault();
+            });
+            return 'ok';
+        })()"#,
+        )
+        .unwrap();
+
+    // Prevented <a href> runs JS handler and does NOT navigate.
+    runtime.dispatch_click(&spa_child, 10.0, 20.0);
+    assert_eq!(runtime.take_pending_navigation(), None);
+    assert_eq!(runtime.eval_to_string("clicks.join(',')").unwrap(), "spa-child");
+
+    // Unprevented nested child inside <a href> navigates via activation.
+    runtime.eval_to_string("globalThis.blockNav = false; ''").unwrap();
+    runtime.dispatch_click(&spa_child, 10.0, 20.0);
+    assert_eq!(
+        runtime.take_pending_navigation().as_deref(),
+        Some("https://www.youtube.com/watch?v=1")
+    );
+
+    // Programmatic element.click() fires click + navigates (unless prevented).
+    runtime.eval_to_string("document.getElementById('spa').click(); ''").unwrap();
+    assert_eq!(
+        runtime.take_pending_navigation().as_deref(),
+        Some("https://www.youtube.com/watch?v=1")
+    );
+
+    // javascript: and same-document #fragment links do not trigger page reloads.
+    runtime.dispatch_click(&jslink, 1.0, 1.0);
+    assert_eq!(runtime.take_pending_navigation(), None);
+    runtime.dispatch_click(&fraglink, 1.0, 1.0);
+    assert_eq!(runtime.take_pending_navigation(), None);
+
+    // Disabled button child never submits; enabled button child submits via press/release.
+    runtime.dispatch_click(&dis_span, 1.0, 1.0);
+    assert_eq!(runtime.take_pending_navigation(), None);
+    runtime.dispatch_mouse_down(&sub_span, 5.0, 5.0, 0);
+    runtime.dispatch_mouse_up_and_click(&sub_span, Some(&find("sub")), 5.0, 5.0, 0);
+    assert_eq!(
+        runtime.take_pending_navigation().as_deref(),
+        Some("https://www.youtube.com/search?q=hi")
+    );
+}
+
+#[test]
+fn v8_checkbox_radio_and_label_activation_sync_checkedness_and_forms() {
+    let dom = Parser::new(
+        "<html><body><form id='f' action='/save'>\
+         <input type='checkbox' id='cb' name='agree'>\
+         <label id='cb-lbl' for='cb'>Agree</label>\
+         <input type='radio' id='r1' name='choice' value='a' checked>\
+         <input type='radio' id='r2' name='choice' value='b'>\
+         <button id='go' type='submit'>Save</button>\
+         </form></body></html>",
+    )
+    .parse_document();
+    let find = |id: &str| super::selectors::query::find_by_id(&dom, id).unwrap();
+    let (cb, cb_lbl, r2, go) = (find("cb"), find("cb-lbl"), find("r2"), find("go"));
+    let mut runtime = V8Runtime::new(dom.clone());
+    runtime
+        .eval_to_string(
+            r#"(() => {
+            __aurora_set_location__('https://example.com/');
+            globalThis.events = [];
+            for (const id of ['cb', 'r1', 'r2']) {
+                const el = document.getElementById(id);
+                globalThis[id] = el;
+                for (const ev of ['input', 'change']) {
+                    el.addEventListener(ev, () => events.push(id + ':' + ev + ':' + el.checked));
+                }
+            }
+            return 'ok';
+        })()"#,
+        )
+        .unwrap();
+
+    runtime.dispatch_click(&cb, 2.0, 2.0);
+    assert_eq!(
+        runtime.eval_to_string("[cb.checked, cb.defaultChecked, r1.checked, r2.checked].join('|')").unwrap(),
+        "true|false|true|false"
+    );
+    // Label click focuses checkbox and toggles it back off.
+    runtime.dispatch_click(&cb_lbl, 2.0, 2.0);
+    assert_eq!(runtime.eval_to_string("String(cb.checked)").unwrap(), "false");
+
+    // Radio selection unchecks r1 and checks r2.
+    runtime.dispatch_click(&r2, 2.0, 2.0);
+    assert_eq!(
+        runtime.eval_to_string("[r1.checked, r2.checked].join('|')").unwrap(),
+        "false|true"
+    );
+    assert_eq!(
+        runtime.eval_to_string("events.join(' ')").unwrap(),
+        "cb:input:true cb:change:true cb:input:false cb:change:false r2:input:true r2:change:true"
+    );
+
+    // Toggle checkbox back on via element.click() and submit form.
+    runtime.eval_to_string("document.getElementById('cb').click(); ''").unwrap();
+    runtime.dispatch_click(&go, 2.0, 2.0);
+    assert_eq!(
+        runtime.take_pending_navigation().as_deref(),
+        Some("https://example.com/save?agree=on&choice=b")
+    );
+}
+
+#[test]
+fn v8_inline_handlers_handle_event_phases_textarea_and_web_animations() {
+    use crate::js_engine::KeyInput;
+    let dom = Parser::new(
+        "<html><body>\
+         <div id='wrap'>\
+           <button id='inline-btn' onclick='globalThis.log.push(\"attr:\" + event.eventPhase)'>Inline</button>\
+           <a id='blocked-link' href='/blocked' onclick='globalThis.log.push(\"blocked\"); return false'>Blocked</a>\
+         </div>\
+         <form id='f' action='/post'>\
+           <textarea id='ta' name='msg'>hi</textarea>\
+           <button id='sub' type='submit'>Send</button>\
+         </form>\
+         <div id='host'></div>\
+         </body></html>",
+    )
+    .parse_document();
+    let find = |id: &str| super::selectors::query::find_by_id(&dom, id).unwrap();
+    let (inline_btn, blocked_link, ta, sub, host) = (
+        find("inline-btn"),
+        find("blocked-link"),
+        find("ta"),
+        find("sub"),
+        find("host"),
+    );
+    let mut runtime = V8Runtime::new(dom.clone());
+    runtime
+        .eval_to_string(
+            r#"(() => {
+            __aurora_set_location__('https://example.com/');
+            globalThis.log = [];
+            const wrap = document.getElementById('wrap');
+            const objListener = { tag: 'obj', handleEvent(e) { globalThis.log.push(this.tag + ':' + e.eventPhase); } };
+            wrap.addEventListener('click', objListener, { capture: true });
+            wrap.onclick = function(e) { globalThis.log.push('prop:' + e.eventPhase); };
+            return 'ok';
+        })()"#,
+        )
+        .unwrap();
+
+    runtime.dispatch_click(&inline_btn, 1.0, 1.0);
+    assert_eq!(
+        runtime.eval_to_string("globalThis.log.join('|')").unwrap(),
+        "obj:1|attr:2|prop:3"
+    );
+
+    // Inline `onclick="return false"` calls preventDefault() and blocks anchor navigation.
+    runtime.dispatch_click(&blocked_link, 1.0, 1.0);
+    assert_eq!(runtime.take_pending_navigation(), None);
+
+    // Clicking & typing in <textarea> edits .value without breaking defaultValue, and submits cleanly.
+    runtime.dispatch_click(&ta, 1.0, 1.0);
+    runtime.dispatch_key(&KeyInput { key: "!".into(), text: Some("!".into()), ..KeyInput::default() });
+    assert_eq!(
+        runtime.eval_to_string(
+            "(() => { const t = document.getElementById('ta'); return [t.value, t.defaultValue].join('|'); })()"
+        ).unwrap(),
+        "hi!|hi"
+    );
+    runtime.dispatch_click(&sub, 1.0, 1.0);
+    assert_eq!(
+        runtime.take_pending_navigation().as_deref(),
+        Some("https://example.com/post?msg=hi%21")
+    );
+
+    // Web Animations API constructors + ShadowRoot `.Y()` compatibility.
+    assert_eq!(
+        runtime
+            .eval_to_string(
+                r#"(() => {
+                const host = document.createElement('div');
+                const frag = document.createDocumentFragment();
+                frag.innerHTML = '<span>in</span>';
+                const adopted = host.__aurora_adoptShadowRoot(frag, 'open');
+                frag.Y();
+                const nativeRoot = document.createElement('div').attachShadow({ mode: 'open' });
+                nativeRoot.Y();
+                const anim = new Animation(new KeyframeEffect(host, [{ opacity: 0 }, { opacity: 1 }], 100), document.timeline);
+                anim.play();
+                const mouse = new MouseEvent('click', { shiftKey: true });
+                return [
+                    typeof Event.CAPTURING_PHASE,
+                    Event.AT_TARGET,
+                    Event.BUBBLING_PHASE,
+                    mouse.getModifierState('Shift'),
+                    mouse.getModifierState('Control'),
+                    typeof anim.finished.then,
+                    adopted
+                ].join('|');
+            })()"#
+            )
+            .unwrap(),
+        "number|2|3|true|false|function|true"
+    );
+    let _ = host;
+}

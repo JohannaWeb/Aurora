@@ -7,8 +7,9 @@ use super::image_load;
 use super::script_load;
 use super::bindings::{
     CharacterDataMembers, ChildNodeMembers, DocumentMembers, ElementMembers, Error, Fallible,
-    FocusOptions, GetRootNodeOptions, HTMLHyperlinkElementUtilsMembers, HTMLImageElementMembers, HTMLInputElementMembers, HTMLScriptElementMembers,
-    HTMLOrSVGElementMembers, InnerHTMLMembers, NodeMembers, NodeOrString,
+    FocusOptions, GetRootNodeOptions, HTMLHyperlinkElementUtilsMembers, HTMLImageElementMembers,
+    HTMLInputElementMembers, HTMLOrSVGElementMembers, HTMLScriptElementMembers,
+    HTMLTextAreaElementMembers, InnerHTMLMembers, NodeMembers, NodeOrString,
     NonDocumentTypeChildNodeMembers, ParentNodeMembers,
 };
 use super::node_create::{
@@ -1269,15 +1270,51 @@ pub(super) fn is_focusable(node: &NodePtr) -> bool {
     }
 }
 
-/// Fires a trusted FocusEvent at `target` through its JS EventTarget.
-fn fire_focus_event(scope: Scope, registry: &Rc<NodeRegistry>, target: &NodePtr, event_type: &str, bubbles: bool, related: Option<&NodePtr>) {
+/// Constructs a trusted DOM event via `ctor_name` and dispatches it on `target`.
+fn dispatch_trusted_event(
+    scope: Scope,
+    registry: &Rc<NodeRegistry>,
+    target: &NodePtr,
+    ctor_name: &str,
+    event_type: &str,
+    init: v8::Local<v8::Object>,
+) {
     let document = document(registry, target);
     let wrapper = create_js_node(scope, target.clone(), registry, &document);
     let global = scope.get_current_context().global(scope);
-    let key = v8_str(scope, "FocusEvent");
-    let Some(constructor) = global.get(scope, key.into()).and_then(|v| v8::Local::<v8::Function>::try_from(v).ok()) else {
+    let ctor_key = v8_str(scope, ctor_name);
+    let Some(constructor) = global
+        .get(scope, ctor_key.into())
+        .and_then(|v| v8::Local::<v8::Function>::try_from(v).ok())
+    else {
         return;
     };
+    let event_name = v8_str(scope, event_type);
+    let Some(event) = constructor.new_instance(scope, &[event_name.into(), init.into()]) else {
+        return;
+    };
+    let trusted_key = v8_str(scope, "isTrusted");
+    let trusted = v8::Boolean::new(scope, true);
+    event.set(scope, trusted_key.into(), trusted.into());
+    let dispatch_key = v8_str(scope, "dispatchEvent");
+    if let Some(dispatch) = wrapper
+        .get(scope, dispatch_key.into())
+        .and_then(|v| v8::Local::<v8::Function>::try_from(v).ok())
+    {
+        let _ = dispatch.call(scope, wrapper.into(), &[event.into()]);
+    }
+}
+
+/// Fires a trusted FocusEvent at `target` through its JS EventTarget.
+fn fire_focus_event(
+    scope: Scope,
+    registry: &Rc<NodeRegistry>,
+    target: &NodePtr,
+    event_type: &str,
+    bubbles: bool,
+    related: Option<&NodePtr>,
+) {
+    let document = document(registry, target);
     let init = v8::Object::new(scope);
     let related: v8::Local<v8::Value> = match related {
         Some(node) => create_js_node(scope, node.clone(), registry, &document).into(),
@@ -1291,19 +1328,28 @@ fn fire_focus_event(scope: Scope, registry: &Rc<NodeRegistry>, target: &NodePtr,
         let key = v8_str(scope, name);
         init.set(scope, key.into(), value);
     }
-    let event_name = v8_str(scope, event_type);
-    let Some(event) = constructor.new_instance(scope, &[event_name.into(), init.into()]) else { return };
-    let key = v8_str(scope, "isTrusted");
-    let trusted = v8::Boolean::new(scope, true);
-    event.set(scope, key.into(), trusted.into());
-    let key = v8_str(scope, "dispatchEvent");
-    if let Some(dispatch) = wrapper.get(scope, key.into()).and_then(|v| v8::Local::<v8::Function>::try_from(v).ok()) {
-        let _ = dispatch.call(scope, wrapper.into(), &[event.into()]);
+    dispatch_trusted_event(scope, registry, target, "FocusEvent", event_type, init);
+}
+
+/// Fires a trusted basic `Event` at `target`.
+fn fire_simple_event(
+    scope: Scope,
+    registry: &Rc<NodeRegistry>,
+    target: &NodePtr,
+    event_type: &str,
+    bubbles: bool,
+) {
+    let init = v8::Object::new(scope);
+    for (name, value) in [("bubbles", bubbles), ("composed", true)] {
+        let key = v8_str(scope, name);
+        let value = v8::Boolean::new(scope, value);
+        init.set(scope, key.into(), value.into());
     }
+    dispatch_trusted_event(scope, registry, target, "Event", event_type, init);
 }
 
 /// Moves focus to `new` (or nowhere), firing blur/focusout on the old element
-/// and focus/focusin on the new one.
+/// and focus/focusin on the new one, and syncing focus to the renderer.
 pub(super) fn set_focus(scope: Scope, registry: &Rc<NodeRegistry>, new: Option<NodePtr>) {
     let old = registry.focused.borrow().clone();
     if match (&old, &new) {
@@ -1314,6 +1360,9 @@ pub(super) fn set_focus(scope: Scope, registry: &Rc<NodeRegistry>, new: Option<N
         return;
     }
     *registry.focused.borrow_mut() = new.clone();
+    if let Some(render) = registry.render_document() {
+        render.borrow_mut().set_focus_node(new.as_ref());
+    }
     if let Some(old) = &old {
         fire_focus_event(scope, registry, old, "blur", false, new.as_ref());
         fire_focus_event(scope, registry, old, "focusout", true, new.as_ref());
@@ -1380,13 +1429,14 @@ impl HTMLOrSVGElementMembers for Dom {
 // input's value starts as its `value` attribute and becomes independent once
 // set or edited (the dirty value flag). Values are not sanitized per type yet.
 
-/// `<input>` types whose value is edited as text.
+/// `<input>` types whose value is edited as text, plus `<textarea>`.
 pub(super) fn is_text_control(node: &NodePtr) -> bool {
     match &*node.borrow() {
         Node::Element(el) if el.tag_name.eq_ignore_ascii_case("input") => {
             let kind = el.attributes.get("type").map(|t| t.to_ascii_lowercase()).unwrap_or_default();
             matches!(kind.as_str(), "" | "text" | "search" | "email" | "url" | "tel" | "password" | "number")
         }
+        Node::Element(el) if el.tag_name.eq_ignore_ascii_case("textarea") => true,
         _ => false,
     }
 }
@@ -1395,6 +1445,9 @@ pub(super) fn input_value(registry: &NodeRegistry, node: &NodePtr) -> String {
     let id = registry.register(node.clone());
     if let Some(value) = registry.input_values.borrow().get(&id) {
         return value.clone();
+    }
+    if local_name(node) == "textarea" {
+        return mutation::collect_text(node);
     }
     attribute(node, "value").unwrap_or_default()
 }
@@ -1427,6 +1480,62 @@ pub(super) fn edit_text_input(registry: &NodeRegistry, node: &NodePtr, operation
     true
 }
 
+/// Current checked state of a checkbox/radio `<input>`, falling back to the
+/// `checked` attribute while clean.
+fn is_input_checked(registry: &NodeRegistry, node: &NodePtr) -> bool {
+    let id = registry.register(node.clone());
+    if let Some(&checked) = registry.input_checked.borrow().get(&id) {
+        return checked;
+    }
+    attribute(node, "checked").is_some()
+}
+
+fn input_type(node: &NodePtr) -> String {
+    attribute(node, "type").unwrap_or_default().to_ascii_lowercase()
+}
+
+/// Sets the dirty checkedness of a checkbox/radio `<input>`, unchecking
+/// same-named radios in the same form (or document) when checking a radio, and
+/// mirrors the state into Blitz so `:checked` styles redraw.
+fn set_input_checked(registry: &Rc<NodeRegistry>, node: &NodePtr, checked: bool) {
+    let id = registry.register(node.clone());
+    registry.input_checked.borrow_mut().insert(id, checked);
+    if checked && input_type(node) == "radio"
+        && let Some(name) = attribute(node, "name").filter(|n| !n.is_empty())
+    {
+        let radio_form = form_owner(registry, node);
+        let root = radio_form.clone().unwrap_or_else(|| document(registry, node));
+        let mut candidates = Vec::new();
+        descendant_elements(&root, &mut candidates);
+        for other in candidates {
+            if Rc::ptr_eq(&other, node) {
+                continue;
+            }
+            let same_group = match (&radio_form, form_owner(registry, &other)) {
+                (Some(a), Some(b)) => Rc::ptr_eq(a, &b),
+                (None, None) => true,
+                _ => false,
+            };
+            if local_name(&other) == "input"
+                && input_type(&other) == "radio"
+                && attribute(&other, "name").as_deref() == Some(name.as_str())
+                && same_group
+            {
+                let other_id = registry.register(other.clone());
+                registry.input_checked.borrow_mut().insert(other_id, false);
+                if let Some(render) = registry.render_document() {
+                    render.borrow_mut().show_checkbox_checked(&other, false);
+                }
+                registry.mark_layout_dirty(&other);
+            }
+        }
+    }
+    if let Some(render) = registry.render_document() {
+        render.borrow_mut().show_checkbox_checked(node, checked);
+    }
+    registry.mark_layout_dirty(node);
+}
+
 impl HTMLInputElementMembers for Dom {
     /// <https://html.spec.whatwg.org/multipage/input.html#dom-input-defaultvalue>
     fn default_value(_: Scope, _: &Rc<NodeRegistry>, this: &NodePtr) -> Fallible<String> {
@@ -1439,6 +1548,45 @@ impl HTMLInputElementMembers for Dom {
     }
 
     /// <https://html.spec.whatwg.org/multipage/input.html#dom-input-value>
+    fn value(_: Scope, registry: &Rc<NodeRegistry>, this: &NodePtr) -> Fallible<String> {
+        Ok(input_value(registry, this))
+    }
+
+    fn set_value(_: Scope, registry: &Rc<NodeRegistry>, this: &NodePtr, value: String) -> Fallible<()> {
+        set_input_value(registry, this, value);
+        Ok(())
+    }
+
+    fn default_checked(_: Scope, _: &Rc<NodeRegistry>, this: &NodePtr) -> Fallible<bool> {
+        Ok(attribute(this, "checked").is_some())
+    }
+
+    fn set_default_checked(_: Scope, registry: &Rc<NodeRegistry>, this: &NodePtr, value: bool) -> Fallible<()> {
+        set_boolean_attribute(registry, this, "checked", value);
+        Ok(())
+    }
+
+    fn checked(_: Scope, registry: &Rc<NodeRegistry>, this: &NodePtr) -> Fallible<bool> {
+        Ok(is_input_checked(registry, this))
+    }
+
+    fn set_checked(_: Scope, registry: &Rc<NodeRegistry>, this: &NodePtr, value: bool) -> Fallible<()> {
+        set_input_checked(registry, this, value);
+        Ok(())
+    }
+}
+
+impl HTMLTextAreaElementMembers for Dom {
+    fn default_value(_: Scope, _: &Rc<NodeRegistry>, this: &NodePtr) -> Fallible<String> {
+        Ok(mutation::collect_text(this))
+    }
+
+    fn set_default_value(_: Scope, registry: &Rc<NodeRegistry>, this: &NodePtr, text: String) -> Fallible<()> {
+        mutation::apply_dom_mutation(registry, mutation::DomMutation::SetTextContent { node: this, text });
+        registry.mark_layout_dirty(this);
+        Ok(())
+    }
+
     fn value(_: Scope, registry: &Rc<NodeRegistry>, this: &NodePtr) -> Fallible<String> {
         Ok(input_value(registry, this))
     }
@@ -1656,11 +1804,11 @@ fn form_entries(registry: &NodeRegistry, form: &NodePtr, submitter: Option<&Node
                         None
                     }
                 }
-                "checkbox" | "radio" => attribute(&control, "checked")
-                    .map(|_| attribute(&control, "value").unwrap_or_else(|| "on".into())),
+                "checkbox" | "radio" => is_input_checked(registry, &control)
+                    .then(|| attribute(&control, "value").unwrap_or_else(|| "on".into())),
                 _ => Some(input_value(registry, &control)),
             },
-            "textarea" => Some(mutation::collect_text(&control)),
+            "textarea" => Some(input_value(registry, &control)),
             "select" => {
                 let mut options = Vec::new();
                 descendant_elements(&control, &mut options);
@@ -1753,11 +1901,140 @@ pub(super) fn implicit_submission(scope: Scope, registry: &Rc<NodeRegistry>, fie
     submit_form(scope, registry, &form, default_button.as_ref());
 }
 
-/// A submit button's activation behaviour, after its click was not cancelled.
-pub(super) fn activate(scope: Scope, registry: &Rc<NodeRegistry>, target: &NodePtr) {
-    if is_submit_button(target) && attribute(target, "disabled").is_none() {
-        if let Some(form) = form_owner(registry, target) {
-            submit_form(scope, registry, &form, Some(target));
-        }
+fn activation_parent(registry: &NodeRegistry, document: &NodePtr, node: &NodePtr) -> Option<NodePtr> {
+    use crate::dom::ShadowTreeBackend;
+    parent_of(registry, document, node)
+        .or_else(|| crate::dom::SyntheticShadowTreeBackend.host_for_shadow_root(node))
+}
+
+fn find_labeled_control(doc: &NodePtr, label: &NodePtr) -> Option<NodePtr> {
+    if let Some(for_id) = attribute(label, "for").filter(|id| !id.is_empty()) {
+        return super::selectors::query::find_by_id(doc, &for_id);
     }
+    let mut descendants = Vec::new();
+    descendant_elements(label, &mut descendants);
+    descendants.into_iter().find(|el| {
+        let tag = local_name(el);
+        match tag.as_str() {
+            "button" | "select" | "textarea" => true,
+            "input" => input_type(el) != "hidden",
+            _ => false,
+        }
+    })
+}
+
+fn scroll_to_fragment(registry: &NodeRegistry, doc: &NodePtr, fragment: &str) {
+    if fragment.is_empty() || fragment.eq_ignore_ascii_case("top") {
+        registry.scroll_viewport_to(0.0, 0.0);
+        return;
+    }
+    let target = super::selectors::query::find_by_id(doc, fragment).or_else(|| {
+        let mut descendants = Vec::new();
+        descendant_elements(doc, &mut descendants);
+        descendants
+            .into_iter()
+            .find(|el| local_name(el) == "a" && attribute(el, "name").as_deref() == Some(fragment))
+    });
+    let y = target
+        .and_then(|node| registry.layout_metrics(&node))
+        .map_or(0.0, |m| f64::from(m.y));
+    registry.scroll_viewport_to(0.0, y);
+}
+
+fn same_document_except_fragment(base: &url::Url, target: &url::Url) -> bool {
+    let mut a = base.clone();
+    let mut b = target.clone();
+    a.set_fragment(None);
+    b.set_fragment(None);
+    a == b
+}
+
+fn activate_anchor(scope: Scope, registry: &NodeRegistry, doc: &NodePtr, raw_href: &str) {
+    let href = raw_href.trim();
+    if href.len() >= 11 && href[..11].eq_ignore_ascii_case("javascript:") {
+        return;
+    }
+    let base = document_base_url(scope);
+    if let Some(fragment) = href.strip_prefix('#') {
+        scroll_to_fragment(registry, doc, fragment);
+        return;
+    }
+    let resolved = match &base {
+        Some(base) => base.join(href).ok(),
+        None => url::Url::parse(href).ok(),
+    };
+    if let Some(resolved) = resolved {
+        if base
+            .as_ref()
+            .is_some_and(|b| same_document_except_fragment(b, &resolved))
+            && let Some(fragment) = resolved.fragment()
+        {
+            scroll_to_fragment(registry, doc, fragment);
+            return;
+        }
+        *registry.pending_navigation.borrow_mut() = Some(resolved.into());
+    }
+}
+
+fn activate_inner(scope: Scope, registry: &Rc<NodeRegistry>, target: &NodePtr, allow_label: bool) {
+    let doc = document(registry, target);
+    let mut current = Some(target.clone());
+    while let Some(candidate) = current {
+        let tag = local_name(&candidate);
+        if matches!(tag.as_str(), "button" | "input" | "select" | "textarea")
+            && attribute(&candidate, "disabled").is_some()
+        {
+            return;
+        }
+        if is_submit_button(&candidate) {
+            if let Some(form) = form_owner(registry, &candidate) {
+                submit_form(scope, registry, &form, Some(&candidate));
+            }
+            return;
+        }
+        if tag == "input" {
+            let kind = input_type(&candidate);
+            if kind == "checkbox" {
+                let next = !is_input_checked(registry, &candidate);
+                set_input_checked(registry, &candidate, next);
+                fire_simple_event(scope, registry, &candidate, "input", true);
+                fire_simple_event(scope, registry, &candidate, "change", true);
+                return;
+            }
+            if kind == "radio" {
+                if !is_input_checked(registry, &candidate) {
+                    set_input_checked(registry, &candidate, true);
+                    fire_simple_event(scope, registry, &candidate, "input", true);
+                    fire_simple_event(scope, registry, &candidate, "change", true);
+                }
+                return;
+            }
+        }
+        if allow_label && tag == "label" {
+            if let Some(control) = find_labeled_control(&doc, &candidate)
+                && attribute(&control, "disabled").is_none()
+            {
+                if is_focusable(&control) {
+                    set_focus(scope, registry, Some(control.clone()));
+                }
+                if !is_text_control(&control) {
+                    activate_inner(scope, registry, &control, false);
+                }
+            }
+            return;
+        }
+        if matches!(tag.as_str(), "a" | "area")
+            && let Some(href) = attribute(&candidate, "href")
+        {
+            activate_anchor(scope, registry, &doc, &href);
+            return;
+        }
+        current = activation_parent(registry, &doc, &candidate);
+    }
+}
+
+/// Default click activation behaviour after `click` was not cancelled:
+/// walks inclusive ancestors for a submit button, checkbox/radio, label, or link.
+pub(super) fn activate(scope: Scope, registry: &Rc<NodeRegistry>, target: &NodePtr) {
+    activate_inner(scope, registry, target, true);
 }
