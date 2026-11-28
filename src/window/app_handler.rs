@@ -63,12 +63,22 @@ impl winit::application::ApplicationHandler for AuroraApp {
             WindowEvent::CursorMoved { position, .. } => {
                 self.mouse_x = position.x;
                 self.mouse_y = position.y;
+                self.update_hover_and_cursor();
+            }
+            WindowEvent::CursorLeft { .. } => {
+                self.clear_page_hover();
+                self.set_cursor_icon(winit::window::CursorIcon::Default);
             }
             WindowEvent::MouseInput {
                 state: ElementState::Pressed,
                 button: winit::event::MouseButton::Left,
                 ..
-            } => self.handle_click(event_loop),
+            } => self.handle_mouse_press(event_loop),
+            WindowEvent::MouseInput {
+                state: ElementState::Released,
+                button: winit::event::MouseButton::Left,
+                ..
+            } => self.handle_mouse_release(),
             WindowEvent::RedrawRequested => {
                 if self.surface.is_some() {
                     if self.run_frame_tasks() {
@@ -285,17 +295,97 @@ impl AuroraApp {
         }
     }
 
-    fn handle_click(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
+    fn current_modifiers(&self) -> u32 {
+        (self.modifiers.shift_key() as u32)
+            | ((self.modifiers.control_key() as u32) << 1)
+            | ((self.modifiers.alt_key() as u32) << 2)
+            | ((self.modifiers.super_key() as u32) << 3)
+    }
+
+    fn content_coords(&self) -> (f32, f32, f32, f32) {
+        let client_x = self.mouse_x as f32;
+        let client_y = (self.mouse_y - super::BROWSER_CHROME_HEIGHT as f64) as f32;
+        let content_x = client_x;
+        let content_y = (self.mouse_y - super::BROWSER_CHROME_HEIGHT as f64 + self.tab().scroll_y) as f32;
+        (client_x, client_y, content_x, content_y)
+    }
+
+    fn sync_blitz_scroll(&self) {
+        let scroll_y = self.tab().scroll_y;
+        if let Some(doc) = self.input().blitz_doc.as_ref() {
+            doc.borrow_mut().set_scroll_y(scroll_y);
+        }
+    }
+
+    fn hit_test_content(&self, content_x: f32, content_y: f32) -> Option<crate::dom::NodePtr> {
+        self.sync_blitz_scroll();
+        self.input()
+            .blitz_doc
+            .as_ref()
+            .and_then(|doc| doc.borrow().hit_test_dom_node(content_x, content_y))
+            .or_else(|| self.input().layout.borrow().hit_test(content_x, content_y))
+    }
+
+    fn set_cursor_icon(&self, icon: winit::window::CursorIcon) {
+        if let Some(window) = &self.window {
+            window.set_cursor(icon);
+        }
+    }
+
+    fn clear_page_hover(&mut self) {
+        let changed = self
+            .input()
+            .blitz_doc
+            .as_ref()
+            .is_some_and(|doc| doc.borrow_mut().clear_hover());
+        if changed {
+            self.request_redraw();
+        }
+    }
+
+    fn chrome_hit_at_cursor(&self) -> Option<super::chrome::ChromeHit> {
+        let width = self
+            .surface
+            .as_ref()
+            .map(|s| s.config.width as f64)
+            .unwrap_or_else(|| self.input().viewport.borrow().width as f64);
+        super::chrome::chrome_hit_test(self.mouse_x, self.mouse_y, self.tabs.len(), width)
+    }
+
+    fn update_hover_and_cursor(&mut self) {
+        if self.mouse_y < super::BROWSER_CHROME_HEIGHT as f64 {
+            self.clear_page_hover();
+            let icon = match self.chrome_hit_at_cursor() {
+                Some(super::chrome::ChromeHit::UrlBar) => winit::window::CursorIcon::Text,
+                Some(_) => winit::window::CursorIcon::Pointer,
+                None => winit::window::CursorIcon::Default,
+            };
+            self.set_cursor_icon(icon);
+            return;
+        }
+        let (_, _, content_x, content_y) = self.content_coords();
+        self.sync_blitz_scroll();
+        let (hover_changed, cursor) = match self.input().blitz_doc.as_ref() {
+            Some(doc) => {
+                let mut doc = doc.borrow_mut();
+                let changed = doc.set_hover_to(content_x, content_y);
+                let cursor = doc.cursor_icon().unwrap_or(winit::window::CursorIcon::Default);
+                (changed, cursor)
+            }
+            None => (false, winit::window::CursorIcon::Default),
+        };
+        if hover_changed {
+            self.request_redraw();
+        }
+        self.set_cursor_icon(cursor);
+    }
+
+    fn handle_mouse_press(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
         // Clicks in the chrome band go to the tab strip or address bar, not
         // the page. Any click that isn't on the bar drops bar focus.
         if self.mouse_y < super::BROWSER_CHROME_HEIGHT as f64 {
-            let width = self
-                .surface
-                .as_ref()
-                .map(|s| s.config.width as f64)
-                .unwrap_or_else(|| self.input().viewport.borrow().width as f64);
-            let hit =
-                super::chrome::chrome_hit_test(self.mouse_x, self.mouse_y, self.tabs.len(), width);
+            self.pressed_page_target = None;
+            let hit = self.chrome_hit_at_cursor();
             if !matches!(hit, Some(super::chrome::ChromeHit::UrlBar))
                 && self.url_edit.take().is_some()
             {
@@ -323,6 +413,13 @@ impl AuroraApp {
                     self.open_new_tab();
                     self.request_redraw();
                 }
+                Some(super::chrome::ChromeHit::Reload) => {
+                    if let Some(url) = self.input().base_url.clone() {
+                        self.input_mut().navigate_to(&url);
+                        self.tab_mut().scroll_y = 0.0;
+                        self.request_redraw();
+                    }
+                }
                 None => {}
             }
             return;
@@ -333,47 +430,83 @@ impl AuroraApp {
             self.request_redraw();
         }
 
-        let content_x = self.mouse_x as f32;
-        let content_y =
-            (self.mouse_y - super::BROWSER_CHROME_HEIGHT as f64 + self.tab().scroll_y) as f32;
+        let (client_x, client_y, content_x, content_y) = self.content_coords();
+        self.sync_blitz_scroll();
+        let active_changed = self.input().blitz_doc.as_ref().is_some_and(|doc| {
+            let mut doc = doc.borrow_mut();
+            let hover_changed = doc.set_hover_to(content_x, content_y);
+            doc.activate_hover_node() || hover_changed
+        });
+        if active_changed {
+            self.request_redraw();
+        }
 
-        // Navigation: use blitz-dom hit test so coordinates match what is rendered.
-        if let Some(href) = self
+        let press_node = self.hit_test_content(content_x, content_y);
+        self.pressed_page_target = press_node.as_ref().map(|n| (self.active, n.clone()));
+        if let Some(node) = press_node {
+            let modifiers = self.current_modifiers();
+            if let Some(runtime) = self.input_mut().runtime.as_mut() {
+                runtime.dispatch_mouse_down(&node, client_x, client_y, modifiers);
+                self.request_redraw();
+            }
+            self.follow_pending_navigation();
+        }
+    }
+
+    fn handle_mouse_release(&mut self) {
+        let pressed = self.pressed_page_target.take();
+        let active_cleared = self
             .input()
             .blitz_doc
             .as_ref()
-            .and_then(|doc| doc.borrow().hit_test_anchor(content_x, content_y))
-        {
-            let full_url = match &self.input().base_url {
-                Some(base) => crate::fetch::resolve_relative_url(base, &href).unwrap_or(href),
-                None => href,
-            };
-            self.input_mut().navigate_to(&full_url);
-            self.tab_mut().scroll_y = 0.0;
+            .is_some_and(|doc| doc.borrow_mut().unactivate_hover_node());
+        if active_cleared {
             self.request_redraw();
+        }
+
+        let Some((tab_idx, press_node)) = pressed else {
+            return;
+        };
+        if tab_idx != self.active || self.mouse_y < super::BROWSER_CHROME_HEIGHT as f64 {
             return;
         }
 
-        // JS event dispatch follows the Blitz hit test first so events target
-        // the node that was actually rendered. The legacy LayoutTree remains a
-        // compatibility fallback for documents without a live Blitz renderer.
-        let hit_node = self
-            .input()
-            .blitz_doc
+        let (client_x, client_y, content_x, content_y) = self.content_coords();
+        let release_node = self.hit_test_content(content_x, content_y);
+        let click_target = release_node
             .as_ref()
-            .and_then(|doc| doc.borrow().hit_test_dom_node(content_x, content_y))
-            .or_else(|| {
-                let layout = self.input().layout.borrow();
-                layout.hit_test(content_x, content_y)
-            });
-        // Viewport (client) coordinates: the page area, before scrolling.
-        let client_x = self.mouse_x as f32;
-        let client_y = (self.mouse_y - super::BROWSER_CHROME_HEIGHT as f64) as f32;
-        if let Some(node) = hit_node {
+            .and_then(|release| common_dom_ancestor(&press_node, release));
+
+        if self.input().runtime.is_none() {
+            if click_target.is_some()
+                && let Some(href) = self
+                    .input()
+                    .blitz_doc
+                    .as_ref()
+                    .and_then(|doc| doc.borrow().hit_test_anchor(content_x, content_y))
+            {
+                let full_url = match &self.input().base_url {
+                    Some(base) => crate::fetch::resolve_relative_url(base, &href).unwrap_or(href),
+                    None => href,
+                };
+                self.input_mut().navigate_to(&full_url);
+                self.tab_mut().scroll_y = 0.0;
+                self.request_redraw();
+            }
+            return;
+        }
+
+        if let Some(release) = release_node {
+            let modifiers = self.current_modifiers();
             if let Some(runtime) = self.input_mut().runtime.as_mut() {
-                if runtime.dispatch_click(&node, client_x, client_y) {
-                    self.request_redraw();
-                }
+                runtime.dispatch_mouse_up_and_click(
+                    &release,
+                    click_target.as_ref(),
+                    client_x,
+                    client_y,
+                    modifiers,
+                );
+                self.request_redraw();
             }
             self.follow_pending_navigation();
         }
@@ -384,6 +517,7 @@ impl AuroraApp {
     fn follow_pending_navigation(&mut self) -> bool {
         let url = self.input_mut().runtime.as_mut().and_then(|runtime| runtime.take_pending_navigation());
         let Some(url) = url else { return false };
+        self.pressed_page_target = None;
         self.input_mut().navigate_to(&url);
         self.tab_mut().scroll_y = 0.0;
         self.request_redraw();
@@ -415,6 +549,33 @@ impl AuroraApp {
     fn has_active_media(&self) -> bool {
         self.input().media.has_active_media()
     }
+}
+
+/// Nearest common inclusive DOM ancestor of `a` and `b` (crossing shadow hosts
+/// via `SyntheticShadowTreeBackend` so slotted/shadow children resolve cleanly).
+fn common_dom_ancestor(
+    a: &crate::dom::NodePtr,
+    b: &crate::dom::NodePtr,
+) -> Option<crate::dom::NodePtr> {
+    use crate::dom::ShadowTreeBackend;
+    let next_parent = |node: &crate::dom::NodePtr| {
+        crate::dom::parent_ptr(node)
+            .or_else(|| crate::dom::SyntheticShadowTreeBackend.host_for_shadow_root(node))
+    };
+    let mut ancestors = Vec::new();
+    let mut cur = Some(a.clone());
+    while let Some(node) = cur {
+        ancestors.push(node.clone());
+        cur = next_parent(&node);
+    }
+    let mut cur_b = Some(b.clone());
+    while let Some(node) = cur_b {
+        if ancestors.iter().any(|cand| std::rc::Rc::ptr_eq(cand, &node)) {
+            return Some(node);
+        }
+        cur_b = next_parent(&node);
+    }
+    None
 }
 
 /// The window's key event in DOM terms (`key`, `code`, legacy `keyCode`).

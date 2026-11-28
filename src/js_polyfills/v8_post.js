@@ -29,8 +29,15 @@
             init = init || {};
             this.detail = init.detail !== undefined ? init.detail : 0;
             this.clientX = init.clientX || 0; this.clientY = init.clientY || 0;
+            this.x = this.clientX; this.y = this.clientY;
+            this.screenX = init.screenX !== undefined ? init.screenX : this.clientX;
+            this.screenY = init.screenY !== undefined ? init.screenY : this.clientY;
             this.key = init.key || ''; this.keyCode = init.keyCode || 0;
             this.button = init.button || 0;
+            this.buttons = init.buttons || 0;
+            this.which = init.which !== undefined ? init.which : (this.button + 1);
+            this.ctrlKey = !!init.ctrlKey; this.shiftKey = !!init.shiftKey;
+            this.altKey = !!init.altKey; this.metaKey = !!init.metaKey;
             this.relatedTarget = init.relatedTarget || null;
         };
         Ctor.prototype = Object.create(globalThis.Event.prototype);
@@ -289,48 +296,76 @@
         } catch (e) {}
     });
 
+    function elementTarget(node) {
+        var target = node;
+        while (target && target.nodeType !== 1) target = target.parentNode;
+        return (target && typeof target.dispatchEvent === 'function') ? target : null;
+    }
+
+    function firePointerMouseEvent(target, Ctor, type, clientX, clientY, buttons, modifiers) {
+        var scrollX = window.scrollX || 0, scrollY = window.scrollY || 0;
+        var event = new Ctor(type, {
+            bubbles: true, cancelable: true, composed: true, view: window,
+            detail: 1, clientX: clientX, clientY: clientY, button: 0, buttons: buttons,
+            shiftKey: !!(modifiers & 1), ctrlKey: !!(modifiers & 2),
+            altKey: !!(modifiers & 4), metaKey: !!(modifiers & 8)
+        });
+        event.isTrusted = true;
+        event.pageX = clientX + scrollX; event.pageY = clientY + scrollY;
+        event.offsetX = 0; event.offsetY = 0;
+        if (Ctor === globalThis.PointerEvent) {
+            event.pointerId = 1; event.pointerType = 'mouse'; event.isPrimary = true;
+            event.width = 1; event.height = 1; event.pressure = buttons ? 0.5 : 0;
+        }
+        return target.dispatchEvent(event);
+    }
+
+    function dispatchMouseDown(target, clientX, clientY, modifiers) {
+        var Pointer = globalThis.PointerEvent || globalThis.MouseEvent;
+        firePointerMouseEvent(target, Pointer, 'pointerdown', clientX, clientY, 1, modifiers);
+        // mousedown's default action moves focus to the clicked element (or
+        // its nearest focusable ancestor), or clears it.
+        if (firePointerMouseEvent(target, MouseEvent, 'mousedown', clientX, clientY, 1, modifiers)
+            && typeof globalThis.__aurora_focus_from_click__ === 'function') {
+            globalThis.__aurora_focus_from_click__(target);
+        }
+    }
+
+    function dispatchMouseUpAndClick(releaseTarget, clickTarget, clientX, clientY, modifiers) {
+        var Pointer = globalThis.PointerEvent || globalThis.MouseEvent;
+        if (releaseTarget) {
+            firePointerMouseEvent(releaseTarget, Pointer, 'pointerup', clientX, clientY, 0, modifiers);
+            firePointerMouseEvent(releaseTarget, MouseEvent, 'mouseup', clientX, clientY, 0, modifiers);
+        }
+        if (!clickTarget) return true;
+        var allowed = firePointerMouseEvent(clickTarget, MouseEvent, 'click', clientX, clientY, 0, modifiers);
+        if (allowed && typeof globalThis.__aurora_activate__ === 'function') {
+            globalThis.__aurora_activate__(clickTarget);
+        }
+        return allowed;
+    }
+
+    globalThis.__aurora_dispatch_mouse_down__ = function(node, clientX, clientY, modifiers) {
+        var target = elementTarget(node);
+        if (!target) return;
+        dispatchMouseDown(target, clientX, clientY, modifiers || 0);
+    };
+
+    globalThis.__aurora_dispatch_mouse_up__ = function(releaseNode, clickNode, clientX, clientY, modifiers) {
+        var releaseTarget = elementTarget(releaseNode);
+        var clickTarget = elementTarget(clickNode);
+        dispatchMouseUpAndClick(releaseTarget, clickTarget, clientX, clientY, modifiers || 0);
+    };
+
     // A trusted primary-button click from the window (V8Runtime::dispatch_click):
     // pointer and mouse down/up, then click, at the element that was hit. A
     // hit on a text node targets its parent element. Returns whether click's
     // default action is still allowed.
     globalThis.__aurora_dispatch_click__ = function(node, clientX, clientY) {
-        var target = node;
-        while (target && target.nodeType !== 1) target = target.parentNode;
-        if (!target || typeof target.dispatchEvent !== 'function') return true;
-        var scrollX = window.scrollX || 0, scrollY = window.scrollY || 0;
-        function fire(Ctor, type, buttons) {
-            var event = new Ctor(type, {
-                bubbles: true, cancelable: true, composed: true, view: window,
-                detail: 1, clientX: clientX, clientY: clientY, button: 0
-            });
-            event.isTrusted = true;
-            event.buttons = buttons;
-            event.screenX = clientX; event.screenY = clientY;
-            event.pageX = clientX + scrollX; event.pageY = clientY + scrollY;
-            event.x = clientX; event.y = clientY;
-            event.offsetX = 0; event.offsetY = 0;
-            event.altKey = false; event.ctrlKey = false; event.metaKey = false; event.shiftKey = false;
-            if (Ctor === globalThis.PointerEvent) {
-                event.pointerId = 1; event.pointerType = 'mouse'; event.isPrimary = true;
-                event.width = 1; event.height = 1; event.pressure = buttons ? 0.5 : 0;
-            }
-            return target.dispatchEvent(event);
-        }
-        var Pointer = globalThis.PointerEvent || globalThis.MouseEvent;
-        fire(Pointer, 'pointerdown', 1);
-        // mousedown's default action moves focus to the clicked element (or
-        // its nearest focusable ancestor), or clears it.
-        if (fire(MouseEvent, 'mousedown', 1) && typeof globalThis.__aurora_focus_from_click__ === 'function') {
-            globalThis.__aurora_focus_from_click__(target);
-        }
-        fire(Pointer, 'pointerup', 0);
-        fire(MouseEvent, 'mouseup', 0);
-        var allowed = fire(MouseEvent, 'click', 0);
-        // Activation behaviour (submit buttons submit their form).
-        if (allowed && typeof globalThis.__aurora_activate__ === 'function') {
-            globalThis.__aurora_activate__(target);
-        }
-        return allowed;
+        var target = elementTarget(node);
+        if (!target) return true;
+        dispatchMouseDown(target, clientX, clientY, 0);
+        return dispatchMouseUpAndClick(target, target, clientX, clientY, 0);
     };
 
     // A trusted key event from the window (V8Runtime::dispatch_key), sent to
@@ -479,6 +514,21 @@
         metric('offsetLeft', zeroFallback);
     }
 
+    function performElementClick() {
+        if (this.hasAttribute && this.hasAttribute('disabled')) return;
+        var event = new MouseEvent('click', {
+            bubbles: true, cancelable: true, composed: true, view: window, button: 0
+        });
+        if (typeof this.dispatchEvent === 'function'
+            && this.dispatchEvent(event)
+            && typeof globalThis.__aurora_activate__ === 'function') {
+            globalThis.__aurora_activate__(this);
+        }
+    }
+    if (globalThis.HTMLElement && HTMLElement.prototype) {
+        HTMLElement.prototype.click = performElementClick;
+    }
+
     // Element decoration — called from the native bridge for every element
     // wrapper. Installs per-element JS APIs that are simpler here than native.
     globalThis.__aurora_decorate_element__ = function(el) {
@@ -529,7 +579,9 @@
         el.scrollIntoView = function() {};
         el.scrollTo = function() {};
         el.scrollBy = function() {};
-        el.click = function() {};
+        if (typeof el.click !== 'function') {
+            el.click = performElementClick;
+        }
         el.releasePointerCapture = function() {};
         el.setPointerCapture = function() {};
         el.hasPointerCapture = function() { return false; };

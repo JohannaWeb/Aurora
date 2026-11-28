@@ -1524,6 +1524,16 @@ impl BlitzDocument {
         self.sync_set_attribute(node, "value", value)
     }
 
+    /// Reflects `checked` in a checkbox/radio input's rendering without
+    /// modifying the legacy DOM's `checked` content attribute.
+    pub fn show_checkbox_checked(&mut self, node: &NodePtr, checked: bool) -> bool {
+        if checked {
+            self.sync_set_attribute(node, "checked", "true")
+        } else {
+            self.sync_remove_attribute(node, "checked")
+        }
+    }
+
     pub fn sync_remove_attribute(&mut self, node: &NodePtr, name: &str) -> bool {
         let op = MirrorOp::for_node("sync_remove_attribute", node);
         let Some(node_id) = self.blitz_node_id_for_dom(node) else {
@@ -1775,6 +1785,66 @@ impl BlitzDocument {
     pub fn set_scroll_y(&mut self, y: f64) {
         self.inner
             .set_viewport_scroll(blitz_dom::Point { x: 0.0, y });
+    }
+
+    /// Updates Blitz hover (`:hover`) state at document coordinates `(x, y)`.
+    /// Returns whether hover state or overlay scrollbars changed.
+    pub fn set_hover_to(&mut self, x: f32, y: f32) -> bool {
+        let changed = self.inner.set_hover_to(x, y);
+        if changed {
+            self.needs_resolve = true;
+        }
+        changed
+    }
+
+    /// Clears Blitz hover state when the pointer leaves the page viewport.
+    pub fn clear_hover(&mut self) -> bool {
+        let changed = self.inner.clear_hover();
+        if changed {
+            self.needs_resolve = true;
+        }
+        changed
+    }
+
+    /// Marks the currently hovered node as `:active` on pointer press.
+    pub fn activate_hover_node(&mut self) -> bool {
+        let changed = self.inner.active_node();
+        if changed {
+            self.needs_resolve = true;
+        }
+        changed
+    }
+
+    /// Clears the `:active` state on pointer release.
+    pub fn unactivate_hover_node(&mut self) -> bool {
+        let changed = self.inner.unactive_node();
+        if changed {
+            self.needs_resolve = true;
+        }
+        changed
+    }
+
+    /// Returns the cursor icon for the currently hovered layout node, if known.
+    pub fn cursor_icon(&self) -> Option<winit::window::CursorIcon> {
+        self.inner.get_cursor()
+    }
+
+    /// Syncs DOM focus (`:focus` / `:focus-visible`) to Blitz for `node`, or clears it.
+    pub fn set_focus_node(&mut self, node: Option<&NodePtr>) -> bool {
+        let changed = match node {
+            Some(node) => self
+                .blitz_node_id_for_dom(node)
+                .is_some_and(|id| self.inner.set_focus_to(id)),
+            None => {
+                let had_focus = self.inner.get_focussed_node_id().is_some();
+                self.inner.clear_focus();
+                had_focus
+            }
+        };
+        if changed {
+            self.needs_resolve = true;
+        }
+        changed
     }
 
     pub fn paint_to_scene(&mut self, scene: &mut Scene, width: u32, height: u32) -> PaintResult {

@@ -49,6 +49,9 @@ pub(super) struct NodeRegistry {
     /// Current values of `<input>` elements whose value was set or edited
     /// (HTML's "dirty value"), by node id; others show their `value` attribute.
     pub(super) input_values: RefCell<BTreeMap<u32, String>>,
+    /// Dirty checkedness of `<input type=checkbox|radio>` elements by node id;
+    /// others fall back to their `checked` attribute.
+    pub(super) input_checked: RefCell<BTreeMap<u32, bool>>,
     /// How far the viewport is scrolled, in CSS pixels.
     pub(super) scroll: std::cell::Cell<(f64, f64)>,
     /// Script scrolled the viewport and the window has not taken it yet; until
@@ -113,6 +116,7 @@ impl NodeRegistry {
             ce_registry: super::custom_elements::CeRegistry::default(),
             focused: RefCell::new(None),
             input_values: RefCell::new(BTreeMap::new()),
+            input_checked: RefCell::new(BTreeMap::new()),
             scroll: std::cell::Cell::new((0.0, 0.0)),
             scroll_requested: std::cell::Cell::new(false),
             scroll_event_pending: std::cell::Cell::new(false),

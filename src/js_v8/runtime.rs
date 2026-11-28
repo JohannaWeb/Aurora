@@ -2751,6 +2751,52 @@ impl crate::js_engine::JsRuntime for V8Runtime {
         self.call_ui_hook("__aurora_dispatch_click__", node, &[client_x as f64, client_y as f64])
     }
 
+    fn dispatch_mouse_down(&mut self, node: &NodePtr, client_x: f32, client_y: f32, modifiers: u32) -> bool {
+        self.call_ui_hook(
+            "__aurora_dispatch_mouse_down__",
+            node,
+            &[client_x as f64, client_y as f64, modifiers as f64],
+        )
+    }
+
+    fn dispatch_mouse_up_and_click(
+        &mut self,
+        release_node: &NodePtr,
+        click_node: Option<&NodePtr>,
+        client_x: f32,
+        client_y: f32,
+        modifiers: u32,
+    ) -> bool {
+        let _entered = self.entered();
+        v8::scope_with_context!(let scope, &mut self.isolate, &self.context);
+        v8::tc_scope!(let scope, scope);
+        let global = scope.get_current_context().global(scope);
+        let key = v8_str(scope, "__aurora_dispatch_mouse_up__");
+        let Some(hook) = global
+            .get(scope, key.into())
+            .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok())
+        else {
+            return false;
+        };
+        let release_js = create_js_node(scope, release_node.clone(), &self.registry, &self.document);
+        let click_js: v8::Local<v8::Value> = match click_node {
+            Some(node) => create_js_node(scope, node.clone(), &self.registry, &self.document).into(),
+            None => v8::null(scope).into(),
+        };
+        let args: [v8::Local<v8::Value>; 5] = [
+            release_js.into(),
+            click_js,
+            v8::Number::new(scope, client_x as f64).into(),
+            v8::Number::new(scope, client_y as f64).into(),
+            v8::Number::new(scope, modifiers as f64).into(),
+        ];
+        if hook.call(scope, global.into(), &args).is_none() {
+            log::warn!(target: "aurora::js", "__aurora_dispatch_mouse_up__: {}", exception_message(scope, "threw"));
+        }
+        scope.perform_microtask_checkpoint();
+        true
+    }
+
     fn take_pending_navigation(&mut self) -> Option<String> {
         self.registry.pending_navigation.borrow_mut().take()
     }

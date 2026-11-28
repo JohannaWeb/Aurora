@@ -60,6 +60,8 @@ interface HTMLLabelElement : HTMLElement {};
 interface HTMLInputElement : HTMLElement {
   [CEReactions] attribute DOMString defaultValue;
   [CEReactions] attribute [LegacyNullToEmptyString] DOMString value;
+  [CEReactions] attribute boolean defaultChecked;
+  [CEReactions] attribute boolean checked;
 };
 interface HTMLButtonElement : HTMLElement {};
 interface HTMLSelectElement : HTMLElement {};
